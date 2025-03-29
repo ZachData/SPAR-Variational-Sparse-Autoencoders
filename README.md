@@ -1,7 +1,8 @@
 # Project 1: Variational SAE for Superposition Study
 
-*This document is intended for internal use within the SPAR Program. It summarizes the first-stage results of an example project, serving as prior knowledge for continued research and development.
-*
+*This document is intended for internal use within the SPAR Program. It summarizes the first-stage results of an example project, serving as prior knowledge for continued research and development.*
+
+*For other projects like Ladder SAE, Cross SAE, and Gradient-Based Method, please create another repo and start to invite your collaborators!*
 
 ## Background:
 + Builds on Toy Models of Superposition and Towards Monosemanticity: Decomposing Language Models With Dictionary Learning.
