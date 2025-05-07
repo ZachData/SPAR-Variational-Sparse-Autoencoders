@@ -16,7 +16,7 @@ from .dictionary import (
     JumpReluAutoEncoder,
 )
 
-def hf_dataset_to_generator(dataset_name, split="train", streaming=True, return_tokens=False):
+def hf_dataset_to_generator(dataset_name, split="train", streaming=False, return_tokens=False):
     dataset = load_dataset(dataset_name, split=split, streaming=streaming)
 
     def gen():

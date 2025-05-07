@@ -165,7 +165,7 @@ def loss_recovered_nnsight(
 
 
 def loss_recovered_transformer_lens(
-    text,  # a batch of text
+    text,  # a batch of text or tokens
     model: HookedTransformer,  # a transformer_lens HookedTransformer
     hook_name: str,  # hook name to intervene at
     dictionary,  # dictionary for the hook
@@ -182,21 +182,46 @@ def loss_recovered_transformer_lens(
     """
     device = model.cfg.device
     
-    # Process input text
-    if isinstance(text, list):
+    # Process input text or tokens
+    if isinstance(text, list) and len(text) > 0 and isinstance(text[0], dict) and 'tokens' in text[0]:
+        # Check if batch is too large and reduce if needed
+        MAX_BATCH_SIZE = 16  # Adjust this based on your GPU memory
+        if len(text) > MAX_BATCH_SIZE:
+            # Take a subset of the batch
+            text = text[:MAX_BATCH_SIZE]
+            print(f"Reduced batch size to {MAX_BATCH_SIZE} in evaluation.py to avoid OOM errors")
+            
+        # It's a list of dictionaries with 'tokens' key (from hf_dataset_to_generator with return_tokens=True)
+        token_lists = [item['tokens'] for item in text]
+        # Pad to the same length
+        max_length = max(len(tokens) for tokens in token_lists)
+        padded_tokens = [tokens + [model.tokenizer.pad_token_id if hasattr(model.tokenizer, 'pad_token_id') else 0] * (max_length - len(tokens)) 
+                         for tokens in token_lists]
+        tokens = t.tensor(padded_tokens, device=device)
+    elif isinstance(text, t.Tensor) and len(text.shape) == 2:
+        # It's already tokenized as a tensor with shape [batch, seq_len]
+        tokens = text.to(device)
+    elif isinstance(text, list) and all(isinstance(item, int) or 
+                                      (isinstance(item, list) and all(isinstance(subitem, int) for subitem in item)) 
+                                      for item in text):
+        # It's a list of token IDs or a list of lists of token IDs
+        if all(isinstance(item, int) for item in text):
+            # Single sequence of token IDs
+            tokens = t.tensor([text], device=device)
+        else:
+            # Batch of token ID sequences
+            tokens = t.tensor(text, device=device)
+    elif isinstance(text, list):
         # It's a list of strings
         if max_len is not None:
             tokens = model.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=max_len)["input_ids"].to(device)
         else:
             tokens = model.tokenizer(text, return_tensors="pt", padding=True)["input_ids"].to(device)
-    elif isinstance(text, dict):
+    elif isinstance(text, dict) and "input_ids" in text:
         # It's a tokenizer output
         tokens = text["input_ids"].to(device)
-    elif isinstance(text, t.Tensor):
-        # It's already tokenized
-        tokens = text.to(device)
     else:
-        raise ValueError(f"Unsupported text type: {type(text)}")
+        raise ValueError(f"Unsupported text type: {type(text)}. Expected string, list of strings, tensor of token IDs, or tokenizer output.")
     
     # Create loss function
     loss_fn = t.nn.CrossEntropyLoss(ignore_index=model.tokenizer.pad_token_id if hasattr(model.tokenizer, 'pad_token_id') else -100)

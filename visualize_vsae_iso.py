@@ -5,6 +5,7 @@ import torch as t
 from pathlib import Path
 import sys
 import argparse
+import datetime
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent))
@@ -22,6 +23,7 @@ from sae_vis.data_config_classes import (
     SaeVisLayoutConfig,
     SeqMultiGroupConfig
 )
+from sae_vis.feature_space_explorer import create_feature_space_visualization
 
 # Patch the SAE visualization functions to handle dimension mismatches
 def patch_visualization_functions():
@@ -103,13 +105,20 @@ def patch_visualization_functions():
     
     print("SAE visualization functions patched successfully.")
 
+def add_timestamp_to_path(path):
+    """Add a timestamp to a file path before the extension."""
+    path_obj = Path(path)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    new_path = path_obj.with_stem(f"{path_obj.stem}_{timestamp}")
+    return str(new_path)
+
 def main():
     # Set up argument parser for flexible configuration
     parser = argparse.ArgumentParser(description='Visualize VSAE ISO models')
     parser.add_argument('--sae_path', type=str, default='./trained_vsae_iso/trainer_0', 
                         help='Path to trained SAE')
     parser.add_argument('--output_file', type=str, default='./trained_vsae_iso/visualization.html',
-                        help='Where to save visualization')
+                        help='Where to save standard visualization')
     parser.add_argument('--dataset', type=str, default='NeelNanda/c4-code-20k',
                         help='Dataset for visualization')
     parser.add_argument('--model_name', type=str, default='gelu-1l',
@@ -128,8 +137,29 @@ def main():
                         help='Use simplified visualization layout')
     parser.add_argument('--no_patch', action='store_true',
                         help='Disable patching of visualization functions')
+    parser.add_argument('--no_timestamp', action='store_true',
+                        help='Disable adding timestamp to output files')
+    
+    # Feature space explorer options
+    parser.add_argument('--feature_space', action='store_true',
+                        help='Generate feature space visualization')
+    parser.add_argument('--feature_space_output', type=str, default=None,
+                        help='Where to save feature space visualization')
+    parser.add_argument('--embedding_method', type=str, default='umap',
+                        choices=['umap', 'tsne', 'pca', 'cosine'],
+                        help='Embedding method for feature space')
+    parser.add_argument('--n_neighbors', type=int, default=5,
+                        help='Number of connections per feature')
+    parser.add_argument('--n_examples', type=int, default=5,
+                        help='Number of examples per feature')
     
     args = parser.parse_args()
+    
+    # Add timestamps to output files unless disabled
+    if not args.no_timestamp:
+        args.output_file = add_timestamp_to_path(args.output_file)
+        if args.feature_space_output:
+            args.feature_space_output = add_timestamp_to_path(args.feature_space_output)
     
     # Create output directory if it doesn't exist
     Path(args.output_file).parent.mkdir(exist_ok=True, parents=True)
@@ -163,7 +193,12 @@ def main():
     print("Getting sample tokens...")
     tokens = buffer.tokenized_batch(batch_size=args.batch_size)["input_ids"].to(args.device)
     
-    # 5. Create layout based on simplified flag
+    # 5. Load the dictionary
+    print(f"Loading dictionary from {args.sae_path}...")
+    from dictionary_learning.utils import load_dictionary
+    dictionary, config = load_dictionary(args.sae_path, device=args.device)
+    
+    # 6. Create standard layout based on simplified flag
     if args.simplified:
         layout = SaeVisLayoutConfig(
             columns=[
@@ -193,8 +228,8 @@ def main():
             height=750,
         )
     
-    # 6. Create visualization
-    print("Creating visualization...")
+    # 7. Create standard visualization
+    print(f"Creating standard visualization with output at: {args.output_file}")
     try:
         SAEVisAdapter.create_visualization(
             sae_path=args.sae_path,
@@ -210,39 +245,34 @@ def main():
             simplified=args.simplified,
         )
         
-        print(f"✅ Visualization saved successfully to {args.output_file}")
+        print(f"✅ Standard visualization saved to {args.output_file}")
     except Exception as e:
-        print(f"❌ Error during visualization creation: {e}")
+        print(f"❌ Error creating standard visualization: {e}")
         import traceback
         traceback.print_exc()
+    
+    # 8. Create feature space visualization if requested
+    if args.feature_space:
+        feature_space_output = args.feature_space_output or args.output_file.replace('.html', '_feature_space.html')
+        print(f"Creating feature space visualization at {feature_space_output}...")
         
-        # Try a fallback with simplified layout
-        if not args.simplified:
-            try:
-                print("\nAttempting simplified visualization instead...")
-                fallback_output = args.output_file.replace(".html", "_simplified.html")
-                layout = SaeVisLayoutConfig(
-                    columns=[Column(ActsHistogramConfig(), width=400)],
-                    height=500,
-                )
-                
-                SAEVisAdapter.create_visualization(
-                    sae_path=args.sae_path,
-                    tokens=tokens,
-                    output_file=fallback_output,
-                    model_name=args.model_name,
-                    hook_name=args.hook_name,
-                    hook_layer=args.hook_layer,
-                    feature_indices=range(min(25, args.num_features)),
-                    layout=layout,
-                    device=args.device,
-                    verbose=True,
-                    simplified=True,
-                )
-                
-                print(f"✅ Simplified visualization saved to {fallback_output}")
-            except Exception as e2:
-                print(f"❌ Simplified visualization also failed: {e2}")
+        try:
+            create_feature_space_visualization(
+                model=model,
+                dictionary=dictionary,
+                buffer=buffer,
+                output_file=feature_space_output,
+                embedding_method=args.embedding_method,
+                num_features=args.num_features,
+                n_neighbors=args.n_neighbors,
+                n_examples=args.n_examples,
+            )
+            
+            print(f"✅ Feature space visualization saved to {feature_space_output}")
+        except Exception as e:
+            print(f"❌ Error creating feature space visualization: {e}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main()

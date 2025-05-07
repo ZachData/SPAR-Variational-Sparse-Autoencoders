@@ -92,12 +92,16 @@ class StandardTrainer(SAETrainer):
             # resample first n_resample dead neurons
             deads[deads.nonzero()[n_resample:]] = False
             self.ae.encoder.weight[deads] = sampled_vecs * alive_norm * 0.2
-            self.ae.decoder.weight[:,deads] = (sampled_vecs / sampled_vecs.norm(dim=-1, keepdim=True)).T
+            
+            # Convert sampled_vecs to the same dtype as decoder.weight before assignment
+            decoder_dtype = self.ae.decoder.weight.dtype
+            normalized_vecs = (sampled_vecs / sampled_vecs.norm(dim=-1, keepdim=True)).T
+            self.ae.decoder.weight[:,deads] = normalized_vecs.to(dtype=decoder_dtype)
+            
             self.ae.encoder.bias[deads] = 0.
 
-
             # reset Adam parameters for dead neurons
-            state_dict = self.optimizer.state_dict()['state'] 
+            state_dict = self.optimizer.state_dict()['state']
             ## encoder weight
             state_dict[1]['exp_avg'][deads] = 0.
             state_dict[1]['exp_avg_sq'][deads] = 0.
@@ -107,7 +111,7 @@ class StandardTrainer(SAETrainer):
             ## decoder weight
             state_dict[3]['exp_avg'][:,deads] = 0.
             state_dict[3]['exp_avg_sq'][:,deads] = 0.
-    
+        
     def loss(self, x, step: int, logging=False, **kwargs):
 
         sparsity_scale = self.sparsity_warmup_fn(step)
@@ -191,7 +195,7 @@ class StandardTrainerAprilUpdate(SAETrainer):
                  warmup_steps:int=1000, # lr warmup period at start of training
                  sparsity_warmup_steps:Optional[int]=2000, # sparsity warmup period at start of training
                  decay_start:Optional[int]=None, # decay learning rate after this many steps
-                 seed:Optional[int]=None,
+                 seed:Optional[int]=42,
                  device=None,
                  wandb_name:Optional[str]='StandardTrainerAprilUpdate',
                  submodule_name:Optional[str]=None,

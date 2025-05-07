@@ -168,4 +168,5 @@ nohup.out
 
 # trained model folders
 trained*/
+wandb/
  
