@@ -316,14 +316,15 @@ class VSAEIsoTrainer(SAETrainer):
     def loss(self, x, step: int, logging=False, **kwargs):
         sparsity_scale = self.sparsity_warmup_fn(step)
         
-        mu = self.ae.encode(x)  # [batch_size, dict_size]
-        
-        # Sample from the latent distribution
-        if self.ae.var_flag == 0:
-            z = mu  # Just use mean if variance is fixed
+        # Get both mean and log variance when var_flag=1
+        if self.ae.var_flag == 1:
+            mu, log_var = self.ae.encode(x, output_log_var=True)
+            # Sample from the latent distribution using reparameterization
+            z = self.ae.reparameterize(mu, log_var)
         else:
-            # Your existing sampling code
-            pass
+            # Just use mean if variance is fixed
+            mu = self.ae.encode(x)
+            z = mu
         
         # Decode
         x_hat = self.ae.decode(z)
@@ -332,17 +333,18 @@ class VSAEIsoTrainer(SAETrainer):
         recon_loss = t.pow(x - x_hat, 2).sum(dim=-1).mean()
         
         # KL divergence loss
-        # Modified KL loss calculation to ensure tensor dimensions match
-        kl_base = 0.5 * (mu.pow(2)).sum(dim=-1)  # [batch_size]
+        if self.ae.var_flag == 1:
+            # Full KL divergence for learned variance: 0.5 * sum(exp(log_var) + mu^2 - 1 - log_var)
+            kl_base = 0.5 * (t.exp(log_var) + mu.pow(2) - 1 - log_var).sum(dim=-1)
+        else:
+            # Simplified KL divergence for fixed unit variance: 0.5 * sum(mu^2)
+            kl_base = 0.5 * mu.pow(2).sum(dim=-1)
         
-        # Calculate decoder norms - reshape to match batch dimension
-        decoder_norms = self.ae.decoder.weight.norm(p=2, dim=0)  # [dict_size]
+        # Calculate decoder norms
+        decoder_norms = self.ae.decoder.weight.norm(p=2, dim=0)
         
-        # Option 1: Sum over dictionary dimensions first, then multiply
+        # Weight KL divergence by decoder norms (April update approach)
         kl_loss = kl_base.mean() * decoder_norms.mean()
-        
-        # OR Option 2: Reshape for proper broadcasting
-        # kl_loss = (kl_base.unsqueeze(-1) * decoder_norms.unsqueeze(0)).mean()
         
         # Total loss
         loss = recon_loss + self.kl_coeff * sparsity_scale * kl_loss
@@ -350,7 +352,7 @@ class VSAEIsoTrainer(SAETrainer):
         if not logging:
             return loss
         else:
-            return x, x_hat, mu, {
+            return x, x_hat, z, {
                 'l2_loss': t.linalg.norm(x - x_hat, dim=-1).mean().item(),
                 'mse_loss': recon_loss.item(),
                 'kl_loss': kl_loss.item(),

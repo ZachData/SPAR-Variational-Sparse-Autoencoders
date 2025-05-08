@@ -1,6 +1,6 @@
 """
-Implements a Variational Sparse Autoencoder with multivariate Gaussian prior.
-This implementation is designed to handle general correlation structures in the latent space.
+Implements a Variational Sparse Autoencoder with Gaussian mixture prior.
+This implementation is designed to handle setwise correlations in the latent space.
 """
 import torch as t
 from torch import nn
@@ -9,21 +9,22 @@ from torch.nn import init
 from typing import Optional, Tuple, List, Dict, Any
 from collections import namedtuple
 
-from ..trainers.trainer import SAETrainer, get_lr_schedule, get_sparsity_warmup_fn
+from ..trainers.trainer import SAETrainer, get_lr_schedule, get_sparsity_warmup_fn, ConstrainedAdam
 from ..config import DEBUG
 from ..dictionary import Dictionary
 
 
-class VSAEMultiGaussian(Dictionary, nn.Module):
+class VSAEMixtureGaussian(Dictionary, nn.Module):
     """
-    A one-layer variational autoencoder with multivariate Gaussian prior.
+    A one-layer variational autoencoder with Gaussian mixture prior.
     
     Can be configured in two ways:
     1. Standard mode: Uses bias in the encoder input (old approach from Towards Monosemanticity)
     2. April update mode: Uses bias in both encoder and decoder (newer approach)
     
-    This implementation is designed to handle general correlation structures in the 
-    latent space through a custom covariance matrix for the prior distribution.
+    This implementation is designed to handle setwise correlations in the latent space
+    by using a mixture of Gaussian distributions as the prior, specifically for
+    correlated and anticorrelated feature pairs.
     
     When var_flag=0, this behaves similarly to a vanilla SAE with a 
     different regularization term (KL divergence instead of L1).
@@ -37,15 +38,16 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                  dict_size, 
                  use_april_update_mode=False, 
                  var_flag=0,
-                 corr_rate=0.0,
-                 corr_matrix=None,
+                 n_correlated_pairs=0,
+                 n_anticorrelated_pairs=0,
                  device=None):
         super().__init__()
         self.activation_dim = activation_dim
         self.dict_size = dict_size
         self.use_april_update_mode = use_april_update_mode
         self.var_flag = var_flag
-        self.corr_rate = corr_rate
+        self.n_correlated_pairs = n_correlated_pairs
+        self.n_anticorrelated_pairs = n_anticorrelated_pairs
         
         # Initialize encoder and decoder
         self.encoder = nn.Linear(activation_dim, dict_size, bias=True)
@@ -70,50 +72,39 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             self.var_encoder = nn.Linear(activation_dim, dict_size, bias=True)
             init.kaiming_uniform_(self.var_encoder.weight)
             init.zeros_(self.var_encoder.bias)
-            
-        # Setup correlation structure
-        self.setup_correlation(corr_matrix, corr_rate, device)
+        
+        # Initialize prior means based on correlation structure
+        self.prior_means = self.initialize_prior_means(device)
+        self.prior_std = 1.0  # Standard deviation for each Gaussian in the mixture
+        
+        self.to(device if device is not None else self.encoder.weight.device)
 
-    def setup_correlation(self, corr_matrix, corr_rate, device):
+    def initialize_prior_means(self, device=None):
         """
-        Setup correlation matrix for the prior distribution
+        Initialize the prior means based on the correlation structure
         
         Args:
-            corr_matrix: Custom correlation matrix (if None, use corr_rate)
-            corr_rate: Default correlation rate for all pairs
             device: Device to store tensors on
+            
+        Returns:
+            Tensor of prior means with shape [dict_size]
         """
-        if device is None:
-            device = self.encoder.weight.device
+        means = []
+        
+        # For correlated pairs, we use the same mean (e.g., [1.0, 1.0])
+        for _ in range(self.n_correlated_pairs):
+            means.extend([1.0, 1.0])
             
-        # Build prior covariance matrix
-        if corr_matrix is not None and corr_matrix.shape[0] == self.dict_size:
-            self.prior_covariance = corr_matrix.to(device)
-        elif corr_rate is not None:
-            # Create a matrix with uniform correlation
-            self.prior_covariance = t.full((self.dict_size, self.dict_size), corr_rate, device=device)
-            t.diagonal(self.prior_covariance)[:] = 1.0
-        else:
-            # Default to identity (no correlation)
-            self.prior_covariance = t.eye(self.dict_size, device=device)
-        
-        # Ensure the correlation matrix is valid
-        if not t.allclose(self.prior_covariance, self.prior_covariance.t()):
-            print("Warning: Correlation matrix not symmetric, symmetrizing it")
-            self.prior_covariance = 0.5 * (self.prior_covariance + self.prior_covariance.t())
-        
-        # Add small jitter to ensure positive definiteness
-        self.prior_covariance = self.prior_covariance + t.eye(self.dict_size, device=device) * 1e-4
-        
-        # Pre-compute precision matrix and log determinant for efficiency
-        try:
-            self.prior_precision = t.linalg.inv(self.prior_covariance)
-        except:
-            # Add jitter for numerical stability
-            jitter = t.eye(self.dict_size, device=device) * 1e-4
-            self.prior_precision = t.linalg.inv(self.prior_covariance + jitter)
+        # For anticorrelated pairs, we use opposite means (e.g., [1.0, -1.0])
+        for _ in range(self.n_anticorrelated_pairs):
+            means.extend([1.0, -1.0])
             
-        self.prior_cov_logdet = t.logdet(self.prior_covariance)
+        # Remaining features get zero mean (standard Gaussian)
+        remaining = self.dict_size - 2 * (self.n_correlated_pairs + self.n_anticorrelated_pairs)
+        means.extend([0.0] * remaining)
+        
+        device = device if device is not None else self.encoder.weight.device if hasattr(self, 'encoder') else None
+        return t.tensor(means, dtype=t.float32, device=device)
 
     def encode(self, x, output_log_var=False):
         """
@@ -156,7 +147,7 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
 
     def forward(self, x, output_features=False, ghost_mask=None):
         """
-        Forward pass of an autoencoder.
+        Forward pass of the variational autoencoder.
         
         Args:
             x: activations to be autoencoded
@@ -164,7 +155,7 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             ghost_mask: if not None, run this autoencoder in "ghost mode" where features are masked
         """
         if ghost_mask is not None:
-            raise NotImplementedError("Ghost mode not implemented for VSAEMultiGaussian")
+            raise NotImplementedError("Ghost mode not implemented for VSAEMixtureGaussian")
             
         # Encode and get mu (and log_var if var_flag=1)
         if self.var_flag == 1:
@@ -173,7 +164,8 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             f = self.reparameterize(mu, log_var)
         else:
             mu = self.encode(x)
-            f = mu  # Without variance, just use mu
+            f = mu  # Without variance, just use mu directly
+            log_var = t.zeros_like(mu)  # For KL calculation
             
         # Decode
         x_hat = self.decode(f)
@@ -182,6 +174,34 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             return x_hat, f
         else:
             return x_hat
+
+    def compute_kl_divergence(self, mu, log_var):
+        """
+        Compute the KL divergence between the approximate posterior and the mixture prior.
+        
+        Args:
+            mu: Mean of approximate posterior [batch_size, n_instances, dict_size]
+            log_var: Log variance of approximate posterior [batch_size, n_instances, dict_size]
+            
+        Returns:
+            KL divergence [batch_size, n_instances]
+        """
+        # Compute KL divergence to a mixture of Gaussians
+        # For each feature, we use its corresponding prior mean from prior_means
+        
+        # Get variance from log_var
+        var = t.exp(log_var)
+        
+        # Compute KL divergence for a Gaussian with mean mu and variance var
+        # to a Gaussian with mean prior_mean and variance 1 (prior_std^2)
+        # KL(N(mu, var) || N(prior_mean, 1)) = 
+        #   0.5 * (var + (mu - prior_mean)^2 - 1 - log(var))
+        
+        prior_means = self.prior_means.to(mu.device)
+        kl_div = 0.5 * (var + (mu - prior_means)**2 / (self.prior_std**2) - 1 - log_var)
+        
+        # Sum over features
+        return kl_div.sum(dim=-1)  # [batch_size, n_instances]
 
     def scale_biases(self, scale: float):
         """
@@ -224,7 +244,7 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
 
     @classmethod
     def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=0, 
-                        corr_rate=0.0, corr_matrix=None):
+                        n_correlated_pairs=0, n_anticorrelated_pairs=0):
         """
         Load a pretrained autoencoder from a file.
         
@@ -234,8 +254,8 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             device: Device to load model to
             normalize_decoder: Whether to normalize decoder weights
             var_flag: Whether to load with variance encoding (0: fixed, 1: learned)
-            corr_rate: Default correlation rate for all pairs
-            corr_matrix: Custom correlation matrix
+            n_correlated_pairs: Number of correlated feature pairs
+            n_anticorrelated_pairs: Number of anticorrelated feature pairs
             
         Returns:
             Loaded autoencoder
@@ -274,8 +294,8 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             dict_size, 
             use_april_update_mode=use_april_update_mode, 
             var_flag=var_flag,
-            corr_rate=corr_rate,
-            corr_matrix=corr_matrix,
+            n_correlated_pairs=n_correlated_pairs,
+            n_anticorrelated_pairs=n_anticorrelated_pairs,
             device=device
         )
         autoencoder.load_state_dict(state_dict)
@@ -291,12 +311,12 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
         return autoencoder
 
 
-class VSAEMultiGaussianTrainer(SAETrainer):
+class VSAEMixtureTrainer(SAETrainer):
     """
-    Trainer for VSAE with multivariate Gaussian prior
+    Trainer for VSAE with Gaussian mixture prior
     
-    This model uses a multivariate Gaussian prior with a full covariance matrix
-    to capture complex correlation patterns between latent variables.
+    This model uses a mixture of Gaussian distributions as the prior to account
+    for correlated and anticorrelated feature pairs in the latent space.
     
     Can use two different training approaches:
     1. Standard mode with constrained decoder norms and separate bias
@@ -317,7 +337,7 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         dict_size: int,                       # dictionary size
         layer: int,                           # layer to train on
         lm_name: str,                         # language model name
-        dict_class=VSAEMultiGaussian,         # dictionary class to use
+        dict_class=VSAEMixtureGaussian,       # dictionary class to use
         lr: float = 5e-5,                     # learning rate (recommended in April update)
         kl_coeff: float = 5.0,                # coefficient for KL divergence term
         warmup_steps: int = 1000,             # lr warmup period at start of training
@@ -325,12 +345,12 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         decay_start: Optional[int] = None,    # decay learning rate after this many steps
         resample_steps: Optional[int] = None, # how often to resample neurons (None for no resampling)
         var_flag: int = 0,                    # whether to learn variance (0: fixed, 1: learned)
-        corr_rate: float = 0.0,               # correlation rate for prior
-        corr_matrix: Optional[t.Tensor] = None, # custom correlation matrix
+        n_correlated_pairs: int = 0,          # number of correlated feature pairs
+        n_anticorrelated_pairs: int = 0,      # number of anticorrelated feature pairs
         use_april_update_mode: bool = True,   # whether to use April update mode
         seed: Optional[int] = None,
         device = None,
-        wandb_name: Optional[str] = 'VSAEMultiGaussianTrainer',
+        wandb_name: Optional[str] = 'VSAEMixtureTrainer',
         submodule_name: Optional[str] = None,
     ):
         super().__init__(seed)
@@ -353,7 +373,7 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         if decay_start is None and use_april_update_mode:
             decay_start = int(0.8 * steps)  # Start decay at 80% of training for April mode
 
-        # initialize dictionary
+        # Initialize dictionary
         if device is None:
             self.device = 'cuda' if t.cuda.is_available() else 'cpu'
         else:
@@ -365,8 +385,8 @@ class VSAEMultiGaussianTrainer(SAETrainer):
             dict_size, 
             use_april_update_mode=use_april_update_mode,
             var_flag=var_flag,
-            corr_rate=corr_rate,
-            corr_matrix=corr_matrix,
+            n_correlated_pairs=n_correlated_pairs,
+            n_anticorrelated_pairs=n_anticorrelated_pairs,
             device=self.device
         )
         self.ae.to(self.device)
@@ -381,7 +401,8 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         self.resample_steps = resample_steps
         self.wandb_name = wandb_name
         self.var_flag = var_flag
-        self.corr_rate = corr_rate
+        self.n_correlated_pairs = n_correlated_pairs
+        self.n_anticorrelated_pairs = n_anticorrelated_pairs
         self.use_april_update_mode = use_april_update_mode
 
         # For dead neuron detection and resampling
@@ -411,148 +432,17 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         self.sparsity_warmup_fn = get_sparsity_warmup_fn(steps, sparsity_warmup_steps)
         
         # Add tracking metrics for logging
-        self.logging_parameters = ["kl_coeff", "var_flag", "corr_rate", "use_april_update_mode"]
+        self.logging_parameters = [
+            "kl_coeff", 
+            "var_flag", 
+            "n_correlated_pairs", 
+            "n_anticorrelated_pairs", 
+            "use_april_update_mode"
+        ]
         
-    def compute_kl_divergence(self, mu, log_var, decoder_norms=None):
-        """
-        Compute KL divergence between approximate posterior and multivariate Gaussian prior
-        
-        Args:
-            mu: Mean of approximate posterior [batch_size, dict_size]
-            log_var: Log variance of approximate posterior [batch_size, dict_size]
-            decoder_norms: Optional norms of decoder columns for April update style penalty
-            
-        Returns:
-            KL divergence (scalar)
-        """
-        # For efficiency, compute on batch mean
-        mu_avg = mu.mean(0)  # [dict_size]
-        var_avg = log_var.exp().mean(0)  # [dict_size]
-        
-        # Trace term: tr(Σp^-1 * Σq)
-        trace_term = (self.ae.prior_precision.diagonal() * var_avg).sum()
-        
-        # Quadratic term: μ^T * Σp^-1 * μ
-        quad_term = mu_avg @ self.ae.prior_precision @ mu_avg
-        
-        # Log determinant term: ln(|Σp|/|Σq|)
-        log_det_q = log_var.sum(1).mean()
-        log_det_term = self.ae.prior_cov_logdet - log_det_q
-        
-        # Combine terms (standard KL formula for multivariate Gaussians)
-        kl = 0.5 * (trace_term + quad_term - self.ae.dict_size + log_det_term)
-        
-        # Ensure non-negative
-        kl = t.clamp(kl, min=0.0)
-        
-        # Apply the April update style penalty incorporating decoder norms
-        if self.use_april_update_mode and decoder_norms is not None:
-            # For multivariate case, we apply a weighted average based on decoder norms
-            kl = kl * decoder_norms.mean()
-        
-        return kl
-        
-    def resample_neurons(self, deads, activations):
-        """
-        Resample dead neurons with high loss activations
-        
-        Args:
-            deads: Boolean tensor indicating which neurons are dead
-            activations: Batch of activations to sample from
-        """
-        with t.no_grad():
-            if deads.sum() == 0: 
-                return
-                
-            print(f"resampling {deads.sum().item()} neurons")
-
-            # Compute loss for each activation
-            losses = (activations - self.ae(activations)).norm(dim=-1)
-
-            # Sample input to create encoder/decoder weights from
-            n_resample = min([deads.sum(), losses.shape[0]])
-            indices = t.multinomial(losses, num_samples=n_resample, replacement=False)
-            sampled_vecs = activations[indices]
-
-            # Get norm of living neurons
-            alive_mask = ~deads
-            alive_norm = self.ae.encoder.weight[alive_mask].norm(dim=-1).mean()
-
-            # Resample first n_resample dead neurons (limit by n_resample)
-            resample_idx = deads.nonzero().squeeze()
-            if len(resample_idx) > n_resample:
-                excess_idx = resample_idx[n_resample:]
-                deads[excess_idx] = False
-                
-            # Process inputs for resampling
-            if self.use_april_update_mode:
-                # For April update mode
-                sampled_centered = sampled_vecs
-            else:
-                # For standard mode, center by bias
-                sampled_centered = sampled_vecs - self.ae.bias
-                
-            # Update encoder weights and bias
-            self.ae.encoder.weight.data[deads] = sampled_centered * alive_norm * 0.2
-            self.ae.encoder.bias.data[deads] = 0.
-            
-            # Update decoder weights
-            normalized_samples = sampled_centered / sampled_centered.norm(dim=-1, keepdim=True)
-            self.ae.decoder.weight.data[:, deads] = normalized_samples.T
-            
-            # Also reset variance params if needed
-            if self.var_flag == 1:
-                self.ae.var_encoder.weight.data[deads] = 0.
-                self.ae.var_encoder.bias.data[deads] = 0.
-
-            # Reset optimizer state for resampled neurons
-            self._reset_optimizer_stats(deads)
-    
-    def _reset_optimizer_stats(self, dead_mask):
-        """
-        Reset optimizer state for resampled neurons
-        
-        Args:
-            dead_mask: Boolean tensor indicating which neurons are dead
-        """
-        state_dict = self.optimizer.state_dict()['state']
-        param_mapping = {}
-        
-        # Build mapping from param objects to their state indices
-        for param_idx, param in enumerate(self.optimizer.param_groups[0]['params']):
-            if param_idx in state_dict:
-                param_mapping[param] = param_idx
-        
-        # Reset stats for each parameter group
-        if self.ae.encoder.weight in param_mapping:
-            idx = param_mapping[self.ae.encoder.weight]
-            state_dict[idx]['exp_avg'][dead_mask] = 0.
-            state_dict[idx]['exp_avg_sq'][dead_mask] = 0.
-            
-        if self.ae.encoder.bias in param_mapping:
-            idx = param_mapping[self.ae.encoder.bias]
-            state_dict[idx]['exp_avg'][dead_mask] = 0.
-            state_dict[idx]['exp_avg_sq'][dead_mask] = 0.
-            
-        if self.ae.decoder.weight in param_mapping:
-            idx = param_mapping[self.ae.decoder.weight]
-            state_dict[idx]['exp_avg'][:, dead_mask] = 0.
-            state_dict[idx]['exp_avg_sq'][:, dead_mask] = 0.
-            
-        if self.var_flag == 1 and hasattr(self.ae, 'var_encoder'):
-            if self.ae.var_encoder.weight in param_mapping:
-                idx = param_mapping[self.ae.var_encoder.weight]
-                state_dict[idx]['exp_avg'][dead_mask] = 0.
-                state_dict[idx]['exp_avg_sq'][dead_mask] = 0.
-                
-            if self.ae.var_encoder.bias in param_mapping:
-                idx = param_mapping[self.ae.var_encoder.bias]
-                state_dict[idx]['exp_avg'][dead_mask] = 0.
-                state_dict[idx]['exp_avg_sq'][dead_mask] = 0.
-    
     def loss(self, x, step: int, logging=False, **kwargs):
         """
-        Compute the VSAE loss with multivariate Gaussian prior
+        Compute the VSAE loss with Gaussian mixture prior
         
         Args:
             x: Input activations [batch_size, activation_dim]
@@ -565,7 +455,7 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         sparsity_scale = self.sparsity_warmup_fn(step)
         
         # Encode and get mu (and log_var if var_flag=1)
-        if self.var_flag == 1:
+        if self.ae.var_flag == 1:
             mu, log_var = self.ae.encode(x, output_log_var=True)
             # Sample from the latent distribution
             f = self.ae.reparameterize(mu, log_var)
@@ -578,12 +468,25 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         x_hat = self.ae.decode(f)
         
         # Get decoder column norms for April update style penalty
-        decoder_norms = t.norm(self.ae.decoder.weight, dim=0) if self.use_april_update_mode else None
+        if self.use_april_update_mode:
+            decoder_norms = t.norm(self.ae.decoder.weight, dim=0)
+        else:
+            decoder_norms = None
         
         # Compute losses
         l2_loss = t.linalg.norm(x - x_hat, dim=-1).mean()
         recon_loss = ((x - x_hat) ** 2).sum(dim=-1).mean()
-        kl_loss = self.compute_kl_divergence(mu, log_var, decoder_norms)
+        
+        # Compute KL divergence with mixture prior
+        kl_loss = self.ae.compute_kl_divergence(mu, log_var)
+        
+        # Apply April update style weighting if in that mode
+        if self.use_april_update_mode and decoder_norms is not None:
+            # Weight KL divergence by average decoder norm
+            kl_loss = kl_loss * decoder_norms.mean()
+        
+        # Average KL loss over batch
+        kl_loss = kl_loss.mean()
         
         # Track active features for resampling
         if self.steps_since_active is not None:
@@ -607,6 +510,69 @@ class VSAEMultiGaussianTrainer(SAETrainer):
                     'loss': loss.item()
                 }
             )
+    
+    def resample_neurons(
+        self,
+        h: t.Tensor,
+        frac_active_in_window: t.Tensor,
+        neuron_resample_scale: float,
+    ) -> Tuple[List[List[str]], str]:
+        """
+        Resample neurons that have been dead for a specified window period
+        
+        Args:
+            h: Input activations [batch_size, n_instances, n_hidden]
+            frac_active_in_window: Fraction of active neurons [window, n_instances, n_hidden_ae]
+            neuron_resample_scale: Scaling factor for resampled neurons
+            
+        Returns:
+            Tuple of (colors, title) for visualization
+        """
+        _, l2_loss, _, _, _ = self.ae.forward(h)
+
+        # Create an object to store the dead neurons (this will be useful for plotting)
+        dead_neurons_mask = t.empty((self.ae.dict_size,), dtype=t.bool, device=self.ae.encoder.weight.device)
+
+        # Find the dead neurons in this instance. If all neurons are alive, continue
+        is_dead = (frac_active_in_window.sum(0) < 1e-8)
+        dead_neurons_mask = is_dead
+        dead_neurons = t.nonzero(is_dead).squeeze(-1)
+        alive_neurons = t.nonzero(~is_dead).squeeze(-1)
+        n_dead = dead_neurons.numel()
+        
+        if n_dead > 0:
+            # Compute L2 loss for each element in the batch
+            l2_loss_instance = l2_loss  # [batch_size]
+            if l2_loss_instance.max() < 1e-6:
+                pass  # If we have zero reconstruction loss, we don't need to resample neurons
+            else:
+                # Use the t.multinomial distribution for weighted sampling
+                from torch.distributions import Categorical
+                
+                # Create distribution proportional to l2_loss
+                probs = l2_loss_instance / l2_loss_instance.sum()
+                distn = Categorical(probs=probs)
+                
+                # Sample indices based on loss
+                replacement_indices = distn.sample((n_dead,))  # shape [n_dead]
+                
+                # Index into the batch of hidden activations to get our replacement values
+                replacement_values = (h - self.ae.b_dec)[replacement_indices]  # shape [n_dead, n_input_ae]
+                
+                # Get the norm of alive neurons (or 1.0 if there are no alive neurons)
+                W_enc_norm_alive_mean = 1.0 if len(alive_neurons) == 0 else self.ae.encoder.weight[alive_neurons].norm(dim=-1).mean().item()
+                
+                # Use this to renormalize the replacement values
+                replacement_values = (replacement_values / (replacement_values.norm(dim=-1, keepdim=True) + 1e-8)) * W_enc_norm_alive_mean * neuron_resample_scale
+                
+                # Lastly, set the new weights & biases
+                self.ae.encoder.weight.data[dead_neurons] = replacement_values
+                self.ae.encoder.bias.data[dead_neurons] = 0.0
+
+        # Return data for visualizing the resampling process
+        colors = ["red" if dead else "black" for dead in dead_neurons_mask]
+        title = f"resampling {dead_neurons_mask.sum()}/{dead_neurons_mask.numel()} neurons (shown in red)"
+        return colors, title
     
     def update(self, step, activations):
         """
@@ -645,8 +611,8 @@ class VSAEMultiGaussianTrainer(SAETrainer):
     def config(self):
         """Return configuration for logging and saving"""
         return {
-            'dict_class': 'VSAEMultiGaussian',
-            'trainer_class': 'VSAEMultiGaussianTrainer',
+            'dict_class': 'VSAEMixtureGaussian',
+            'trainer_class': 'VSAEMixtureTrainer',
             'activation_dim': self.ae.activation_dim,
             'dict_size': self.ae.dict_size,
             'lr': self.lr,
@@ -657,7 +623,8 @@ class VSAEMultiGaussianTrainer(SAETrainer):
             'decay_start': self.decay_start,
             'resample_steps': self.resample_steps,
             'var_flag': self.var_flag,
-            'corr_rate': self.corr_rate,
+            'n_correlated_pairs': self.n_correlated_pairs,
+            'n_anticorrelated_pairs': self.n_anticorrelated_pairs,
             'use_april_update_mode': self.use_april_update_mode,
             'seed': self.seed,
             'device': self.device,

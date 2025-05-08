@@ -1,6 +1,6 @@
 import torch as t
 from transformer_lens import HookedTransformer
-from dictionary_learning.trainers.vsae_iso import VSAEIsoTrainer, VSAEIsoGaussian
+from dictionary_learning.trainers.vsae_mixture import VSAEMixtureTrainer, VSAEMixtureGaussian
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
@@ -24,6 +24,9 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     WANDB_ENTITY = base_params["WANDB_ENTITY"]
     WANDB_PROJECT = base_params["WANDB_PROJECT"]
     USE_WANDB = base_params["USE_WANDB"]
+    N_CORRELATED_PAIRS = base_params["N_CORRELATED_PAIRS"]
+    N_ANTICORRELATED_PAIRS = base_params["N_ANTICORRELATED_PAIRS"]
+    VAR_FLAG = base_params["VAR_FLAG"]
     
     # Calculate derived parameters
     d_mlp = model.cfg.d_mlp
@@ -33,11 +36,13 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     print(f"\n\n{'='*50}")
     print(f"STARTING TRAINING WITH DICT_SIZE_MULTIPLE = {dict_size_multiple}")
     print(f"Dictionary size: {DICT_SIZE}")
+    print(f"Correlated pairs: {N_CORRELATED_PAIRS}, Anticorrelated pairs: {N_ANTICORRELATED_PAIRS}")
+    print(f"Variance flag: {VAR_FLAG}")
     print(f"{'='*50}\n")
     
     # Configure trainer for this run
     trainer_config = {
-        "trainer": VSAEIsoTrainer,
+        "trainer": VSAEMixtureTrainer,
         "steps": TOTAL_STEPS,
         "activation_dim": d_mlp,
         "dict_size": DICT_SIZE,
@@ -48,11 +53,13 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         "warmup_steps": int(WARMUP_FRAC * TOTAL_STEPS),
         "sparsity_warmup_steps": int(SPARSITY_WARMUP_FRAC * TOTAL_STEPS),
         "decay_start": int(DECAY_START_FRAC * TOTAL_STEPS),
-        "var_flag": 0,  # Use fixed variance
+        "var_flag": VAR_FLAG,
+        "n_correlated_pairs": N_CORRELATED_PAIRS,
+        "n_anticorrelated_pairs": N_ANTICORRELATED_PAIRS,
         "use_april_update_mode": True,
         "device": "cuda",
-        "wandb_name": f"VSAEIso_{MODEL_NAME}_{DICT_SIZE}",
-        "dict_class": VSAEIsoGaussian
+        "wandb_name": f"VSAEMixture_{MODEL_NAME}_{DICT_SIZE}_{N_CORRELATED_PAIRS}cp_{N_ANTICORRELATED_PAIRS}ap",
+        "dict_class": VSAEMixtureGaussian
     }
     
     # Print configuration
@@ -60,7 +67,7 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items()))
     
     # Set unique save directory for this run
-    save_dir = f"./trained_vsae_iso_{DICT_SIZE}"
+    save_dir = f"./trained_vsae_mix_{DICT_SIZE}_{N_CORRELATED_PAIRS}cp_{N_ANTICORRELATED_PAIRS}ap"
     
     # Run training
     trainSAE(
@@ -78,9 +85,12 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         wandb_project=WANDB_PROJECT,
         run_cfg={
             "model_type": MODEL_NAME,
-            "experiment_type": "isovsae",
+            "experiment_type": "vsae_mixture",
             "kl_coefficient": KL_COEFF,
-            "dict_size_multiple": dict_size_multiple
+            "dict_size_multiple": dict_size_multiple,
+            "n_correlated_pairs": N_CORRELATED_PAIRS,
+            "n_anticorrelated_pairs": N_ANTICORRELATED_PAIRS,
+            "var_flag": VAR_FLAG
         }
     )
     
@@ -121,9 +131,9 @@ def main():
         "HOOK_NAME": "blocks.0.mlp.hook_post",
         
         # Training parameters        
-        "TOTAL_STEPS": 20000,
-        "LR": 1e-2,
-        "KL_COEFF": 1e2,
+        "TOTAL_STEPS": 10000,
+        "LR": 1e-3,
+        "KL_COEFF": 1e1,
         
         # Step fractions
         "WARMUP_FRAC": 0.05,
@@ -143,11 +153,47 @@ def main():
         # WandB parameters
         "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", "zachdata"),
         "WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "vsae-experiments"),
-        "USE_WANDB": True,
+        "USE_WANDB": False,
+        
+        # VSAE Mixture specific parameters
+        "N_CORRELATED_PAIRS": 1,
+        "N_ANTICORRELATED_PAIRS": 1,
+        "VAR_FLAG": 0,  # 0 for fixed variance, 1 for learned variance
     }
     
     # List of dictionary size multipliers to run
-    dict_size_multiples = [4, 8, 16]
+    dict_size_multiples = [4]
+    
+    # ========== COMMAND LINE ARGUMENT PARSING ==========
+    import argparse
+    parser = argparse.ArgumentParser(description='Train VSAE with Gaussian mixture prior')
+    parser.add_argument('--model', type=str, default=base_params["MODEL_NAME"], 
+                        help='Model name (default: gelu-1l)')
+    parser.add_argument('--dict_size_multiples', type=str, default=','.join(map(str, dict_size_multiples)),
+                        help='Dictionary size multiples separated by commas (default: 4,8,16)')
+    parser.add_argument('--corr_pairs', type=int, default=base_params["N_CORRELATED_PAIRS"],
+                        help='Number of correlated pairs (default: 1)')
+    parser.add_argument('--anticorr_pairs', type=int, default=base_params["N_ANTICORRELATED_PAIRS"],
+                        help='Number of anticorrelated pairs (default: 1)')
+    parser.add_argument('--var_flag', type=int, default=base_params["VAR_FLAG"], choices=[0, 1],
+                        help='Variance flag: 0 for fixed, 1 for learned (default: 0)')
+    parser.add_argument('--steps', type=int, default=base_params["TOTAL_STEPS"],
+                        help='Total training steps (default: 20000)')
+    parser.add_argument('--kl_coeff', type=float, default=base_params["KL_COEFF"],
+                        help='KL divergence coefficient (default: 100)')
+    
+    args = parser.parse_args()
+    
+    # Update base parameters with command line arguments
+    base_params["MODEL_NAME"] = args.model
+    base_params["TOTAL_STEPS"] = args.steps
+    base_params["KL_COEFF"] = args.kl_coeff
+    base_params["N_CORRELATED_PAIRS"] = args.corr_pairs
+    base_params["N_ANTICORRELATED_PAIRS"] = args.anticorr_pairs
+    base_params["VAR_FLAG"] = args.var_flag
+    
+    # Parse dictionary size multiples
+    dict_size_multiples = [int(x) for x in args.dict_size_multiples.split(',')]
     
     # ========== LOAD MODEL & CREATE BUFFER ==========
     # Only load the model once for all runs

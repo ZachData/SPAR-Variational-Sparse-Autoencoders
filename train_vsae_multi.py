@@ -1,12 +1,15 @@
 import torch as t
 from transformer_lens import HookedTransformer
-from dictionary_learning.trainers.vsae_iso import VSAEIsoTrainer, VSAEIsoGaussian
+from dictionary_learning.trainers.vsae_multi import VSAEMultiGaussianTrainer, VSAEMultiGaussian
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
+from dictionary_learning.utils import load_dictionary
+from dictionary_learning.evaluation import evaluate
 import multiprocessing
 import os
 import time
+import numpy as np
 
 def run_training(dict_size_multiple, model, buffer, base_params):
     """Run a single training with the specified dictionary size multiple"""
@@ -16,6 +19,8 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     TOTAL_STEPS = base_params["TOTAL_STEPS"]
     LR = base_params["LR"]
     KL_COEFF = base_params["KL_COEFF"]
+    CORR_RATE = base_params["CORR_RATE"]
+    VAR_FLAG = base_params["VAR_FLAG"]
     WARMUP_FRAC = base_params["WARMUP_FRAC"]
     SPARSITY_WARMUP_FRAC = base_params["SPARSITY_WARMUP_FRAC"]
     DECAY_START_FRAC = base_params["DECAY_START_FRAC"]
@@ -35,9 +40,30 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     print(f"Dictionary size: {DICT_SIZE}")
     print(f"{'='*50}\n")
     
+    # Configure correlation matrix for the trainer
+    # For this example, we'll create a correlation matrix with block diagonal structure
+    # That emphasizes correlations between nearby features
+    
+    # Initialize with low correlation
+    corr_matrix = None
+    if CORR_RATE > 0:
+        corr_matrix = t.eye(DICT_SIZE, device="cuda") * (1.0 - CORR_RATE)
+        
+        # Add block structure - create correlation blocks
+        block_size = min(50, DICT_SIZE // 4)  # Size of each correlation block
+        for i in range(0, DICT_SIZE, block_size):
+            end_idx = min(i + block_size, DICT_SIZE)
+            # Create a block with higher correlation
+            corr_matrix[i:end_idx, i:end_idx] = t.ones(end_idx-i, end_idx-i, device="cuda") * CORR_RATE
+            # Set diagonal to 1.0
+            t.diagonal(corr_matrix[i:end_idx, i:end_idx])[:] = 1.0
+    
     # Configure trainer for this run
+    # Note: We now use just VSAEMultiGaussian with var_flag to handle learned variance
+    # VSAEMultiGaussianLearned is no longer used in the rewritten module
+    
     trainer_config = {
-        "trainer": VSAEIsoTrainer,
+        "trainer": VSAEMultiGaussianTrainer,
         "steps": TOTAL_STEPS,
         "activation_dim": d_mlp,
         "dict_size": DICT_SIZE,
@@ -45,22 +71,24 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         "lm_name": MODEL_NAME,
         "lr": LR,
         "kl_coeff": KL_COEFF,
+        "corr_rate": CORR_RATE,
+        "corr_matrix": corr_matrix,
+        "var_flag": VAR_FLAG,
         "warmup_steps": int(WARMUP_FRAC * TOTAL_STEPS),
         "sparsity_warmup_steps": int(SPARSITY_WARMUP_FRAC * TOTAL_STEPS),
         "decay_start": int(DECAY_START_FRAC * TOTAL_STEPS),
-        "var_flag": 0,  # Use fixed variance
         "use_april_update_mode": True,
         "device": "cuda",
-        "wandb_name": f"VSAEIso_{MODEL_NAME}_{DICT_SIZE}",
-        "dict_class": VSAEIsoGaussian
+        "wandb_name": f"VSAEMulti_{MODEL_NAME}_{DICT_SIZE}",
+        "dict_class": VSAEMultiGaussian
     }
     
     # Print configuration
     print("===== TRAINER CONFIGURATION =====")
-    print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items()))
+    print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items() if not isinstance(v, t.Tensor)))
     
     # Set unique save directory for this run
-    save_dir = f"./trained_vsae_iso_{DICT_SIZE}"
+    save_dir = f"./trained_vsae_multi_{DICT_SIZE}"
     
     # Run training
     trainSAE(
@@ -78,16 +106,15 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         wandb_project=WANDB_PROJECT,
         run_cfg={
             "model_type": MODEL_NAME,
-            "experiment_type": "isovsae",
+            "experiment_type": "vsae_multi",
             "kl_coefficient": KL_COEFF,
+            "correlation_rate": CORR_RATE,
+            "var_flag": VAR_FLAG,
             "dict_size_multiple": dict_size_multiple
         }
     )
     
     # Evaluate the trained model
-    from dictionary_learning.utils import load_dictionary
-    from dictionary_learning.evaluation import evaluate
-    
     # Load the trained dictionary
     vsae, config = load_dictionary(f"{save_dir}/trainer_0", device="cuda")
     
@@ -121,9 +148,11 @@ def main():
         "HOOK_NAME": "blocks.0.mlp.hook_post",
         
         # Training parameters        
-        "TOTAL_STEPS": 20000,
+        "TOTAL_STEPS": 10000,
         "LR": 1e-2,
         "KL_COEFF": 1e2,
+        "CORR_RATE": 0.3,  # Correlation rate for the multivariate Gaussian prior
+        "VAR_FLAG": 0,     # 0: Fixed variance, 1: Learned variance
         
         # Step fractions
         "WARMUP_FRAC": 0.05,
@@ -141,13 +170,13 @@ def main():
         "LOG_STEPS": 100,
         
         # WandB parameters
-        "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", "zachdata"),
+        "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", "my_entity"),
         "WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "vsae-experiments"),
         "USE_WANDB": True,
     }
     
     # List of dictionary size multipliers to run
-    dict_size_multiples = [4, 8, 16]
+    dict_size_multiples = [4]
     
     # ========== LOAD MODEL & CREATE BUFFER ==========
     # Only load the model once for all runs

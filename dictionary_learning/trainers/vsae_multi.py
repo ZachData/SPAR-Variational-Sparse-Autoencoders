@@ -3,62 +3,150 @@ Implements a Variational Sparse Autoencoder with multivariate Gaussian prior.
 This implementation is designed to handle general correlation structures in the latent space.
 """
 import torch as t
+import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn import init
 from typing import Optional, Tuple, List, Dict, Any
 from collections import namedtuple
 
-from ..trainers.trainer import SAETrainer, get_lr_schedule, get_sparsity_warmup_fn, ConstrainedAdam
+from ..trainers.trainer import SAETrainer, get_lr_schedule, get_sparsity_warmup_fn
 from ..config import DEBUG
 from ..dictionary import Dictionary
 
 
-class VSAEMultiGaussian(Dictionary, t.nn.Module):
+class VSAEMultiGaussian(Dictionary, nn.Module):
     """
     Variational Sparse Autoencoder with multivariate Gaussian prior
     Designed to handle general correlation structures in the latent space
     """
     
-    def __init__(self, activation_dim, dict_size, device="cuda"):
+    def __init__(self, 
+                 activation_dim, 
+                 dict_size, 
+                 use_april_update_mode=True,
+                 var_flag=0,
+                 corr_rate=0.5,
+                 corr_matrix=None,
+                 device=None):
         super().__init__()
         self.activation_dim = activation_dim
         self.dict_size = dict_size
+        self.use_april_update_mode = use_april_update_mode
+        self.var_flag = var_flag
+        self.corr_rate = corr_rate
         
-        # Main parameters
-        self.W_enc = t.nn.Parameter(t.empty(activation_dim, dict_size, device=device))
-        self.W_dec = t.nn.Parameter(t.empty(dict_size, activation_dim, device=device))
-        self.b_enc = t.nn.Parameter(t.zeros(dict_size, device=device))
-        self.b_dec = t.nn.Parameter(t.zeros(activation_dim, device=device))
+        # Initialize encoder and decoder
+        self.encoder = nn.Linear(activation_dim, dict_size, bias=True)
+        self.decoder = nn.Linear(dict_size, activation_dim, bias=use_april_update_mode)
         
-        # Initialize parameters with Kaiming uniform
-        t.nn.init.kaiming_uniform_(self.W_enc)
-        t.nn.init.kaiming_uniform_(self.W_dec)
+        # Initialize weights
+        w = t.randn(activation_dim, dict_size, device=device)
+        w = w / w.norm(dim=0, keepdim=True) * 0.1
+        self.encoder.weight = nn.Parameter(w.clone().T)
+        self.decoder.weight = nn.Parameter(w.clone())
         
-        # Normalize decoder weights
-        self.normalize_decoder()
+        # Initialize biases
+        init.zeros_(self.encoder.bias)
+        if use_april_update_mode:
+            init.zeros_(self.decoder.bias)
+        else:
+            # In standard mode, we use a separate bias parameter
+            self.bias = nn.Parameter(t.zeros(activation_dim, device=device))
+            
+        # Variance network (only used when var_flag=1)
+        if var_flag == 1:
+            self.var_encoder = nn.Linear(activation_dim, dict_size, bias=True)
+            init.kaiming_uniform_(self.var_encoder.weight)
+            init.zeros_(self.var_encoder.bias)
+        
+        # Initialize correlation structure
+        if corr_matrix is not None:
+            self.corr_matrix = corr_matrix
+        else:
+            # Create default correlation matrix based on corr_rate
+            self.corr_matrix = self._build_correlation_matrix(corr_rate)
+        
+        # Move to the specified device
+        if device is not None:
+            self.to(device)
+        
+    def _build_correlation_matrix(self, corr_rate):
+        """Build correlation matrix based on the given correlation rate"""
+        d_hidden = self.dict_size
+        corr_matrix = t.full((d_hidden, d_hidden), corr_rate)
+        t.diagonal(corr_matrix)[:] = 1.0  # Diagonal elements are 1
+        
+        # Ensure the correlation matrix is valid
+        if not t.allclose(corr_matrix, corr_matrix.t()):
+            print("Warning: Correlation matrix not symmetric, symmetrizing it")
+            corr_matrix = 0.5 * (corr_matrix + corr_matrix.t())
+        
+        # Add small jitter to ensure positive definiteness
+        corr_matrix = corr_matrix + t.eye(d_hidden) * 1e-4
+        
+        return corr_matrix
     
     def encode(self, x, output_log_var=False):
         """
         Encode a vector x in the activation space.
+        Returns mean (and log variance if requested).
         """
-        x_cent = x - self.b_dec
-        z = F.relu(x_cent @ self.W_enc + self.b_enc)
-        
+        if self.use_april_update_mode:
+            mu = F.relu(self.encoder(x))
+        else:
+            mu = F.relu(self.encoder(x - self.bias))
+            
         if output_log_var:
-            log_var = t.zeros_like(z)  # Fixed variance when var_flag=0
-            return z, log_var
-        return z
+            if self.var_flag == 1:
+                if self.use_april_update_mode:
+                    log_var = F.relu(self.var_encoder(x))
+                else:
+                    log_var = F.relu(self.var_encoder(x - self.bias))
+            else:
+                log_var = t.zeros_like(mu)
+            return mu, log_var
+        return mu
+    
+    def reparameterize(self, mu, log_var):
+        """
+        Apply reparameterization trick: z = mu + eps * sigma
+        where eps ~ N(0, 1)
+        """
+        std = t.exp(0.5 * log_var)
+        eps = t.randn_like(std)
+        return mu + eps * std
     
     def decode(self, f):
         """
-        Decode a dictionary vector f
+        Decode a dictionary vector f.
         """
-        return f @ self.W_dec + self.b_dec
+        if self.use_april_update_mode:
+            return self.decoder(f)
+        else:
+            return self.decoder(f) + self.bias
     
-    def forward(self, x, output_features=False):
+    def forward(self, x, output_features=False, ghost_mask=None):
         """
-        Forward pass through the autoencoder.
+        Forward pass of an autoencoder.
+        
+        Args:
+            x: activations to be autoencoded
+            output_features: if True, return the encoded features as well as the decoded x
+            ghost_mask: if not None, run this autoencoder in "ghost mode" where features are masked
         """
-        f = self.encode(x)
+        if ghost_mask is not None:
+            raise NotImplementedError("Ghost mode not implemented for VSAEMultiGaussian")
+            
+        # Encode and get mu (and log_var if var_flag=1)
+        if self.var_flag == 1:
+            mu, log_var = self.encode(x, output_log_var=True)
+            # Sample from the latent distribution
+            f = self.reparameterize(mu, log_var)
+        else:
+            mu = self.encode(x)
+            f = mu  # Without variance, just use mu directly
+            
+        # Decode
         x_hat = self.decode(f)
         
         if output_features:
@@ -66,60 +154,102 @@ class VSAEMultiGaussian(Dictionary, t.nn.Module):
         else:
             return x_hat
     
-    @t.no_grad()
+    def scale_biases(self, scale: float):
+        """
+        Scale all bias parameters by a given factor.
+        """
+        self.encoder.bias.data *= scale
+        if self.use_april_update_mode:
+            self.decoder.bias.data *= scale
+        else:
+            self.bias.data *= scale
+            
+        if self.var_flag == 1:
+            self.var_encoder.bias.data *= scale
+
     def normalize_decoder(self):
-        """Normalize decoder weights to have unit norm"""
-        norm = t.norm(self.W_dec, dim=1, keepdim=True)
-        self.W_dec.data = self.W_dec.data / norm.clamp(min=1e-6)
-    
-    def scale_biases(self, scale: float):
-        """Scale biases by a factor"""
-        self.b_dec.data *= scale
-        self.b_enc.data *= scale
-    
+        """
+        Normalize decoder weights to have unit norm.
+        """
+        norms = t.norm(self.decoder.weight, dim=0).to(dtype=self.decoder.weight.dtype, device=self.decoder.weight.device)
+
+        if t.allclose(norms, t.ones_like(norms)):
+            return
+        print("Normalizing decoder weights")
+
+        test_input = t.randn(10, self.activation_dim)
+        initial_output = self(test_input)
+
+        self.decoder.weight.data /= norms
+
+        new_norms = t.norm(self.decoder.weight, dim=0)
+        assert t.allclose(new_norms, t.ones_like(new_norms))
+
+        self.encoder.weight.data *= norms[:, None]
+        self.encoder.bias.data *= norms
+
+        new_output = self(test_input)
+
+        # Errors can be relatively large in larger SAEs due to floating point precision
+        assert t.allclose(initial_output, new_output, atol=1e-4)
+
     @classmethod
-    def from_pretrained(cls, path, device=None):
-        """Load a pretrained autoencoder from a file."""
+    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=0, corr_rate=0.5):
+        """
+        Load a pretrained autoencoder from a file.
+        
+        Args:
+            path: Path to the saved model
+            dtype: Data type to convert model to
+            device: Device to load model to
+            normalize_decoder: Whether to normalize decoder weights
+            var_flag: Whether to load with variance encoding (0: fixed, 1: learned)
+            corr_rate: Correlation rate for prior
+            
+        Returns:
+            Loaded autoencoder
+        """
         state_dict = t.load(path)
-        activation_dim, dict_size = state_dict["W_enc"].shape
-        autoencoder = cls(activation_dim, dict_size)
+        
+        # Determine dimensions and mode based on state dict
+        if 'encoder.weight' in state_dict:
+            dict_size, activation_dim = state_dict["encoder.weight"].shape
+            use_april_update_mode = "decoder.bias" in state_dict
+        else:
+            # Handle older format with W_enc, W_dec parameters
+            activation_dim, dict_size = state_dict["W_enc"].shape if "W_enc" in state_dict else state_dict["encoder.weight"].T.shape
+            use_april_update_mode = "b_dec" in state_dict
+            
+            # Convert parameter names if needed
+            if "W_enc" in state_dict:
+                converted_dict = {}
+                converted_dict["encoder.weight"] = state_dict["W_enc"].T
+                converted_dict["encoder.bias"] = state_dict["b_enc"]
+                converted_dict["decoder.weight"] = state_dict["W_dec"].T
+                
+                if use_april_update_mode:
+                    converted_dict["decoder.bias"] = state_dict["b_dec"]
+                else:
+                    converted_dict["bias"] = state_dict["b_dec"]
+                    
+                if var_flag == 1 and "W_enc_var" in state_dict:
+                    converted_dict["var_encoder.weight"] = state_dict["W_enc_var"].T
+                    converted_dict["var_encoder.bias"] = state_dict["b_enc_var"]
+                    
+                state_dict = converted_dict
+        
+        autoencoder = cls(activation_dim, dict_size, use_april_update_mode=use_april_update_mode, var_flag=var_flag, corr_rate=corr_rate)
         autoencoder.load_state_dict(state_dict)
+
+        # This is useful for doing analysis where e.g. feature activation magnitudes are important
+        # If training the SAE using the April update, the decoder weights are not normalized
+        if normalize_decoder:
+            autoencoder.normalize_decoder()
+
         if device is not None:
-            autoencoder.to(device)
+            autoencoder.to(dtype=dtype, device=device)
+
         return autoencoder
-
-
-class VSAEMultiGaussianLearned(VSAEMultiGaussian):
-    """
-    VSAE with multivariate Gaussian prior and learned variance
-    """
-    
-    def __init__(self, activation_dim, dict_size, device="cuda"):
-        super().__init__(activation_dim, dict_size, device)
-        
-        # Variance parameters
-        self.W_enc_var = t.nn.Parameter(t.empty(activation_dim, dict_size, device=device))
-        self.b_enc_var = t.nn.Parameter(t.zeros(dict_size, device=device))
-        
-        # Initialize variance parameters
-        t.nn.init.kaiming_uniform_(self.W_enc_var)
-    
-    def encode(self, x, output_log_var=False):
-        """
-        Encode a vector x in the activation space with learned variance
-        """
-        x_cent = x - self.b_dec
-        z = F.relu(x_cent @ self.W_enc + self.b_enc)
-        
-        if output_log_var:
-            log_var = F.relu(x_cent @ self.W_enc_var + self.b_enc_var)
-            return z, log_var
-        return z
-    
-    def scale_biases(self, scale: float):
-        """Scale biases by a factor"""
-        super().scale_biases(scale)
-        self.b_enc_var.data *= scale
 
 
 class VSAEMultiGaussianTrainer(SAETrainer):
@@ -143,6 +273,7 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         dict_size: int,                       # dictionary size
         layer: int,                           # layer to train on
         lm_name: str,                         # language model name
+        dict_class=VSAEMultiGaussian,         # dictionary class to use
         corr_rate: float = 0.5,               # correlation rate for prior
         corr_matrix: Optional[t.Tensor] = None, # custom correlation matrix
         var_flag: int = 0,                    # whether to use fixed (0) or learned (1) variance
@@ -151,9 +282,10 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         warmup_steps: int = 1000,             # LR warmup steps
         sparsity_warmup_steps: Optional[int] = None, # sparsity warmup steps (5% of steps in April update)
         decay_start: Optional[int] = None,    # when to start LR decay (80% of steps in April update)
+        use_april_update_mode: bool = True,   # whether to use April update mode
         seed: Optional[int] = None,
         device = None,
-        wandb_name: Optional[str] = 'VSAEMultiGaussianTrainerApril',
+        wandb_name: Optional[str] = 'VSAEMultiGaussianTrainer',
         submodule_name: Optional[str] = None,
     ):
         super().__init__(seed)
@@ -175,8 +307,6 @@ class VSAEMultiGaussianTrainer(SAETrainer):
             decay_start = int(0.8 * steps)  # Start decay at 80% of training
         
         # Setup general parameters
-        self.activation_dim = activation_dim
-        self.dict_size = dict_size
         self.lr = lr
         self.kl_coeff = kl_coeff
         self.warmup_steps = warmup_steps
@@ -185,47 +315,32 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         self.decay_start = decay_start
         self.wandb_name = wandb_name
         self.var_flag = var_flag
+        self.corr_rate = corr_rate
+        self.use_april_update_mode = use_april_update_mode
         
         if device is None:
             self.device = 'cuda' if t.cuda.is_available() else 'cpu'
         else:
             self.device = device
-            
-        # Setup correlation matrix for prior
-        self.corr_rate = corr_rate
-        self.corr_matrix = corr_matrix
         
-        # Initialize model parameters (April update style)
-        # Initialize decoder weights to random unit vectors with norm of 0.1
-        self.W_enc = t.nn.Parameter(t.empty(activation_dim, dict_size, device=self.device))
-        self.b_enc = t.nn.Parameter(t.zeros(dict_size, device=self.device))
+        # Initialize dictionary using the provided dictionary class
+        self.ae = dict_class(
+            activation_dim, 
+            dict_size,
+            use_april_update_mode=use_april_update_mode,
+            var_flag=var_flag,
+            corr_rate=corr_rate,
+            corr_matrix=corr_matrix,
+            device=self.device
+        )
+        self.ae.to(self.device)
         
-        self.W_dec = t.nn.Parameter(t.empty(dict_size, activation_dim, device=self.device))
-        self.b_dec = t.nn.Parameter(t.zeros(activation_dim, device=self.device))
-        
-        # Initialize with random directions but fixed norm of 0.1
-        t.nn.init.xavier_normal_(self.W_dec)
-        norm = self.W_dec.norm(dim=1, keepdim=True)
-        self.W_dec.data = self.W_dec.data / norm * 0.1
-        
-        # Initialize encoder as transpose of decoder
-        self.W_enc.data = self.W_dec.data.t().clone()
-        
-        # For variance learning if needed
-        if self.var_flag == 1:
-            self.W_enc_var = t.nn.Parameter(t.empty(activation_dim, dict_size, device=self.device))
-            self.b_enc_var = t.nn.Parameter(t.zeros(dict_size, device=self.device))
-            
-            # Initialize with Xavier/Kaiming
-            t.nn.init.kaiming_uniform_(self.W_enc_var)
-        
-        # Build prior covariance matrix and compute derived quantities
-        self.prior_covariance = self._build_prior_covariance()
+        # Compute derived quantities for the prior
         self.prior_precision = self._compute_prior_precision()
         self.prior_cov_logdet = self._compute_prior_logdet()
         
         # April update uses Adam without constrained weights
-        self.optimizer = t.optim.Adam(self.parameters(), lr=lr, betas=(0.9, 0.999))
+        self.optimizer = t.optim.Adam(self.ae.parameters(), lr=lr, betas=(0.9, 0.999))
         
         # Setup learning rate and sparsity schedules
         lr_fn = get_lr_schedule(steps, warmup_steps, decay_start, resample_steps=None)
@@ -236,99 +351,26 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         # Add logging parameters
         self.logging_parameters = ["kl_coeff", "var_flag", "corr_rate"]
     
-    def _build_prior_covariance(self):
-        """Build the prior covariance matrix"""
-        d_hidden = self.dict_size
-        
-        if self.corr_matrix is not None and self.corr_matrix.shape[0] == d_hidden:
-            corr_matrix = self.corr_matrix
-        elif self.corr_rate is not None:
-            # Create a matrix with uniform correlation
-            corr_matrix = t.full((d_hidden, d_hidden), self.corr_rate, device=self.device)
-            t.diagonal(corr_matrix)[:] = 1.0
-        else:
-            # Default to identity (no correlation)
-            return t.eye(d_hidden, device=self.device)
-        
-        # Ensure the correlation matrix is valid
-        if not t.allclose(corr_matrix, corr_matrix.t()):
-            print("Warning: Correlation matrix not symmetric, symmetrizing it")
-            corr_matrix = 0.5 * (corr_matrix + corr_matrix.t())
-        
-        # Add small jitter to ensure positive definiteness
-        corr_matrix = corr_matrix + t.eye(d_hidden, device=self.device) * 1e-4
-        
-        return corr_matrix.to(self.device)
-    
     def _compute_prior_precision(self):
         """Compute the precision matrix (inverse of covariance)"""
         try:
-            return t.linalg.inv(self.prior_covariance)
+            # Get the current autocast dtype to ensure consistency
+            dtype = self.ae.encoder.weight.dtype
+            return t.linalg.inv(self.ae.corr_matrix.to(self.device).to(dtype))
         except:
             # Add jitter for numerical stability
-            jitter = t.eye(self.dict_size, device=self.device) * 1e-4
-            return t.linalg.inv(self.prior_covariance + jitter)
-    
+            jitter = t.eye(self.ae.dict_size, device=self.device, dtype=dtype) * 1e-4
+            return t.linalg.inv(self.ae.corr_matrix.to(self.device).to(dtype) + jitter)
+
     def _compute_prior_logdet(self):
         """Compute log determinant of prior covariance"""
-        return t.logdet(self.prior_covariance)
-    
-    def encode(self, x, deterministic=True):
-        """
-        Encode inputs to sparse features
-        
-        Args:
-            x: Input tensor
-            deterministic: If True, return mean without sampling
-            
-        Returns:
-            Encoded features
-        """
-        # Compute mean of latent distribution
-        mu = F.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
-        
-        if deterministic:
-            return mu
-        
-        # Get log variance 
-        if self.var_flag == 1:
-            log_var = F.relu((x - self.b_dec) @ self.W_enc_var + self.b_enc_var)
-        else:
-            log_var = t.zeros_like(mu)
-        
-        # Sample from the latent distribution
-        return self.reparameterize(mu, log_var)
-    
-    def decode(self, z):
-        """
-        Decode sparse features back to inputs
-        
-        Args:
-            z: Sparse features
-            
-        Returns:
-            Reconstructed inputs
-        """
-        return z @ self.W_dec + self.b_dec
-    
-    def reparameterize(self, mu, log_var):
-        """
-        Apply the reparameterization trick: z = mu + eps * sigma, where eps ~ N(0, 1)
-        
-        Args:
-            mu: Mean of latent distribution
-            log_var: Log variance of latent distribution
-            
-        Returns:
-            Sampled latent variable z
-        """
-        std = t.exp(0.5 * log_var)
-        eps = t.randn_like(std)
-        return mu + eps * std
+        # Get the current autocast dtype to ensure consistency
+        dtype = self.ae.encoder.weight.dtype
+        return t.logdet(self.ae.corr_matrix.to(self.device).to(dtype))
     
     def _compute_kl_divergence(self, mu, log_var, decoder_norms):
         """
-        Compute KL divergence between approximate posterior and prior
+        Compute KL divergence between approximate posterior and multivariate Gaussian prior
         
         Args:
             mu: Mean of approximate posterior
@@ -342,18 +384,24 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         mu_avg = mu.mean(0)  # [dict_size]
         var_avg = log_var.exp().mean(0)  # [dict_size]
         
+        # Get the current dtype for consistency
+        dtype = mu.dtype
+        
+        # Cast the precision matrix to match mu's dtype
+        prior_precision = self.prior_precision.to(dtype)
+        
         # Trace term: tr(Σp^-1 * Σq)
-        trace_term = (self.prior_precision.diagonal() * var_avg).sum()
+        trace_term = (prior_precision.diagonal() * var_avg).sum()
         
         # Quadratic term: μ^T * Σp^-1 * μ
-        quad_term = mu_avg @ self.prior_precision @ mu_avg
+        quad_term = mu_avg @ prior_precision @ mu_avg
         
         # Log determinant term: ln(|Σp|/|Σq|)
         log_det_q = log_var.sum(1).mean()
         log_det_term = self.prior_cov_logdet - log_det_q
         
         # Combine terms
-        kl = 0.5 * (trace_term + quad_term - self.dict_size + log_det_term)
+        kl = 0.5 * (trace_term + quad_term - self.ae.dict_size + log_det_term)
         
         # Ensure non-negative
         kl = t.clamp(kl, min=0.0)
@@ -369,7 +417,7 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         Compute the VSAE loss with multivariate Gaussian prior
         
         Args:
-            x: Input tensor of shape [batch_size, activation_dim]
+            x: Input tensor
             step: Current training step
             logging: Whether to return detailed loss components
             
@@ -378,26 +426,25 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         """
         sparsity_scale = self.sparsity_warmup_fn(step)
         
-        # Compute mean of latent distribution
-        mu = F.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
-        
-        # Get log variance
-        if self.var_flag == 1:
-            log_var = F.relu((x - self.b_dec) @ self.W_enc_var + self.b_enc_var)
+        # Get mean and log variance from encoder
+        if self.ae.var_flag == 1:
+            mu, log_var = self.ae.encode(x, output_log_var=True)
+            # Sample from the latent distribution
+            f = self.ae.reparameterize(mu, log_var)
         else:
-            log_var = t.zeros_like(mu)
-        
-        # Sample from the latent distribution
-        z = self.reparameterize(mu, log_var)
+            mu = self.ae.encode(x)
+            f = mu  # Without variance, just use mu directly
+            log_var = t.zeros_like(mu)  # For KL calculation
         
         # Decode to get reconstruction
-        x_hat = z @ self.W_dec + self.b_dec
+        x_hat = self.ae.decode(f)
         
         # Get decoder column norms for April update style penalty
-        decoder_norms = t.norm(self.W_dec, dim=1)
+        decoder_norms = t.norm(self.ae.decoder.weight, dim=0)
         
         # Compute losses
         recon_loss = (x - x_hat).pow(2).sum(dim=-1).mean()
+        l2_loss = t.linalg.norm(x - x_hat, dim=-1).mean()
         kl_loss = self._compute_kl_divergence(mu, log_var, decoder_norms)
         
         # Total loss
@@ -407,10 +454,11 @@ class VSAEMultiGaussianTrainer(SAETrainer):
             return loss
         else:
             return namedtuple('LossLog', ['x', 'x_hat', 'f', 'losses'])(
-                x, x_hat, z,
+                x, x_hat, f,
                 {
+                    'l2_loss': l2_loss.item(),
                     'mse_loss': recon_loss.item(),
-                    'kl_loss': kl_loss.item(), 
+                    'kl_loss': kl_loss.item(),
                     'loss': loss.item()
                 }
             )
@@ -430,41 +478,19 @@ class VSAEMultiGaussianTrainer(SAETrainer):
         loss.backward()
         
         # Apply gradient clipping (April update)
-        t.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
         
         self.optimizer.step()
         self.scheduler.step()
-    
-    def forward(self, x, output_features=False):
-        """
-        Forward pass through the VAE
-        
-        Args:
-            x: Input activations
-            output_features: Whether to return features
-            
-        Returns:
-            Reconstructed activations (and features if requested)
-        """
-        # Encode to get mean (deterministic forward pass)
-        f = self.encode(x, deterministic=True)
-        
-        # Decode
-        x_hat = self.decode(f)
-        
-        if output_features:
-            return x_hat, f
-        else:
-            return x_hat
     
     @property
     def config(self):
         """Return configuration for logging"""
         return {
             'dict_class': 'VSAEMultiGaussian',
-            'trainer_class': 'VSAEMultiGaussianTrainerApril',
-            'activation_dim': self.activation_dim,
-            'dict_size': self.dict_size,
+            'trainer_class': 'VSAEMultiGaussianTrainer',
+            'activation_dim': self.ae.activation_dim,
+            'dict_size': self.ae.dict_size,
             'lr': self.lr,
             'kl_coeff': self.kl_coeff,
             'warmup_steps': self.warmup_steps,
@@ -473,6 +499,7 @@ class VSAEMultiGaussianTrainer(SAETrainer):
             'var_flag': self.var_flag,
             'steps': self.steps,
             'decay_start': self.decay_start,
+            'use_april_update_mode': self.use_april_update_mode,
             'seed': self.seed,
             'device': self.device,
             'layer': self.layer,
