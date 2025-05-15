@@ -48,10 +48,10 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         "warmup_steps": int(WARMUP_FRAC * TOTAL_STEPS),
         "sparsity_warmup_steps": int(SPARSITY_WARMUP_FRAC * TOTAL_STEPS),
         "decay_start": int(DECAY_START_FRAC * TOTAL_STEPS),
-        "var_flag": 0,  # Use fixed variance
+        "var_flag": 1,  # Use fixed variance
         "use_april_update_mode": True,
         "device": "cuda",
-        "wandb_name": f"VSAEIso_{MODEL_NAME}_{DICT_SIZE}",
+        "wandb_name": f"VSAEIso_{MODEL_NAME}_{DICT_SIZE}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_FRAC}_spwarm{SPARSITY_WARMUP_FRAC}",
         "dict_class": VSAEIsoGaussian
     }
     
@@ -60,7 +60,7 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items()))
     
     # Set unique save directory for this run
-    save_dir = f"./trained_vsae_iso_{DICT_SIZE}"
+    save_dir = f"./VSAEIso_{MODEL_NAME}_d{DICT_SIZE}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_FRAC}_spwarm{SPARSITY_WARMUP_FRAC}"
     
     # Run training
     trainSAE(
@@ -121,9 +121,9 @@ def main():
         "HOOK_NAME": "blocks.0.mlp.hook_post",
         
         # Training parameters        
-        "TOTAL_STEPS": 20000,
-        "LR": 1e-2,
-        "KL_COEFF": 1e2,
+        "TOTAL_STEPS": 30000,
+        "LR": 5e-5,  # Updated from 1e-2 to 0.0005
+        "KL_COEFF": 500000,  # Updated from 1e2 to 50
         
         # Step fractions
         "WARMUP_FRAC": 0.05,
@@ -146,8 +146,8 @@ def main():
         "USE_WANDB": True,
     }
     
-    # List of dictionary size multipliers to run
-    dict_size_multiples = [4, 8, 16]
+    # Only train with 4x dictionary size multiple
+    dict_size_multiples = [4]
     
     # ========== LOAD MODEL & CREATE BUFFER ==========
     # Only load the model once for all runs
@@ -176,40 +176,28 @@ def main():
         device="cuda",
     )
     
-    # ========== RUN SEQUENTIAL TRAININGS ==========
-    all_results = {}
+    # ========== RUN TRAINING ==========
+    print(f"\nStarting training with dictionary size multiple: {dict_size_multiples[0]}")
+    start_time = time.time()
     
-    for multiple in dict_size_multiples:
-        print(f"\nStarting training with dictionary size multiple: {multiple}")
-        start_time = time.time()
-        
-        # Run training with this dictionary size
-        results = run_training(multiple, model, buffer, base_params)
-        
-        # Store results
-        all_results[multiple] = results
-        
-        elapsed_time = time.time() - start_time
-        print(f"Completed training with multiple {multiple} in {elapsed_time:.2f} seconds")
-        
-        # Short pause between runs
-        print("Cooling down before next run...")
-        time.sleep(10)
+    # Run training with this dictionary size
+    results = run_training(dict_size_multiples[0], model, buffer, base_params)
     
-    # ========== PRINT COMPARATIVE RESULTS ==========
+    elapsed_time = time.time() - start_time
+    print(f"Completed training in {elapsed_time:.2f} seconds")
+    
+    # ========== PRINT RESULTS ==========
     print("\n\n" + "="*50)
-    print("COMPARATIVE RESULTS ACROSS ALL RUNS")
+    print("TRAINING RESULTS")
     print("="*50)
     
-    # Print comparison table of key metrics
+    # Print key metrics
     metrics = ["frac_variance_explained", "l0", "frac_alive"]
+    dict_size = int(dict_size_multiples[0] * model.cfg.d_mlp)
     
     print(f"{'Dict Size':15} | " + " | ".join(f"{metric:22}" for metric in metrics))
     print("-" * (15 + 25 * len(metrics)))
-    
-    for multiple in dict_size_multiples:
-        dict_size = int(multiple * model.cfg.d_mlp)
-        print(f"{dict_size:<15} | " + " | ".join(f"{all_results[multiple][metric]:<22.4f}" for metric in metrics))
+    print(f"{dict_size:<15} | " + " | ".join(f"{results[metric]:<22.4f}" for metric in metrics))
 
 if __name__ == "__main__":
     # Set the start method to spawn for Windows compatibility

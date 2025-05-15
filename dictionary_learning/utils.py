@@ -9,6 +9,8 @@ from .trainers.top_k import AutoEncoderTopK
 from .trainers.batch_top_k import BatchTopKSAE
 from .trainers.matryoshka_batch_top_k import MatryoshkaBatchTopKSAE
 from .trainers.vsae_iso import VSAEIsoGaussian
+from .trainers.vsae_multi import VSAEMultiGaussian
+from .trainers.vsae_mixture import VSAEMixtureGaussian
 from .dictionary import (
     AutoEncoder,
     GatedAutoEncoder,
@@ -95,6 +97,23 @@ def load_dictionary(base_path: str, device: str) -> tuple:
         dictionary = JumpReluAutoEncoder.from_pretrained(ae_path, device=device)
     elif dict_class == "VSAEIsoGaussian":
         dictionary = VSAEIsoGaussian.from_pretrained(ae_path, device=device)
+    elif dict_class == "VSAEMultiGaussian":
+        # Add parameters if they're in the config
+        corr_rate = config["trainer"].get("corr_rate", 0.5)
+        var_flag = config["trainer"].get("var_flag", 0)
+        dictionary = VSAEMultiGaussian.from_pretrained(ae_path, device=device, corr_rate=corr_rate, var_flag=var_flag)
+    elif dict_class == "VSAEMixtureGaussian":
+        # Add parameters if they're in the config
+        var_flag = config["trainer"].get("var_flag", 0)
+        n_correlated_pairs = config["trainer"].get("n_correlated_pairs", 0)
+        n_anticorrelated_pairs = config["trainer"].get("n_anticorrelated_pairs", 0)
+        dictionary = VSAEMixtureGaussian.from_pretrained(
+            ae_path, 
+            device=device, 
+            var_flag=var_flag,
+            n_correlated_pairs=n_correlated_pairs,
+            n_anticorrelated_pairs=n_anticorrelated_pairs
+        )
     else:
         raise ValueError(f"Dictionary class {dict_class} not supported")
 

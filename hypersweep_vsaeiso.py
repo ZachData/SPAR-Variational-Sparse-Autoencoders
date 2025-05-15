@@ -28,7 +28,7 @@ def run_training(config, model, buffer, device="cuda"):
     WANDB_ENTITY = config["WANDB_ENTITY"]
     WANDB_PROJECT = config["WANDB_PROJECT"]
     USE_WANDB = config["USE_WANDB"]
-    DICT_SIZE_MULTIPLE = config.get("DICT_SIZE_MULTIPLE", 8)  # Fixed to 8x for hyperparameter sweep
+    DICT_SIZE_MULTIPLE = config.get("DICT_SIZE_MULTIPLE", 4)  # Fixed to 8x for hyperparameter sweep
     
     # Calculate derived parameters
     d_mlp = model.cfg.d_mlp
@@ -73,7 +73,7 @@ def run_training(config, model, buffer, device="cuda"):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Set main save directory
-    main_save_dir = "./trained_sweeps_iso_8x"
+    main_save_dir = "./trained_sweeps_iso_4x"
     
     # Create main directory if it doesn't exist
     os.makedirs(main_save_dir, exist_ok=True)
@@ -168,7 +168,7 @@ def main():
         "HOOK_NAME": f"blocks.{args.layer}.mlp.hook_post",
         
         # Fixed to 4x size multiple for hyperparameter sweep
-        "DICT_SIZE_MULTIPLE": 8,
+        "DICT_SIZE_MULTIPLE": 4,
         
         # Training parameters        
         "TOTAL_STEPS": args.steps,
@@ -214,7 +214,7 @@ def main():
         }
     
     # Create main save directory
-    main_save_dir = "./trained_sweeps_iso_8x"
+    main_save_dir = "./trained_sweeps_iso_4x"
     os.makedirs(main_save_dir, exist_ok=True)
     print(f"Created main save directory: {main_save_dir}")
     

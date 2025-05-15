@@ -260,7 +260,12 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
         Returns:
             Loaded autoencoder
         """
-        state_dict = t.load(path)
+        # Determine device if not specified
+        if device is None:
+            device = 'cuda' if t.cuda.is_available() else 'cpu'
+        
+        # Load state dict to the target device
+        state_dict = t.load(path, map_location=device)
         
         # Determine dimensions and mode based on state dict
         if 'encoder.weight' in state_dict:
@@ -268,8 +273,12 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
             use_april_update_mode = "decoder.bias" in state_dict
         else:
             # Handle older format with W_enc, W_dec parameters
-            activation_dim, dict_size = state_dict["W_enc"].shape if "W_enc" in state_dict else state_dict["encoder.weight"].T.shape
-            use_april_update_mode = "b_dec" in state_dict
+            if "W_enc" in state_dict:
+                activation_dim, dict_size = state_dict["W_enc"].shape
+            else: 
+                activation_dim, dict_size = state_dict["encoder.weight"].T.shape
+            
+            use_april_update_mode = "b_dec" in state_dict or "decoder.bias" in state_dict
             
             # Convert parameter names if needed
             if "W_enc" in state_dict:
@@ -289,6 +298,7 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
                     
                 state_dict = converted_dict
         
+        # Create the autoencoder with determined dimensions
         autoencoder = cls(
             activation_dim, 
             dict_size, 
@@ -298,6 +308,13 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
             n_anticorrelated_pairs=n_anticorrelated_pairs,
             device=device
         )
+        
+        # Ensure all tensors in state_dict are on the specified device
+        for k, v in state_dict.items():
+            if isinstance(v, t.Tensor):
+                state_dict[k] = v.to(device)
+        
+        # Load state dict
         autoencoder.load_state_dict(state_dict)
 
         # This is useful for doing analysis where e.g. feature activation magnitudes are important
@@ -305,8 +322,8 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
         if normalize_decoder:
             autoencoder.normalize_decoder()
 
-        if device is not None:
-            autoencoder.to(dtype=dtype, device=device)
+        # Ensure model is on the correct device and dtype
+        autoencoder = autoencoder.to(dtype=dtype, device=device)
 
         return autoencoder
 
