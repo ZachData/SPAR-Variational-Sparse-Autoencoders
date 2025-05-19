@@ -1,57 +1,64 @@
 import torch as t
 from transformer_lens import HookedTransformer
-from dictionary_learning.trainers.standard import StandardTrainerAprilUpdate
+from dictionary_learning.trainers.vsae_topk import VSAETopKTrainer, VSAETopK
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
-from dictionary_learning.utils import load_dictionary
-from dictionary_learning.evaluation import evaluate
 import multiprocessing
 import os
 import time
 
-def run_training(dict_size_multiple, model, buffer, base_params):
-    """Run a single training with the specified dictionary size multiple"""
+def run_training(dict_size_multiple, k_ratio, model, buffer, base_params):
+    """Run a single training with the specified dictionary size multiple and k ratio"""
     # Extract base parameters
     MODEL_NAME = base_params["MODEL_NAME"]
     LAYER = base_params["LAYER"]
     TOTAL_STEPS = base_params["TOTAL_STEPS"]
     LR = base_params["LR"]
-    L1_PENALTY = base_params["L1_PENALTY"]
-    WARMUP_STEPS = base_params["WARMUP_STEPS"]
-    SPARSITY_WARMUP_STEPS = base_params["SPARSITY_WARMUP_STEPS"]
-    # RESAMPLE_STEPS = base_params["RESAMPLE_STEPS"]
+    KL_COEFF = base_params["KL_COEFF"]
+    AUXK_ALPHA = base_params["AUXK_ALPHA"]
+    WARMUP_FRAC = base_params["WARMUP_FRAC"]
+    SPARSITY_WARMUP_FRAC = base_params["SPARSITY_WARMUP_FRAC"]
+    DECAY_START_FRAC = base_params["DECAY_START_FRAC"]
     LOG_STEPS = base_params["LOG_STEPS"]
     CHECKPOINT_FRACS = base_params["CHECKPOINT_FRACS"]
     WANDB_ENTITY = base_params["WANDB_ENTITY"]
     WANDB_PROJECT = base_params["WANDB_PROJECT"]
     USE_WANDB = base_params["USE_WANDB"]
+    VAR_FLAG = base_params["VAR_FLAG"]
+    USE_APRIL_UPDATE = base_params["USE_APRIL_UPDATE"]
     
     # Calculate derived parameters
     d_mlp = model.cfg.d_mlp
     DICT_SIZE = int(dict_size_multiple * d_mlp)
+    K = max(1, int(DICT_SIZE * k_ratio))  # k as fraction of dict_size
     SAVE_STEPS = [int(frac * TOTAL_STEPS) for frac in CHECKPOINT_FRACS]
     
     print(f"\n\n{'='*50}")
-    print(f"STARTING TRAINING WITH DICT_SIZE_MULTIPLE = {dict_size_multiple}")
-    print(f"Dictionary size: {DICT_SIZE}")
+    print(f"STARTING TRAINING WITH DICT_SIZE_MULTIPLE = {dict_size_multiple}, K_RATIO = {k_ratio}")
+    print(f"Dictionary size: {DICT_SIZE}, Top-K: {K}")
     print(f"{'='*50}\n")
     
     # Configure trainer for this run
     trainer_config = {
-        "trainer": StandardTrainerAprilUpdate,
+        "trainer": VSAETopKTrainer,
         "steps": TOTAL_STEPS,
         "activation_dim": d_mlp,
         "dict_size": DICT_SIZE,
+        "k": K,
         "layer": LAYER,
         "lm_name": MODEL_NAME,
         "lr": LR,
-        "l1_penalty": L1_PENALTY,
-        "warmup_steps": WARMUP_STEPS,
-        "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS,
-        # "resample_steps": RESAMPLE_STEPS,
+        "kl_coeff": KL_COEFF,
+        "auxk_alpha": AUXK_ALPHA,
+        "warmup_steps": int(WARMUP_FRAC * TOTAL_STEPS),
+        "sparsity_warmup_steps": int(SPARSITY_WARMUP_FRAC * TOTAL_STEPS),
+        "decay_start": int(DECAY_START_FRAC * TOTAL_STEPS),
+        "var_flag": VAR_FLAG,
+        "use_april_update_mode": USE_APRIL_UPDATE,
         "device": "cuda",
-        "wandb_name": f"StandardSAE_{MODEL_NAME}_{DICT_SIZE}"
+        "wandb_name": f"VSAETopK_{MODEL_NAME}_d{DICT_SIZE}_k{K}_lr{LR}_kl{KL_COEFF}",
+        "dict_class": VSAETopK
     }
     
     # Print configuration
@@ -59,7 +66,7 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items()))
     
     # Set unique save directory for this run
-    save_dir = f"./trained_sae_{DICT_SIZE}"
+    save_dir = f"./VSAETopK_{MODEL_NAME}_d{DICT_SIZE}_k{K}_lr{LR}_kl{KL_COEFF}_var{VAR_FLAG}_april{int(USE_APRIL_UPDATE)}"
     
     # Run training
     trainSAE(
@@ -77,19 +84,25 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         wandb_project=WANDB_PROJECT,
         run_cfg={
             "model_type": MODEL_NAME,
-            "experiment_type": "standard_sae",
-            "l1_penalty": L1_PENALTY,
-            "dict_size_multiple": dict_size_multiple
+            "experiment_type": "vsae_topk",
+            "kl_coefficient": KL_COEFF,
+            "dict_size_multiple": dict_size_multiple,
+            "k_ratio": k_ratio,
+            "var_flag": VAR_FLAG,
+            "april_update": USE_APRIL_UPDATE
         }
     )
     
     # Evaluate the trained model
+    from dictionary_learning.utils import load_dictionary
+    from dictionary_learning.evaluation import evaluate
+    
     # Load the trained dictionary
-    sae, config = load_dictionary(f"{save_dir}/trainer_0", device="cuda")
+    vsae_topk, config = load_dictionary(f"{save_dir}/trainer_0", device="cuda")
     
     # Evaluate on a small batch
     eval_results = evaluate(
-        dictionary=sae,
+        dictionary=vsae_topk,
         activations=buffer,
         batch_size=64,
         max_len=base_params["CTX_LEN"],
@@ -116,15 +129,20 @@ def main():
         "LAYER": 0,
         "HOOK_NAME": "blocks.0.mlp.hook_post",
         
-        # Training parameters
+        # Training parameters        
         "TOTAL_STEPS": 30000,
-        "LR": 1e-3,
-        "L1_PENALTY": 1e-1,
+        "LR": 5e-5,
+        "KL_COEFF": 10.0,
+        "AUXK_ALPHA": 0.03125,  # 1/32
         
-        # Step parameters
-        "WARMUP_STEPS": 1000,
-        "SPARSITY_WARMUP_STEPS": 1000,
-        # "RESAMPLE_STEPS": 2000,
+        # Step fractions
+        "WARMUP_FRAC": 0.05,
+        "SPARSITY_WARMUP_FRAC": 0.05,
+        "DECAY_START_FRAC": 0.8,
+        
+        # VSAETopK specific settings
+        "VAR_FLAG": 1,  # Use learned variance
+        "USE_APRIL_UPDATE": True,  # Use April update mode
         
         # Buffer parameters
         "N_CTXS": 3000,
@@ -138,12 +156,15 @@ def main():
         
         # WandB parameters
         "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", "zachdata"),
-        "WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "sae-experiments"),
+        "WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "vsae-topk-experiments"),
         "USE_WANDB": True,
     }
     
-    # List of dictionary size multipliers to run
-    dict_size_multiples = [4]
+    # Define configurations to try
+    # Using dict_size_multiple=4 with different k_ratios
+    configs = [
+        (4.0, 0.1),  # dictionary is 4x model dimension, k is 10% of dictionary size
+    ]
     
     # ========== LOAD MODEL & CREATE BUFFER ==========
     # Only load the model once for all runs
@@ -172,40 +193,34 @@ def main():
         device="cuda",
     )
     
-    # ========== RUN SEQUENTIAL TRAININGS ==========
+    # ========== RUN TRAINING ==========
     all_results = {}
-    
-    for multiple in dict_size_multiples:
-        print(f"\nStarting training with dictionary size multiple: {multiple}")
+    for dict_size_multiple, k_ratio in configs:
+        print(f"\nStarting training with dictionary size multiple: {dict_size_multiple}, k_ratio: {k_ratio}")
         start_time = time.time()
         
-        # Run training with this dictionary size
-        results = run_training(multiple, model, buffer, base_params)
-        
-        # Store results
-        all_results[multiple] = results
+        # Run training with this configuration
+        results = run_training(dict_size_multiple, k_ratio, model, buffer, base_params)
+        all_results[(dict_size_multiple, k_ratio)] = results
         
         elapsed_time = time.time() - start_time
-        print(f"Completed training with multiple {multiple} in {elapsed_time:.2f} seconds")
-        
-        # Short pause between runs
-        print("Cooling down before next run...")
-        time.sleep(10)
+        print(f"Completed training in {elapsed_time:.2f} seconds")
     
-    # ========== PRINT COMPARATIVE RESULTS ==========
+    # ========== PRINT RESULTS ==========
     print("\n\n" + "="*50)
-    print("COMPARATIVE RESULTS ACROSS ALL RUNS")
+    print("TRAINING RESULTS")
     print("="*50)
     
-    # Print comparison table of key metrics
+    # Print key metrics
     metrics = ["frac_variance_explained", "l0", "frac_alive"]
     
-    print(f"{'Dict Size':15} | " + " | ".join(f"{metric:22}" for metric in metrics))
-    print("-" * (15 + 25 * len(metrics)))
+    print(f"{'Dict Size':10} | {'Top-K':8} | " + " | ".join(f"{metric:22}" for metric in metrics))
+    print("-" * (20 + 25 * len(metrics)))
     
-    for multiple in dict_size_multiples:
-        dict_size = int(multiple * model.cfg.d_mlp)
-        print(f"{dict_size:<15} | " + " | ".join(f"{all_results[multiple][metric]:<22.4f}" for metric in metrics))
+    for (dict_size_multiple, k_ratio), results in all_results.items():
+        dict_size = int(dict_size_multiple * model.cfg.d_mlp)
+        k = max(1, int(dict_size * k_ratio))
+        print(f"{dict_size:<10} | {k:<8} | " + " | ".join(f"{results[metric]:<22.4f}" for metric in metrics))
 
 if __name__ == "__main__":
     # Set the start method to spawn for Windows compatibility

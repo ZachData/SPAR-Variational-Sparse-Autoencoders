@@ -15,10 +15,14 @@ from .gdm import GatedSAETrainer
 from .gated_anneal import GatedAnnealTrainer
 from .p_anneal import PAnnealTrainer
 
-# # Variational autoencoder trainers
+# Variational autoencoder trainers
 from .vsae_iso import VSAEIsoTrainer
-# from .vsae_mixture import VSAEMixtureTrainer
-# from .vsae_multi import VSAEMultiGaussianTrainer
+from .vsae_gated import VSAEGated, VSAEGatedTrainer
+from .vsae_gated_anneal import VSAEGatedAutoEncoder, VSAEGatedAnnealTrainer
+from .vsae_jump_relu import VSAEJumpReLU, VSAEJumpReLUTrainer
+from .vsae_matryoshka import MatryoshkaVSAEIso, MatryoshkaVSAEIsoTrainer
+from .vsae_panneal import VSAEPAnneal, VSAEPAnnealTrainer
+from .vsae_topk import VSAETopK, VSAETopKTrainer
 
 __all__ = [
     # Core
@@ -41,6 +45,16 @@ __all__ = [
     
     # Variational
     "VSAEIsoTrainer",
-    "VSAEMixtureTrainer",
-    "VSAEMultiGaussianTrainer"
+    "VSAEGated",
+    "VSAEGatedTrainer",
+    "VSAEGatedAutoEncoder",
+    "VSAEGatedAnnealTrainer",
+    "VSAEJumpReLU",
+    "VSAEJumpReLUTrainer",
+    "MatryoshkaVSAEIso",
+    "MatryoshkaVSAEIsoTrainer",
+    "VSAEPAnneal",
+    "VSAEPAnnealTrainer",
+    "VSAETopK",
+    "VSAETopKTrainer"
 ]

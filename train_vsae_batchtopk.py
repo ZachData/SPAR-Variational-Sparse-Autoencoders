@@ -1,10 +1,9 @@
 import torch as t
 from transformer_lens import HookedTransformer
-from dictionary_learning.trainers.standard import StandardTrainerAprilUpdate
+from dictionary_learning.trainers.vsae_topk import VSAETopKTrainer, VSAETopK
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
-from dictionary_learning.utils import load_dictionary
 from dictionary_learning.evaluation import evaluate
 import multiprocessing
 import os
@@ -17,10 +16,15 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     LAYER = base_params["LAYER"]
     TOTAL_STEPS = base_params["TOTAL_STEPS"]
     LR = base_params["LR"]
-    L1_PENALTY = base_params["L1_PENALTY"]
-    WARMUP_STEPS = base_params["WARMUP_STEPS"]
-    SPARSITY_WARMUP_STEPS = base_params["SPARSITY_WARMUP_STEPS"]
-    # RESAMPLE_STEPS = base_params["RESAMPLE_STEPS"]
+    KL_COEFF = base_params["KL_COEFF"]
+    AUXK_ALPHA = base_params["AUXK_ALPHA"]
+    K_RATIO = base_params["K_RATIO"]
+    VAR_FLAG = base_params["VAR_FLAG"]
+    WARMUP_FRAC = base_params["WARMUP_FRAC"]
+    SPARSITY_WARMUP_FRAC = base_params["SPARSITY_WARMUP_FRAC"]
+    DECAY_START_FRAC = base_params["DECAY_START_FRAC"]
+    THRESHOLD_BETA = base_params["THRESHOLD_BETA"]
+    THRESHOLD_START_STEP = base_params["THRESHOLD_START_STEP"]
     LOG_STEPS = base_params["LOG_STEPS"]
     CHECKPOINT_FRACS = base_params["CHECKPOINT_FRACS"]
     WANDB_ENTITY = base_params["WANDB_ENTITY"]
@@ -30,36 +34,44 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     # Calculate derived parameters
     d_mlp = model.cfg.d_mlp
     DICT_SIZE = int(dict_size_multiple * d_mlp)
+    K = max(1, int(K_RATIO * d_mlp))  # Ensure at least 1 feature
     SAVE_STEPS = [int(frac * TOTAL_STEPS) for frac in CHECKPOINT_FRACS]
     
     print(f"\n\n{'='*50}")
     print(f"STARTING TRAINING WITH DICT_SIZE_MULTIPLE = {dict_size_multiple}")
-    print(f"Dictionary size: {DICT_SIZE}")
+    print(f"Dictionary size: {DICT_SIZE}, K: {K}")
     print(f"{'='*50}\n")
     
     # Configure trainer for this run
     trainer_config = {
-        "trainer": StandardTrainerAprilUpdate,
+        "trainer": VSAETopKTrainer,
         "steps": TOTAL_STEPS,
         "activation_dim": d_mlp,
         "dict_size": DICT_SIZE,
+        "k": K,
         "layer": LAYER,
         "lm_name": MODEL_NAME,
         "lr": LR,
-        "l1_penalty": L1_PENALTY,
-        "warmup_steps": WARMUP_STEPS,
-        "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS,
-        # "resample_steps": RESAMPLE_STEPS,
+        "kl_coeff": KL_COEFF,
+        "auxk_alpha": AUXK_ALPHA,
+        "warmup_steps": int(WARMUP_FRAC * TOTAL_STEPS),
+        "sparsity_warmup_steps": int(SPARSITY_WARMUP_FRAC * TOTAL_STEPS),
+        "decay_start": int(DECAY_START_FRAC * TOTAL_STEPS),
+        "threshold_beta": THRESHOLD_BETA,
+        "threshold_start_step": THRESHOLD_START_STEP,
+        "var_flag": VAR_FLAG,
+        "constrain_weights": True,
         "device": "cuda",
-        "wandb_name": f"StandardSAE_{MODEL_NAME}_{DICT_SIZE}"
+        "wandb_name": f"VSAETopK_{MODEL_NAME}_{DICT_SIZE}_k{K}_lr{LR}_kl{KL_COEFF}_auxk{AUXK_ALPHA}",
+        "dict_class": VSAETopK
     }
     
     # Print configuration
     print("===== TRAINER CONFIGURATION =====")
-    print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items()))
+    print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items() if k != "trainer" and k != "dict_class"))
     
     # Set unique save directory for this run
-    save_dir = f"./trained_sae_{DICT_SIZE}"
+    save_dir = f"./VSAETopK_{MODEL_NAME}_d{DICT_SIZE}_k{K}_var{VAR_FLAG}_lr{LR}_kl{KL_COEFF}_auxk{AUXK_ALPHA}"
     
     # Run training
     trainSAE(
@@ -77,19 +89,27 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         wandb_project=WANDB_PROJECT,
         run_cfg={
             "model_type": MODEL_NAME,
-            "experiment_type": "standard_sae",
-            "l1_penalty": L1_PENALTY,
-            "dict_size_multiple": dict_size_multiple
+            "experiment_type": "vsae_topk",
+            "kl_coefficient": KL_COEFF,
+            "dict_size_multiple": dict_size_multiple,
+            "k_ratio": K_RATIO
         }
     )
     
     # Evaluate the trained model
+    print("\nTraining complete! Evaluating model...")
+    
     # Load the trained dictionary
-    sae, config = load_dictionary(f"{save_dir}/trainer_0", device="cuda")
+    vsae_topk = VSAETopK.from_pretrained(
+        f"{save_dir}/trainer_0/ae.pt", 
+        k=K, 
+        var_flag=VAR_FLAG, 
+        device="cuda"
+    )
     
     # Evaluate on a small batch
     eval_results = evaluate(
-        dictionary=sae,
+        dictionary=vsae_topk,
         activations=buffer,
         batch_size=64,
         max_len=base_params["CTX_LEN"],
@@ -116,15 +136,22 @@ def main():
         "LAYER": 0,
         "HOOK_NAME": "blocks.0.mlp.hook_post",
         
-        # Training parameters
+        # Training parameters        
         "TOTAL_STEPS": 30000,
-        "LR": 1e-3,
-        "L1_PENALTY": 1e-1,
+        "LR": 5e-5,
+        "KL_COEFF": 0.1,
+        "AUXK_ALPHA": 0.03125,  # 1/32
+        "K_RATIO": 0.05,  # 5% of activation dimension
+        "VAR_FLAG": 1,  # Use learned variance
         
-        # Step parameters
-        "WARMUP_STEPS": 1000,
-        "SPARSITY_WARMUP_STEPS": 1000,
-        # "RESAMPLE_STEPS": 2000,
+        # Step fractions
+        "WARMUP_FRAC": 0.05,
+        "SPARSITY_WARMUP_FRAC": 0.05,
+        "DECAY_START_FRAC": 0.8,
+        
+        # Threshold parameters
+        "THRESHOLD_BETA": 0.999,
+        "THRESHOLD_START_STEP": 1000,
         
         # Buffer parameters
         "N_CTXS": 3000,
@@ -137,29 +164,32 @@ def main():
         "LOG_STEPS": 100,
         
         # WandB parameters
-        "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", "zachdata"),
-        "WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "sae-experiments"),
+        "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", ""),
+        "WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "vsae-topk-experiments"),
         "USE_WANDB": True,
     }
     
-    # List of dictionary size multipliers to run
+    # Dictionary size multiple to use
     dict_size_multiples = [4]
     
     # ========== LOAD MODEL & CREATE BUFFER ==========
-    # Only load the model once for all runs
+    # Load the model
+    print("Loading model...")
     model = HookedTransformer.from_pretrained(
         base_params["MODEL_NAME"], 
         device="cuda"
     )
     
     # Set up data generator
+    print("Setting up data generator...")
     data_gen = hf_dataset_to_generator(
         "NeelNanda/c4-code-tokenized-2b", 
         split="train", 
         return_tokens=True
     )
     
-    # Create activation buffer (reused for all runs)
+    # Create activation buffer
+    print("Creating activation buffer...")
     buffer = TransformerLensActivationBuffer(
         data=data_gen,
         model=model,
@@ -172,40 +202,28 @@ def main():
         device="cuda",
     )
     
-    # ========== RUN SEQUENTIAL TRAININGS ==========
-    all_results = {}
+    # ========== RUN TRAINING ==========
+    print(f"\nStarting training with dictionary size multiple: {dict_size_multiples[0]}")
+    start_time = time.time()
     
-    for multiple in dict_size_multiples:
-        print(f"\nStarting training with dictionary size multiple: {multiple}")
-        start_time = time.time()
-        
-        # Run training with this dictionary size
-        results = run_training(multiple, model, buffer, base_params)
-        
-        # Store results
-        all_results[multiple] = results
-        
-        elapsed_time = time.time() - start_time
-        print(f"Completed training with multiple {multiple} in {elapsed_time:.2f} seconds")
-        
-        # Short pause between runs
-        print("Cooling down before next run...")
-        time.sleep(10)
+    # Run training with this dictionary size
+    results = run_training(dict_size_multiples[0], model, buffer, base_params)
     
-    # ========== PRINT COMPARATIVE RESULTS ==========
+    elapsed_time = time.time() - start_time
+    print(f"Completed training in {elapsed_time:.2f} seconds ({elapsed_time/3600:.2f} hours)")
+    
+    # ========== PRINT RESULTS ==========
     print("\n\n" + "="*50)
-    print("COMPARATIVE RESULTS ACROSS ALL RUNS")
+    print("TRAINING RESULTS")
     print("="*50)
     
-    # Print comparison table of key metrics
+    # Print key metrics
     metrics = ["frac_variance_explained", "l0", "frac_alive"]
+    dict_size = int(dict_size_multiples[0] * model.cfg.d_mlp)
     
     print(f"{'Dict Size':15} | " + " | ".join(f"{metric:22}" for metric in metrics))
     print("-" * (15 + 25 * len(metrics)))
-    
-    for multiple in dict_size_multiples:
-        dict_size = int(multiple * model.cfg.d_mlp)
-        print(f"{dict_size:<15} | " + " | ".join(f"{all_results[multiple][metric]:<22.4f}" for metric in metrics))
+    print(f"{dict_size:<15} | " + " | ".join(f"{results[metric]:<22.4f}" for metric in metrics))
 
 if __name__ == "__main__":
     # Set the start method to spawn for Windows compatibility
