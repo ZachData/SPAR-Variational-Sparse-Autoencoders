@@ -23,6 +23,7 @@ from .vsae_jump_relu import VSAEJumpReLU, VSAEJumpReLUTrainer
 from .vsae_matryoshka import MatryoshkaVSAEIso, MatryoshkaVSAEIsoTrainer
 from .vsae_panneal import VSAEPAnneal, VSAEPAnnealTrainer
 from .vsae_topk import VSAETopK, VSAETopKTrainer
+from .vsae_multi import VSAEMultiGaussian, VSAEMultiGaussianTrainer
 
 __all__ = [
     # Core
@@ -56,5 +57,7 @@ __all__ = [
     "VSAEPAnneal",
     "VSAEPAnnealTrainer",
     "VSAETopK",
-    "VSAETopKTrainer"
+    "VSAETopKTrainer",
+    "VSAEMultiGaussian",
+    "VSAEMultiGaussianTrainer"
 ]

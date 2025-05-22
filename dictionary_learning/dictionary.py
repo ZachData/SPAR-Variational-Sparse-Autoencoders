@@ -149,7 +149,9 @@ class AutoEncoder(Dictionary, nn.Module):
             return
         print("Normalizing decoder weights")
 
-        test_input = t.randn(10, self.activation_dim)
+        # Create test input on the same device as the model parameters
+        device = self.decoder.weight.device
+        test_input = t.randn(10, self.activation_dim, device=device)
         initial_output = self(test_input)
 
         self.decoder.weight.data /= norms

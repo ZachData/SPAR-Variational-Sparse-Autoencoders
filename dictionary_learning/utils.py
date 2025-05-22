@@ -11,6 +11,13 @@ from .trainers.matryoshka_batch_top_k import MatryoshkaBatchTopKSAE
 from .trainers.vsae_iso import VSAEIsoGaussian
 from .trainers.vsae_multi import VSAEMultiGaussian
 from .trainers.vsae_mixture import VSAEMixtureGaussian
+from .trainers.vsae_batch_topk import VSAEBatchTopK
+from .trainers.vsae_gated import VSAEGated
+from .trainers.vsae_gated_anneal import VSAEGatedAutoEncoder
+from .trainers.vsae_jump_relu import VSAEJumpReLU
+from .trainers.vsae_matryoshka import MatryoshkaVSAEIso
+from .trainers.vsae_panneal import VSAEPAnneal
+from .trainers.vsae_topk import VSAETopK
 from .dictionary import (
     AutoEncoder,
     GatedAutoEncoder,
@@ -114,6 +121,58 @@ def load_dictionary(base_path: str, device: str) -> tuple:
             n_correlated_pairs=n_correlated_pairs,
             n_anticorrelated_pairs=n_anticorrelated_pairs
         )
+    elif dict_class == "VSAEBatchTopK":
+        # New improved VSAEBatchTopK model
+        k = config["trainer"]["k"]
+        var_flag = config["trainer"].get("var_flag", 0)
+        constrain_decoder = config["trainer"].get("constrain_decoder", True)
+        
+        dictionary = VSAEBatchTopK.from_pretrained(
+            ae_path,
+            k=k,
+            var_flag=var_flag,
+            constrain_decoder=constrain_decoder,
+            device=device
+        )
+
+    elif dict_class == "VSAEGated":
+        # Get parameters from config
+        var_flag = config["trainer"].get("var_flag", 1)
+        dictionary = VSAEGated.from_pretrained(
+            ae_path, 
+            var_flag=var_flag,
+            device=device
+        )
+    elif dict_class == "VSAEGatedAutoEncoder":
+        # Get parameters from config
+        var_flag = config["trainer"].get("var_flag", 0)
+        dictionary = VSAEGatedAutoEncoder.from_pretrained(
+            ae_path, 
+            var_flag=var_flag,
+            device=device
+        )
+
+    elif dict_class == "VSAEJumpReLU":
+        dictionary = VSAEJumpReLU.from_pretrained(
+            ae_path,
+            device=device
+        )
+
+    elif dict_class == "MatryoshkaBatchTopKSAE":
+        k = config["trainer"]["k"]
+        dictionary = MatryoshkaBatchTopKSAE.from_pretrained(ae_path, k=k, device=device)
+
+    elif dict_class == "VSAEPAnneal":
+        # Get parameters from config
+        var_flag = config["trainer"].get("var_flag", 0)
+        dictionary = VSAEPAnneal.from_pretrained(
+            ae_path, 
+            var_flag=var_flag,
+            device=device
+        )
+    elif dict_class == "VSAETopK":
+        k = config["trainer"]["k"]
+        dictionary = VSAETopK.from_pretrained(ae_path, device=device)   
     else:
         raise ValueError(f"Dictionary class {dict_class} not supported")
 

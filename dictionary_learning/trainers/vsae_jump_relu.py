@@ -1,18 +1,26 @@
 """
-Implements a hybrid Variational Sparse Autoencoder with JumpReLU activation.
-This combines the variational approach from VSAEIsoGaussian with the JumpReLU activation
-function to potentially improve training performance.
+Improved implementation of VSAEJumpReLU with better PyTorch practices.
+
+This module combines variational learning from the VSAE approach
+with JumpReLU activation function, following better PyTorch practices.
 """
-import torch as t
-from torch import nn
+
+import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 import torch.autograd as autograd
-from typing import Optional, List
+from typing import Optional, Tuple, Dict, Any
 from collections import namedtuple
+from dataclasses import dataclass
+import math
 
-from ..trainers.trainer import SAETrainer, get_lr_schedule, get_sparsity_warmup_fn
 from ..dictionary import Dictionary
+from ..trainers.trainer import (
+    SAETrainer,
+    get_lr_schedule,
+    get_sparsity_warmup_fn,
+)
 
 
 class RectangleFunction(autograd.Function):
@@ -32,7 +40,7 @@ class RectangleFunction(autograd.Function):
 class JumpReLUFunction(autograd.Function):
     @staticmethod
     def forward(ctx, x, threshold, bandwidth):
-        ctx.save_for_backward(x, threshold, t.tensor(bandwidth))
+        ctx.save_for_backward(x, threshold, torch.tensor(bandwidth))
         return x * (x > threshold).float()
 
     @staticmethod
@@ -51,18 +59,36 @@ class JumpReLUFunction(autograd.Function):
 class StepFunction(autograd.Function):
     @staticmethod
     def forward(ctx, x, threshold, bandwidth):
-        ctx.save_for_backward(x, threshold, t.tensor(bandwidth))
+        ctx.save_for_backward(x, threshold, torch.tensor(bandwidth))
         return (x > threshold).float()
 
     @staticmethod
     def backward(ctx, grad_output):
         x, threshold, bandwidth_tensor = ctx.saved_tensors
         bandwidth = bandwidth_tensor.item()
-        x_grad = t.zeros_like(x)
+        x_grad = torch.zeros_like(x)
         threshold_grad = (
             -(1.0 / bandwidth) * RectangleFunction.apply((x - threshold) / bandwidth) * grad_output
         )
         return x_grad, threshold_grad, None  # None for bandwidth
+
+
+@dataclass
+class VSAEJumpReLUConfig:
+    """Configuration for VSAEJumpReLU model."""
+    activation_dim: int
+    dict_size: int
+    var_flag: int = 1  # 0: fixed variance, 1: learned variance
+    bandwidth: float = 0.001  # Bandwidth parameter for JumpReLU
+    use_april_update_mode: bool = True
+    dtype: torch.dtype = torch.float32
+    device: Optional[torch.device] = None
+    
+    def __post_init__(self):
+        if self.var_flag not in [0, 1]:
+            raise ValueError("var_flag must be 0 (fixed variance) or 1 (learned variance)")
+        if self.bandwidth <= 0:
+            raise ValueError("bandwidth must be positive")
 
 
 class VSAEJumpReLU(Dictionary, nn.Module):
@@ -72,157 +98,227 @@ class VSAEJumpReLU(Dictionary, nn.Module):
     This model uses a variational approach for the encoder, combined with 
     a JumpReLU activation function to encourage sparsity in feature activations.
     
-    Args:
-        activation_dim: Dimension of the input activations
-        dict_size: Number of features in the dictionary
-        use_april_update_mode: Whether to use the April update approach (bias in decoder)
-        var_flag: Whether to learn variance (0: fixed, 1: learned)
-        bandwidth: The bandwidth parameter for JumpReLU
-        device: Device to place the model on
+    Features:
+    - Variational encoding with optional learned variance
+    - JumpReLU activation for sparsity
+    - Proper gradient handling and memory management
+    - Configurable April update mode
     """
 
-    def __init__(self, activation_dim, dict_size, use_april_update_mode=True, 
-                 var_flag=1, bandwidth=0.001, device=None):
+    def __init__(self, config: VSAEJumpReLUConfig):
         super().__init__()
-        self.activation_dim = activation_dim
-        self.dict_size = dict_size
-        self.use_april_update_mode = use_april_update_mode
-        self.var_flag = var_flag
-        self.bandwidth = bandwidth
+        self.config = config
+        self.activation_dim = config.activation_dim
+        self.dict_size = config.dict_size
+        self.var_flag = config.var_flag
+        self.bandwidth = config.bandwidth
+        self.use_april_update_mode = config.use_april_update_mode
         
-        # Initialize encoder and decoder
-        self.encoder = nn.Linear(activation_dim, dict_size, bias=True)
-        self.decoder = nn.Linear(dict_size, activation_dim, bias=use_april_update_mode)
+        # Initialize layers
+        self._init_layers()
+        self._init_weights()
+    
+    def _init_layers(self) -> None:
+        """Initialize neural network layers."""
+        self.encoder = nn.Linear(
+            self.activation_dim,
+            self.dict_size,
+            bias=True,
+            dtype=self.config.dtype,
+            device=self.config.device
+        )
         
-        # Initialize thresholds for JumpReLU
-        self.threshold = nn.Parameter(t.ones(dict_size, device=device) * 0.001)
+        self.decoder = nn.Linear(
+            self.dict_size,
+            self.activation_dim,
+            bias=self.use_april_update_mode,
+            dtype=self.config.dtype,
+            device=self.config.device
+        )
         
-        # Initialize weights
-        w = t.randn(activation_dim, dict_size, device=device)
-        w = w / w.norm(dim=0, keepdim=True) * 0.1
-        self.encoder.weight = nn.Parameter(w.clone().T)
-        self.decoder.weight = nn.Parameter(w.clone())
+        # Threshold parameters for JumpReLU
+        self.threshold = nn.Parameter(
+            torch.ones(self.dict_size, dtype=self.config.dtype, device=self.config.device) * 0.001
+        )
         
-        # Initialize biases
-        init.zeros_(self.encoder.bias)
-        if use_april_update_mode:
-            init.zeros_(self.decoder.bias)
-        else:
-            # In standard mode, we use a separate bias parameter
-            self.bias = nn.Parameter(t.zeros(activation_dim, device=device))
+        # Bias parameter for standard mode
+        if not self.use_april_update_mode:
+            self.bias = nn.Parameter(
+                torch.zeros(self.activation_dim, dtype=self.config.dtype, device=self.config.device)
+            )
             
-        # Variance network (only used when var_flag=1)
-        if var_flag == 1:
-            self.var_encoder = nn.Linear(activation_dim, dict_size, bias=True)
-            init.kaiming_uniform_(self.var_encoder.weight)
-            init.zeros_(self.var_encoder.bias)
-
-    def encode(self, x, output_log_var=False):
+        # Variance encoder (only when learning variance)
+        if self.var_flag == 1:
+            self.var_encoder = nn.Linear(
+                self.activation_dim,
+                self.dict_size,
+                bias=True,
+                dtype=self.config.dtype,
+                device=self.config.device
+            )
+    
+    def _init_weights(self) -> None:
+        """Initialize model weights following best practices."""
+        # Encoder and decoder weights (tied initialization)
+        w = torch.randn(
+            self.activation_dim,
+            self.dict_size,
+            dtype=self.config.dtype,
+            device=self.config.device
+        )
+        w = w / w.norm(dim=0, keepdim=True) * 0.1
+        
+        # Set weights
+        with torch.no_grad():
+            self.encoder.weight.copy_(w.T)
+            self.decoder.weight.copy_(w)
+            
+            # Initialize biases
+            nn.init.zeros_(self.encoder.bias)
+            if self.use_april_update_mode:
+                nn.init.zeros_(self.decoder.bias)
+            else:
+                nn.init.zeros_(self.bias)
+            
+            # Initialize threshold
+            nn.init.constant_(self.threshold, 0.001)
+            
+            # Initialize variance encoder if present
+            if self.var_flag == 1:
+                nn.init.kaiming_uniform_(self.var_encoder.weight)
+                nn.init.zeros_(self.var_encoder.bias)
+    
+    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Encode a vector x in the activation space.
-        Returns mean (and log variance if requested).
+        Encode input activations to latent space with JumpReLU activation.
+        
+        Args:
+            x: Input activations [batch_size, activation_dim]
+            
+        Returns:
+            mu: Mean of latent distribution [batch_size, dict_size]
+            log_var: Log variance (None if var_flag=0) [batch_size, dict_size]
         """
+        # Ensure input matches encoder dtype
+        x = x.to(dtype=self.encoder.weight.dtype)
+        
+        # Encode mean
         if self.use_april_update_mode:
             pre_activation = self.encoder(x)
         else:
             pre_activation = self.encoder(x - self.bias)
-            
+        
         # Apply JumpReLU activation
         mu = JumpReLUFunction.apply(pre_activation, self.threshold, self.bandwidth)
-            
-        if output_log_var:
-            if self.var_flag == 1:
-                if self.use_april_update_mode:
-                    log_var_pre = self.var_encoder(x)
-                else:
-                    log_var_pre = self.var_encoder(x - self.bias)
-                    
-                # Apply JumpReLU to log_var as well for consistency
-                log_var = JumpReLUFunction.apply(log_var_pre, self.threshold, self.bandwidth)
+        
+        # Encode variance if learning it
+        log_var = None
+        if self.var_flag == 1:
+            if self.use_april_update_mode:
+                log_var_pre = self.var_encoder(x)
             else:
-                log_var = t.zeros_like(mu)
-            return mu, log_var
-        return mu
-
-    def reparameterize(self, mu, log_var):
-        """
-        Apply reparameterization trick: z = mu + eps * sigma
-        where eps ~ N(0, 1)
-        """
-        std = t.exp(0.5 * log_var)
-        eps = t.randn_like(std)
-        return mu + eps * std
-
-    def decode(self, f):
-        """
-        Decode a dictionary vector f.
-        """
+                log_var_pre = self.var_encoder(x - self.bias)
+            
+            # Apply JumpReLU to log_var as well for consistency
+            log_var = JumpReLUFunction.apply(log_var_pre, self.threshold, self.bandwidth)
+        
+        return mu, log_var
+    
+    def reparameterize(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
+        """Apply reparameterization trick for sampling from latent distribution."""
+        if log_var is None:
+            return mu
+        
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        z = mu + eps * std
+        
+        # Ensure output matches mu dtype
+        return z.to(dtype=mu.dtype)
+    
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """Decode latent features to reconstruction."""
+        # Ensure z matches decoder weight dtype
+        z = z.to(dtype=self.decoder.weight.dtype)
+        
         if self.use_april_update_mode:
-            return self.decoder(f)
+            return self.decoder(z)
         else:
-            return self.decoder(f) + self.bias
-
-    def forward(self, x, output_features=False, ghost_mask=None):
+            return self.decoder(z) + self.bias
+    
+    def forward(self, x: torch.Tensor, output_features: bool = False) -> torch.Tensor:
         """
-        Forward pass of the autoencoder.
+        Forward pass through the autoencoder.
         
         Args:
-            x: activations to be autoencoded
-            output_features: if True, return the encoded features as well as the decoded x
-            ghost_mask: not implemented for this model
+            x: Input activations [batch_size, activation_dim]
+            output_features: Whether to return latent features
+            
+        Returns:
+            reconstruction: Reconstructed activations [batch_size, activation_dim]
+            features: Latent features (if output_features=True) [batch_size, dict_size]
         """
-        if ghost_mask is not None:
-            raise NotImplementedError("Ghost mode not implemented for VSAEJumpReLU")
-            
-        # Encode and get mu (and log_var if var_flag=1)
-        if self.var_flag == 1:
-            mu, log_var = self.encode(x, output_log_var=True)
-            # Sample from the latent distribution
-            f = self.reparameterize(mu, log_var)
-        else:
-            mu = self.encode(x)
-            f = mu  # Without variance, just use mu
-            
+        # Store original dtype to return output in same format
+        original_dtype = x.dtype
+        
+        # Ensure input matches model dtype
+        x = x.to(dtype=self.encoder.weight.dtype)
+        
+        # Encode
+        mu, log_var = self.encode(x)
+        
+        # Sample from latent distribution
+        z = self.reparameterize(mu, log_var)
+        
         # Decode
-        x_hat = self.decode(f)
+        x_hat = self.decode(z)
+        
+        # Convert back to original dtype
+        x_hat = x_hat.to(dtype=original_dtype)
         
         if output_features:
-            return x_hat, f
-        else:
-            return x_hat
-
-    def scale_biases(self, scale: float):
-        """
-        Scale all bias parameters by a given factor.
-        """
-        self.encoder.bias.data *= scale
-        self.threshold.data *= scale
-        
-        if self.use_april_update_mode:
-            self.decoder.bias.data *= scale
-        else:
-            self.bias.data *= scale
+            z = z.to(dtype=original_dtype)
+            return x_hat, z
+        return x_hat
+    
+    def get_active_features_mask(self, features: torch.Tensor) -> torch.Tensor:
+        """Get boolean mask of which features are active across the batch."""
+        return (features.sum(0) > 0)
+    
+    def scale_biases(self, scale: float) -> None:
+        """Scale all bias parameters by a given factor."""
+        with torch.no_grad():
+            self.encoder.bias.mul_(scale)
+            self.threshold.mul_(scale)
             
-        if self.var_flag == 1:
-            self.var_encoder.bias.data *= scale
+            if self.use_april_update_mode:
+                self.decoder.bias.mul_(scale)
+            else:
+                self.bias.mul_(scale)
+            
+            if self.var_flag == 1:
+                self.var_encoder.bias.mul_(scale)
+    
+    def normalize_decoder(self) -> None:
+        """Normalize decoder weights to have unit norm."""
+        norms = torch.norm(self.decoder.weight, dim=0).to(
+            dtype=self.decoder.weight.dtype, device=self.decoder.weight.device
+        )
 
-    def normalize_decoder(self):
-        """
-        Normalize decoder weights to have unit norm.
-        """
-        norms = t.norm(self.decoder.weight, dim=0).to(dtype=self.decoder.weight.dtype, device=self.decoder.weight.device)
-
-        if t.allclose(norms, t.ones_like(norms)):
+        if torch.allclose(norms, torch.ones_like(norms)):
             return
+        
         print("Normalizing decoder weights")
 
-        test_input = t.randn(10, self.activation_dim)
+        # Create test input on the same device as the model parameters
+        device = self.decoder.weight.device
+        test_input = torch.randn(10, self.activation_dim, device=device, dtype=self.config.dtype)
         initial_output = self(test_input)
 
         self.decoder.weight.data /= norms
 
-        new_norms = t.norm(self.decoder.weight, dim=0)
-        assert t.allclose(new_norms, t.ones_like(new_norms))
+        new_norms = torch.norm(self.decoder.weight, dim=0)
+        assert torch.allclose(new_norms, torch.ones_like(new_norms))
 
         self.encoder.weight.data *= norms[:, None]
         self.encoder.bias.data *= norms
@@ -234,252 +330,389 @@ class VSAEJumpReLU(Dictionary, nn.Module):
         new_output = self(test_input)
 
         # Errors can be relatively large in larger SAEs due to floating point precision
-        assert t.allclose(initial_output, new_output, atol=1e-4)
-
+        assert torch.allclose(initial_output, new_output, atol=1e-4)
+    
     @classmethod
-    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=1, bandwidth=0.001):
-        """
-        Load a pretrained autoencoder from a file.
+    def from_pretrained(
+        cls,
+        path: str,
+        config: Optional[VSAEJumpReLUConfig] = None,
+        dtype: torch.dtype = torch.float32,
+        device: Optional[torch.device] = None,
+        normalize_decoder: bool = True,
+    ) -> 'VSAEJumpReLU':
+        """Load pretrained model from checkpoint."""
+        checkpoint = torch.load(path, map_location=device)
+        state_dict = checkpoint if isinstance(checkpoint, dict) else checkpoint['state_dict']
         
-        Args:
-            path: Path to the saved model
-            dtype: Data type to convert model to
-            device: Device to load model to
-            normalize_decoder: Whether to normalize decoder weights
-            var_flag: Whether to load with variance encoding (0: fixed, 1: learned)
-            bandwidth: Bandwidth parameter for JumpReLU
+        if config is None:
+            # Try to reconstruct config from checkpoint
             
-        Returns:
-            Loaded autoencoder
-        """
-        state_dict = t.load(path)
-        
-        # Determine dimensions and mode based on state dict
-        if 'encoder.weight' in state_dict:
-            dict_size, activation_dim = state_dict["encoder.weight"].shape
-            use_april_update_mode = "decoder.bias" in state_dict
-        else:
-            # Handle older format with W_enc, W_dec parameters
-            activation_dim, dict_size = state_dict["W_enc"].shape if "W_enc" in state_dict else state_dict["encoder.weight"].T.shape
-            use_april_update_mode = "b_dec" in state_dict
+            # Extract dimensions
+            if 'encoder.weight' in state_dict:
+                dict_size, activation_dim = state_dict["encoder.weight"].shape
+                use_april_update_mode = "decoder.bias" in state_dict
+            else:
+                # Handle older format
+                activation_dim, dict_size = state_dict["W_enc"].shape
+                use_april_update_mode = "b_dec" in state_dict
             
-            # Convert parameter names if needed
-            if "W_enc" in state_dict:
-                converted_dict = {}
-                converted_dict["encoder.weight"] = state_dict["W_enc"].T
-                converted_dict["encoder.bias"] = state_dict["b_enc"]
-                converted_dict["decoder.weight"] = state_dict["W_dec"].T
-                converted_dict["threshold"] = state_dict.get("threshold", t.ones(dict_size) * 0.001)
-                
-                if use_april_update_mode:
-                    converted_dict["decoder.bias"] = state_dict["b_dec"]
-                else:
-                    converted_dict["bias"] = state_dict["b_dec"]
-                    
-                if var_flag == 1 and "W_enc_var" in state_dict:
-                    converted_dict["var_encoder.weight"] = state_dict["W_enc_var"].T
-                    converted_dict["var_encoder.bias"] = state_dict["b_enc_var"]
-                    
-                state_dict = converted_dict
-        
-        autoencoder = cls(activation_dim, dict_size, use_april_update_mode=use_april_update_mode, 
-                          var_flag=var_flag, bandwidth=bandwidth, device=device)
-        
-        # Load state dict, handling missing threshold parameter
-        if "threshold" not in state_dict:
-            state_dict["threshold"] = autoencoder.threshold
+            # Detect var_flag
+            var_flag = 1 if ("var_encoder.weight" in state_dict or "W_enc_var" in state_dict) else 0
             
-        autoencoder.load_state_dict(state_dict)
-
-        # This is useful for doing analysis where e.g. feature activation magnitudes are important
-        if normalize_decoder:
-            autoencoder.normalize_decoder()
-
+            # Extract bandwidth if available (default to 0.001)
+            bandwidth = 0.001
+            
+            config = VSAEJumpReLUConfig(
+                activation_dim=activation_dim,
+                dict_size=dict_size,
+                var_flag=var_flag,
+                bandwidth=bandwidth,
+                use_april_update_mode=use_april_update_mode,
+                dtype=dtype,
+                device=device
+            )
+        
+        model = cls(config)
+        
+        # Handle legacy parameter names
+        if 'W_enc' in state_dict:
+            # Convert old parameter names to new ones
+            converted_dict = {}
+            converted_dict["encoder.weight"] = state_dict["W_enc"].T
+            converted_dict["encoder.bias"] = state_dict["b_enc"]
+            converted_dict["decoder.weight"] = state_dict["W_dec"].T
+            
+            if config.use_april_update_mode:
+                converted_dict["decoder.bias"] = state_dict["b_dec"]
+            else:
+                converted_dict["bias"] = state_dict["b_dec"]
+            
+            if "threshold" in state_dict:
+                converted_dict["threshold"] = state_dict["threshold"]
+            else:
+                converted_dict["threshold"] = torch.ones(config.dict_size) * 0.001
+            
+            if config.var_flag == 1 and "W_enc_var" in state_dict:
+                converted_dict["var_encoder.weight"] = state_dict["W_enc_var"].T
+                converted_dict["var_encoder.bias"] = state_dict["b_enc_var"]
+            
+            state_dict = converted_dict
+        
+        # Filter state_dict to only include keys that are in the model
+        model_keys = set(model.state_dict().keys())
+        filtered_state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
+        
+        # Add missing threshold if not present
+        if "threshold" not in filtered_state_dict:
+            filtered_state_dict["threshold"] = torch.ones(config.dict_size, device=device) * 0.001
+        
+        model.load_state_dict(filtered_state_dict, strict=False)
+        
+        # Check for missing keys and initialize them
+        missing_keys = model_keys - set(filtered_state_dict.keys())
+        if missing_keys:
+            print(f"Warning: Missing keys in state_dict: {missing_keys}")
+            if config.var_flag == 1 and "var_encoder.weight" in missing_keys:
+                print("Initializing missing variance encoder parameters")
+                with torch.no_grad():
+                    nn.init.kaiming_uniform_(model.var_encoder.weight)
+                    nn.init.zeros_(model.var_encoder.bias)
+        
+        # Normalize decoder if requested
+        if normalize_decoder and not (config.var_flag == 1 and ("var_encoder.weight" in state_dict or "W_enc_var" in state_dict)):
+            try:
+                model.normalize_decoder()
+            except (AssertionError, RuntimeError) as e:
+                print(f"Warning: Could not normalize decoder weights: {e}")
+        
         if device is not None:
-            autoencoder.to(dtype=dtype, device=device)
+            model = model.to(device=device, dtype=dtype)
+        
+        return model
 
-        return autoencoder
+
+@dataclass
+class TrainingConfig:
+    """Configuration for training the VSAEJumpReLU."""
+    steps: int
+    lr: float = 5e-4
+    kl_coeff: float = 500.0
+    l0_coeff: float = 1.0
+    target_l0: float = 20.0
+    warmup_steps: Optional[int] = None
+    sparsity_warmup_steps: Optional[int] = None
+    decay_start: Optional[int] = None
+    gradient_clip_norm: float = 1.0
+    
+    def __post_init__(self):
+        # Set defaults based on total steps
+        if self.warmup_steps is None:
+            self.warmup_steps = max(1000, int(0.05 * self.steps))
+        if self.sparsity_warmup_steps is None:
+            self.sparsity_warmup_steps = int(0.05 * self.steps)
+        if self.decay_start is None:
+            self.decay_start = int(0.8 * self.steps)
 
 
 class VSAEJumpReLUTrainer(SAETrainer):
     """
-    Trainer for the VSAEJumpReLU model, combining variational techniques with JumpReLU activation.
+    Trainer for the VSAEJumpReLU model with improved architecture.
     
-    This trainer uses KL divergence as in VSAE plus a target L0 loss from JumpReLU to encourage 
-    appropriate levels of sparsity in the learned features.
+    Features:
+    - Clean separation of concerns
+    - Proper loss computation with KL divergence and L0 regularization
+    - Memory-efficient processing
+    - Configurable training parameters
     """
     
-    def __init__(self,
-                 steps: int, # total number of steps to train for
-                 activation_dim: int,
-                 dict_size: int,
-                 layer: int,
-                 lm_name: str,
-                 dict_class=VSAEJumpReLU,
-                 lr: float=5e-5, # recommended in April update
-                 kl_coeff: float=5.0, # default lambda value from April update
-                 l0_coeff: float=1.0, # coefficient for target L0 regularization
-                 target_l0: float=20.0, # target L0 value (average number of active features)
-                 warmup_steps: int=1000, # lr warmup period at start of training
-                 sparsity_warmup_steps: Optional[int]=None, # sparsity warmup period 
-                 decay_start: Optional[int]=None, # decay learning rate after this many steps
-                 var_flag: int=1, # whether to learn variance (0: fixed, 1: learned)
-                 bandwidth: float=0.001, # bandwidth parameter for JumpReLU
-                 use_april_update_mode: bool=True, # whether to use April update mode
-                 seed: Optional[int]=None,
-                 device=None,
-                 wandb_name: Optional[str]='VSAEJumpReLUTrainer',
-                 submodule_name: Optional[str]=None,
+    def __init__(
+        self,
+        model_config: VSAEJumpReLUConfig = None,
+        training_config: TrainingConfig = None,
+        layer: int = None,
+        lm_name: str = None,
+        submodule_name: Optional[str] = None,
+        wandb_name: Optional[str] = None,
+        seed: Optional[int] = None,
+        # Alternative parameters for backwards compatibility with trainSAE
+        steps: Optional[int] = None,
+        activation_dim: Optional[int] = None,
+        dict_size: Optional[int] = None,
+        lr: Optional[float] = None,
+        kl_coeff: Optional[float] = None,
+        l0_coeff: Optional[float] = None,
+        target_l0: Optional[float] = None,
+        var_flag: Optional[int] = None,
+        bandwidth: Optional[float] = None,
+        use_april_update_mode: Optional[bool] = None,
+        device: Optional[str] = None,
+        **kwargs  # Catch any other parameters
     ):
         super().__init__(seed)
-
-        assert layer is not None and lm_name is not None
+        
+        # Handle backwards compatibility
+        if model_config is None or training_config is None:
+            # Create configs from individual parameters
+            if model_config is None:
+                if activation_dim is None or dict_size is None:
+                    raise ValueError("Must provide either model_config or activation_dim + dict_size")
+                
+                # Set defaults
+                var_flag = var_flag or 1
+                bandwidth = bandwidth or 0.001
+                use_april_update_mode = use_april_update_mode if use_april_update_mode is not None else True
+                device_obj = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                
+                model_config = VSAEJumpReLUConfig(
+                    activation_dim=activation_dim,
+                    dict_size=dict_size,
+                    var_flag=var_flag,
+                    bandwidth=bandwidth,
+                    use_april_update_mode=use_april_update_mode,
+                    device=device_obj
+                )
+            
+            if training_config is None:
+                if steps is None:
+                    raise ValueError("Must provide either training_config or steps")
+                
+                training_config = TrainingConfig(
+                    steps=steps,
+                    lr=lr or 5e-4,
+                    kl_coeff=kl_coeff or 500.0,
+                    l0_coeff=l0_coeff or 1.0,
+                    target_l0=target_l0 or 20.0,
+                )
+        
+        self.model_config = model_config
+        self.training_config = training_config
         self.layer = layer
         self.lm_name = lm_name
         self.submodule_name = submodule_name
-
-        if seed is not None:
-            t.manual_seed(seed)
-            t.cuda.manual_seed_all(seed)
-
-        # Use the April update defaults if not specified
-        if sparsity_warmup_steps is None:
-            sparsity_warmup_steps = int(0.05 * steps)  # 5% of steps
+        self.wandb_name = wandb_name or "VSAEJumpReLUTrainer"
         
-        if decay_start is None:
-            decay_start = int(0.8 * steps)  # Start decay at 80% of training
-
-        # initialize dictionary
-        if device is None:
-            self.device = 'cuda' if t.cuda.is_available() else 'cpu'
-        else:
-            self.device = device
-            
-        self.ae = dict_class(
-            activation_dim, 
-            dict_size, 
-            use_april_update_mode=use_april_update_mode,
-            var_flag=var_flag,
-            bandwidth=bandwidth,
-            device=self.device
+        # Set device
+        self.device = model_config.device or (
+            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
+        
+        # Initialize model
+        self.ae = VSAEJumpReLU(model_config)
         self.ae.to(self.device)
-
-        self.lr = lr
-        self.kl_coeff = kl_coeff
-        self.l0_coeff = l0_coeff
-        self.target_l0 = target_l0
-        self.warmup_steps = warmup_steps
-        self.sparsity_warmup_steps = sparsity_warmup_steps
-        self.steps = steps
-        self.decay_start = decay_start
-        self.wandb_name = wandb_name
-        self.var_flag = var_flag
-        self.bandwidth = bandwidth
-        self.use_april_update_mode = use_april_update_mode
-
-        # April update uses Adam without constrained weights
-        self.optimizer = t.optim.Adam(self.ae.parameters(), lr=lr, betas=(0.9, 0.999))
-
-        lr_fn = get_lr_schedule(steps, warmup_steps, decay_start, None, sparsity_warmup_steps)
-        self.scheduler = t.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
-
-        self.sparsity_warmup_fn = get_sparsity_warmup_fn(steps, sparsity_warmup_steps)
         
-        # For logging
-        self.logging_parameters = ["l0_loss", "kl_loss", "mse_loss", "loss"]
-        self.l0_loss = 0
-        self.kl_loss = 0
-        self.mse_loss = 0
-        self.loss = 0
+        # Initialize optimizer and scheduler
+        self.optimizer = torch.optim.Adam(
+            self.ae.parameters(),
+            lr=training_config.lr,
+            betas=(0.9, 0.999)
+        )
         
-    def loss(self, x, step: int, logging=False, **kwargs):
-        sparsity_scale = self.sparsity_warmup_fn(step)
+        lr_fn = get_lr_schedule(
+            training_config.steps,
+            training_config.warmup_steps,
+            training_config.decay_start,
+            None,
+            training_config.sparsity_warmup_steps
+        )
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
+        self.sparsity_warmup_fn = get_sparsity_warmup_fn(
+            training_config.steps,
+            training_config.sparsity_warmup_steps
+        )
         
-        # Encode to get mu (and log_var if var_flag=1)
-        if self.ae.var_flag == 1:
-            mu, log_var = self.ae.encode(x, output_log_var=True)
-            # Sample from the latent distribution
-            z = self.ae.reparameterize(mu, log_var)
+        # Logging parameters
+        self.logging_parameters = ["l0_loss", "kl_loss", "mse_loss", "effective_l0"]
+        self.l0_loss = 0.0
+        self.kl_loss = 0.0
+        self.mse_loss = 0.0
+        self.effective_l0 = 0.0
+    
+    def _compute_kl_loss(
+        self,
+        mu: torch.Tensor,
+        log_var: Optional[torch.Tensor]
+    ) -> torch.Tensor:
+        """Compute KL divergence loss with decoder norm weighting."""
+        # Compute KL divergence
+        if self.ae.var_flag == 1 and log_var is not None:
+            # Full KL: 0.5 * sum(exp(log_var) + mu^2 - 1 - log_var)
+            kl_base = 0.5 * torch.sum(
+                torch.exp(log_var) + mu.pow(2) - 1 - log_var,
+                dim=1
+            )
         else:
-            mu = self.ae.encode(x)
-            z = mu  # Without variance, just use mu
-        
-        # Decode
-        x_hat = self.ae.decode(z)
-        
-        # Reconstruction loss (MSE)
-        recon_loss = t.pow(x - x_hat, 2).sum(dim=-1).mean()
-        
-        # KL divergence loss
-        kl_base = 0.5 * (mu.pow(2)).sum(dim=-1)  # [batch_size]
+            # Simplified KL for fixed variance: 0.5 * sum(mu^2)
+            kl_base = 0.5 * torch.sum(mu.pow(2), dim=1)
         
         # Calculate decoder norms
-        decoder_norms = self.ae.decoder.weight.norm(p=2, dim=0)  # [dict_size]
+        decoder_norms = torch.norm(self.ae.decoder.weight, p=2, dim=0)
+        decoder_norms = decoder_norms.to(dtype=mu.dtype)
         
-        # KL loss with decoder norms (as in VSAE)
-        kl_loss = kl_base.mean() * decoder_norms.mean()
+        # Weight by decoder norms (April update approach)
+        kl_loss = torch.mean(kl_base) * torch.mean(decoder_norms)
         
-        # L0 sparsity regularization (as in JumpReLU)
+        return kl_loss
+    
+    def _compute_l0_loss(self, mu: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute L0 sparsity regularization loss."""
+        # Compute L0 (number of active features)
         l0 = StepFunction.apply(mu, self.ae.threshold, self.ae.bandwidth).sum(dim=-1).mean()
-        l0_loss = self.l0_coeff * ((l0 / self.target_l0) - 1).pow(2)
+        
+        # L0 target regularization
+        l0_loss = self.training_config.l0_coeff * ((l0 / self.training_config.target_l0) - 1).pow(2)
+        
+        return l0_loss, l0
+    
+    def loss(self, x: torch.Tensor, step: int, logging: bool = False) -> torch.Tensor:
+        """Compute total loss with all components."""
+        sparsity_scale = self.sparsity_warmup_fn(step)
+        
+        # Store original dtype for final output
+        original_dtype = x.dtype
+        
+        # Forward pass
+        mu, log_var = self.ae.encode(x)
+        z = self.ae.reparameterize(mu, log_var)
+        x_hat = self.ae.decode(z)
+        
+        # Ensure x_hat matches x dtype
+        x_hat = x_hat.to(dtype=original_dtype)
+        
+        # Reconstruction loss (MSE)
+        recon_loss = torch.mean(torch.sum((x - x_hat) ** 2, dim=1))
+        
+        # KL divergence loss
+        kl_loss = self._compute_kl_loss(mu, log_var)
+        
+        # L0 sparsity regularization
+        l0_loss, l0 = self._compute_l0_loss(mu)
+        
+        # Ensure all components are in original dtype
+        recon_loss = recon_loss.to(dtype=original_dtype)
+        kl_loss = kl_loss.to(dtype=original_dtype)
+        l0_loss = l0_loss.to(dtype=original_dtype)
         
         # Total loss
-        loss = recon_loss + self.kl_coeff * sparsity_scale * kl_loss + sparsity_scale * l0_loss
+        total_loss = (
+            recon_loss +
+            self.training_config.kl_coeff * sparsity_scale * kl_loss +
+            sparsity_scale * l0_loss
+        )
         
-        # Store for logging
+        # Update logging stats
         self.mse_loss = recon_loss.item()
         self.kl_loss = kl_loss.item()
         self.l0_loss = l0_loss.item()
-        self.loss = loss.item()
+        self.effective_l0 = l0.item()
         
         if not logging:
-            return loss
-        else:
-            return x, x_hat, mu, {
-                'l2_loss': t.linalg.norm(x - x_hat, dim=-1).mean().item(),
+            return total_loss
+        
+        # Return detailed loss information for logging
+        LossLog = namedtuple('LossLog', ['x', 'x_hat', 'f', 'losses'])
+        return LossLog(
+            x, x_hat, mu,
+            {
+                'l2_loss': torch.linalg.norm(x - x_hat, dim=-1).mean().item(),
                 'mse_loss': recon_loss.item(),
                 'kl_loss': kl_loss.item(),
                 'l0_loss': l0_loss.item(),
                 'l0': l0.item(),
-                'loss': loss.item()
+                'loss': total_loss.item(),
+                'sparsity_scale': sparsity_scale,
             }
-        
-    def update(self, step, activations):
+        )
+    
+    def update(self, step: int, activations: torch.Tensor) -> None:
+        """Perform one training step."""
         activations = activations.to(self.device)
-
+        
+        # Zero gradients
         self.optimizer.zero_grad()
+        
+        # Compute loss and backpropagate
         loss = self.loss(activations, step=step)
         loss.backward()
         
-        # Apply gradient clipping (April update)
-        t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(
+            self.ae.parameters(),
+            self.training_config.gradient_clip_norm
+        )
         
+        # Update parameters
         self.optimizer.step()
         self.scheduler.step()
-
+    
     @property
-    def config(self):
+    def config(self) -> Dict[str, Any]:
+        """Return configuration dictionary for logging/saving (JSON serializable)."""
         return {
             'dict_class': 'VSAEJumpReLU',
             'trainer_class': 'VSAEJumpReLUTrainer',
-            'activation_dim': self.ae.activation_dim,
-            'dict_size': self.ae.dict_size,
-            'lr': self.lr,
-            'kl_coeff': self.kl_coeff,
-            'l0_coeff': self.l0_coeff,
-            'target_l0': self.target_l0,
-            'warmup_steps': self.warmup_steps,
-            'sparsity_warmup_steps': self.sparsity_warmup_steps,
-            'steps': self.steps,
-            'decay_start': self.decay_start,
-            'seed': self.seed,
-            'device': self.device,
+            # Model config (serializable)
+            'activation_dim': self.model_config.activation_dim,
+            'dict_size': self.model_config.dict_size,
+            'var_flag': self.model_config.var_flag,
+            'bandwidth': self.model_config.bandwidth,
+            'use_april_update_mode': self.model_config.use_april_update_mode,
+            'dtype': str(self.model_config.dtype),
+            'device': str(self.model_config.device),
+            # Training config (serializable)
+            'steps': self.training_config.steps,
+            'lr': self.training_config.lr,
+            'kl_coeff': self.training_config.kl_coeff,
+            'l0_coeff': self.training_config.l0_coeff,
+            'target_l0': self.training_config.target_l0,
+            'warmup_steps': self.training_config.warmup_steps,
+            'sparsity_warmup_steps': self.training_config.sparsity_warmup_steps,
+            'decay_start': self.training_config.decay_start,
+            'gradient_clip_norm': self.training_config.gradient_clip_norm,
+            # Other attributes
             'layer': self.layer,
             'lm_name': self.lm_name,
             'wandb_name': self.wandb_name,
             'submodule_name': self.submodule_name,
-            'var_flag': self.var_flag,
-            'bandwidth': self.bandwidth,
-            'use_april_update_mode': self.use_april_update_mode,
+            'seed': self.seed,
         }

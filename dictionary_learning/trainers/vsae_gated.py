@@ -169,7 +169,7 @@ class VSAEGated(Dictionary, nn.Module):
             self.var_encoder.bias.data *= scale
     
     @classmethod
-    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=1):
+    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=None):
         """
         Load a pretrained autoencoder from a file.
         
@@ -179,42 +179,63 @@ class VSAEGated(Dictionary, nn.Module):
             device: Device to load model to
             normalize_decoder: Whether to normalize decoder weights
             var_flag: Whether to load with variance encoding (0: fixed, 1: learned)
+                      If None, will auto-detect from state_dict
             
         Returns:
             Loaded autoencoder
         """
-        state_dict = t.load(path, map_location=device)
+        state_dict = t.load(path, map_location=device if device else t.device('cpu'))
+        
+        # Auto-detect var_flag from state_dict if not explicitly provided
+        if var_flag is None:
+            # Check if the state dict contains variance encoder weights
+            has_var_encoder = "var_encoder.weight" in state_dict
+            var_flag = 1 if has_var_encoder else 0
+            print(f"Auto-detected var_flag = {var_flag} based on state_dict")
         
         # Determine dimensions from state_dict
         if 'encoder.weight' in state_dict:
             dict_size, activation_dim = state_dict["encoder.weight"].shape
         else:
             raise ValueError("Unexpected state_dict format, cannot determine dimensions")
-            
+        
+        # Create model with detected parameters
         autoencoder = cls(
             activation_dim=activation_dim, 
             dict_size=dict_size, 
-            use_april_update_mode=True,
+            use_april_update_mode=True,  # Always use April update mode for loading
             var_flag=var_flag,
             device=device
         )
         
-        # Try to load, may fail if state_dict doesn't match exactly
-        try:
-            autoencoder.load_state_dict(state_dict)
-        except Exception as e:
-            print(f"Warning: Could not load state_dict exactly: {e}")
-            print("Attempting parameter-by-parameter loading...")
-            
-            # Manual loading of parameters that exist in both models
-            for name, param in autoencoder.named_parameters():
-                if name in state_dict:
-                    try:
-                        param.data.copy_(state_dict[name])
-                        print(f"Loaded parameter: {name}")
-                    except Exception as e2:
-                        print(f"Could not load parameter {name}: {e2}")
-
+        # Filter state_dict to only include keys that are in the model
+        model_keys = set(autoencoder.state_dict().keys())
+        filtered_state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
+        
+        # Load the filtered state dictionary
+        autoencoder.load_state_dict(filtered_state_dict, strict=False)
+        
+        # Check for missing keys
+        missing_keys = model_keys - set(filtered_state_dict.keys())
+        if missing_keys:
+            print(f"Warning: Missing keys in state_dict: {missing_keys}")
+            # Initialize missing parameters to default values
+            if var_flag == 1 and "var_encoder.weight" in missing_keys:
+                print("Initializing missing variance encoder parameters with default values")
+                # Set var_encoder to small random values
+                init.kaiming_uniform_(autoencoder.var_encoder.weight)
+                init.zeros_(autoencoder.var_encoder.bias)
+        
+        # Normalize decoder if requested
+        if normalize_decoder and not (var_flag == 1 and "var_encoder.weight" in state_dict):
+            try:
+                norms = t.norm(autoencoder.decoder.weight, dim=0)
+                if not t.allclose(norms, t.ones_like(norms)):
+                    print("Normalizing decoder weights")
+                    autoencoder.decoder.weight.data /= norms.unsqueeze(0)
+            except Exception as e:
+                print(f"Warning: Could not normalize decoder weights: {e}")
+        
         if device is not None:
             autoencoder = autoencoder.to(dtype=dtype, device=device)
 

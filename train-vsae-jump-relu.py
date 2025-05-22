@@ -1,5 +1,5 @@
 """
-Improved training script for VSAETopK with better practices.
+Improved training script for VSAEJumpReLU with better practices.
 """
 
 import torch
@@ -18,11 +18,11 @@ from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
 
 # Import our improved implementations
-from dictionary_learning.trainers.vsae_topk import (
-    VSAETopK, 
-    VSAETopKTrainer,
-    VSAETopKConfig,
-    VSAETopKTrainingConfig
+from dictionary_learning.trainers.vsae_jump_relu import (
+    VSAEJumpReLU,
+    VSAEJumpReLUTrainer,
+    VSAEJumpReLUConfig,
+    TrainingConfig
 )
 
 
@@ -34,24 +34,23 @@ class ExperimentConfig:
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
-    k_fraction: float = 0.08  # Fraction of dictionary size for Top-K
     
     # Training configuration
     total_steps: int = 10000
     lr: float = 5e-4
     kl_coeff: float = 500.0
-    auxk_alpha: float = 1/32
+    l0_coeff: float = 1.0
+    target_l0: float = 20.0
     
     # Schedule configuration
     warmup_steps: Optional[int] = None  # Will be set to 5% of total_steps
     sparsity_warmup_steps: Optional[int] = None  # Will be set to 5% of total_steps
     decay_start_step: Optional[int] = None  # Will be set to 80% of total_steps
     
-    # VSAETopK configuration
-    var_flag: int = 0  # 0: fixed variance, 1: learned variance
+    # VSAEJumpReLU specific configuration
+    var_flag: int = 1  # 0: fixed variance, 1: learned variance
+    bandwidth: float = 0.001  # Bandwidth parameter for JumpReLU
     use_april_update_mode: bool = True
-    threshold_beta: float = 0.999
-    threshold_start_step: Optional[int] = None  # Will be set to 10% of total_steps
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -65,7 +64,7 @@ class ExperimentConfig:
     save_dir: str = "./experiments"
     
     # WandB configuration
-    use_wandb: bool = False  # Default to False for cleaner testing
+    use_wandb: bool = True
     wandb_entity: str = "zachdata"
     wandb_project: str = "vsae-experiments"
     
@@ -79,18 +78,11 @@ class ExperimentConfig:
         """Set derived configuration values."""
         # Set default step values based on total steps
         if self.warmup_steps is None:
-            self.warmup_steps = max(min(1000, self.total_steps // 10), 1)
+            self.warmup_steps = max(200, int(0.05 * self.total_steps))
         if self.sparsity_warmup_steps is None:
-            self.sparsity_warmup_steps = max(int(0.05 * self.total_steps), 1)
+            self.sparsity_warmup_steps = int(0.05 * self.total_steps)
         if self.decay_start_step is None:
-            self.decay_start_step = max(int(0.8 * self.total_steps), 1)
-        if self.threshold_start_step is None:
-            self.threshold_start_step = max(int(0.1 * self.total_steps), 1)
-        
-        # Validate and fix step ordering constraints
-        max_early_step = max(self.warmup_steps, self.sparsity_warmup_steps, self.threshold_start_step)
-        if self.decay_start_step <= max_early_step:
-            self.decay_start_step = max_early_step + 1
+            self.decay_start_step = int(0.8 * self.total_steps)
     
     def get_torch_dtype(self) -> torch.dtype:
         """Convert string dtype to torch dtype."""
@@ -118,29 +110,13 @@ class ExperimentConfig:
 class ExperimentRunner:
     """Manages the entire training experiment with proper setup and cleanup."""
     
-    def __init__(self, config: ExperimentConfig, enable_logging: bool = False):
+    def __init__(self, config: ExperimentConfig):
         self.config = config
-        self.enable_logging = enable_logging
-        if enable_logging:
-            self.setup_logging()
-        else:
-            self.logger = self._create_simple_logger()
+        self.setup_logging()
         self.setup_reproducibility()
         
-    def _create_simple_logger(self):
-        """Create a simple logger that only prints to console."""
-        logger = logging.getLogger(__name__)
-        logger.setLevel(logging.INFO)
-        # Only add handler if it doesn't exist
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-        return logger
-        
     def setup_logging(self) -> None:
-        """Set up full logging configuration."""
+        """Set up logging configuration."""
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
@@ -197,43 +173,41 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAETopKConfig:
+    def create_model_config(self, model: HookedTransformer) -> VSAEJumpReLUConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
-        k = int(self.config.k_fraction * dict_size)
         
-        return VSAETopKConfig(
+        return VSAEJumpReLUConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
-            k=k,
             var_flag=self.config.var_flag,
+            bandwidth=self.config.bandwidth,
             use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )
         
-    def create_training_config(self) -> VSAETopKTrainingConfig:
+    def create_training_config(self) -> TrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAETopKTrainingConfig(
+        return TrainingConfig(
             steps=self.config.total_steps,
             lr=self.config.lr,
             kl_coeff=self.config.kl_coeff,
-            auxk_alpha=self.config.auxk_alpha,
+            l0_coeff=self.config.l0_coeff,
+            target_l0=self.config.target_l0,
             warmup_steps=self.config.warmup_steps,
             sparsity_warmup_steps=self.config.sparsity_warmup_steps,
             decay_start=self.config.decay_start_step,
-            threshold_beta=self.config.threshold_beta,
-            threshold_start_step=self.config.threshold_start_step,
         )
         
-    def create_trainer_config(self, model_config: VSAETopKConfig, training_config: VSAETopKTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: VSAEJumpReLUConfig, training_config: TrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         # Convert non-serializable objects to serializable formats
         serializable_model_config = {
             "activation_dim": model_config.activation_dim,
             "dict_size": model_config.dict_size,
-            "k": model_config.k,
             "var_flag": model_config.var_flag,
+            "bandwidth": model_config.bandwidth,
             "use_april_update_mode": model_config.use_april_update_mode,
             "dtype": str(model_config.dtype),  # Convert to string
             "device": str(model_config.device),  # Convert to string
@@ -243,18 +217,16 @@ class ExperimentRunner:
             "steps": training_config.steps,
             "lr": training_config.lr,
             "kl_coeff": training_config.kl_coeff,
-            "auxk_alpha": training_config.auxk_alpha,
+            "l0_coeff": training_config.l0_coeff,
+            "target_l0": training_config.target_l0,
             "warmup_steps": training_config.warmup_steps,
             "sparsity_warmup_steps": training_config.sparsity_warmup_steps,
             "decay_start": training_config.decay_start,
-            "threshold_beta": training_config.threshold_beta,
-            "threshold_start_step": training_config.threshold_start_step,
-            "dead_feature_threshold": training_config.dead_feature_threshold,
             "gradient_clip_norm": training_config.gradient_clip_norm,
         }
         
         return {
-            "trainer": VSAETopKTrainer,
+            "trainer": VSAEJumpReLUTrainer,
             "model_config": model_config,  # Pass the actual objects to trainer
             "training_config": training_config,  # Pass the actual objects to trainer
             "layer": self.config.layer,
@@ -269,12 +241,12 @@ class ExperimentRunner:
         
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
-        k_value = int(self.config.k_fraction * self.config.dict_size_multiple * 2048)  # Approximate k for gelu-1l
         return (
-            f"VSAETopK_{self.config.model_name}_"
+            f"VSAEJumpReLU_{self.config.model_name}_"
             f"d{int(self.config.dict_size_multiple * 2048)}_"
-            f"k{k_value}_lr{self.config.lr}_"
-            f"kl{self.config.kl_coeff}_aux{self.config.auxk_alpha}"
+            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
+            f"l0c{self.config.l0_coeff}_tl0_{self.config.target_l0}_"
+            f"bw{self.config.bandwidth}"
         )
         
     def get_save_directory(self) -> Path:
@@ -285,9 +257,6 @@ class ExperimentRunner:
         
     def save_config(self, save_dir: Path) -> None:
         """Save experiment configuration."""
-        if not self.enable_logging:
-            return  # Skip saving config for simple runs
-            
         config_path = save_dir / "experiment_config.json"
         
         import json
@@ -300,7 +269,8 @@ class ExperimentRunner:
         
     def run_training(self) -> Dict[str, float]:
         """Run the complete training experiment."""
-        self.logger.info("Starting VSAETopK training experiment")
+        self.logger.info("Starting VSAEJumpReLU training experiment")
+        self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
         
@@ -318,7 +288,9 @@ class ExperimentRunner:
             save_dir = self.get_save_directory()
             self.save_config(save_dir)
             
-            self.logger.info(f"Dictionary size: {model_config.dict_size}, K value: {model_config.k}")
+            self.logger.info(f"Model config: {model_config}")
+            self.logger.info(f"Training config: {training_config}")
+            self.logger.info(f"Dictionary size: {model_config.dict_size}")
             
             # Run training
             self.logger.info("Starting training...")
@@ -337,9 +309,11 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_topk",
+                    "experiment_type": "vsae_jumprelu",
                     "dict_size_multiple": self.config.dict_size_multiple,
-                    "k_fraction": self.config.k_fraction,
+                    "var_flag": self.config.var_flag,
+                    "bandwidth": self.config.bandwidth,
+                    "target_l0": self.config.target_l0,
                     **asdict(self.config)
                 }
             )
@@ -387,11 +361,10 @@ class ExperimentRunner:
                 self.logger.info(f"  {metric}: {value:.4f}")
                 
             # Save evaluation results
-            if self.enable_logging:
-                eval_path = save_dir / "evaluation_results.json"
-                import json
-                with open(eval_path, 'w') as f:
-                    json.dump(eval_results, f, indent=2)
+            eval_path = save_dir / "evaluation_results.json"
+            import json
+            with open(eval_path, 'w') as f:
+                json.dump(eval_results, f, indent=2)
                 
             return eval_results
             
@@ -407,16 +380,20 @@ def create_quick_test_config() -> ExperimentConfig:
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
-        k_fraction=0.08,
         
         # Quick test parameters
-        total_steps=10,
-        warmup_steps=1,
-        sparsity_warmup_steps=2,
-        decay_start_step=8,
-        threshold_start_step=1,
-        checkpoint_steps=(5, 10),
-        log_steps=2,
+        total_steps=100,
+        warmup_steps=20,
+        sparsity_warmup_steps=50,
+        decay_start_step=80,
+        checkpoint_steps=(50, 100),
+        log_steps=20,
+        
+        # VSAEJumpReLU specific
+        var_flag=1,
+        bandwidth=0.001,
+        l0_coeff=1.0,
+        target_l0=20.0,
         
         # Small buffer for testing
         n_ctxs=1000,
@@ -425,10 +402,7 @@ def create_quick_test_config() -> ExperimentConfig:
         
         # System settings
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="float32",  # Use float32 for testing to avoid precision issues
-        autocast_dtype="float32",
         seed=42,
-        use_wandb=False,  # Disable for quick tests
     )
 
 
@@ -439,18 +413,18 @@ def create_full_config() -> ExperimentConfig:
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
-        k_fraction=0.08,
         
         # Full training parameters
         total_steps=50000,
         lr=5e-4,
         kl_coeff=500.0,
-        auxk_alpha=1/32,
+        l0_coeff=1.0,
+        target_l0=20.0,
         
-        # VSAETopK settings
-        var_flag=0,
+        # VSAEJumpReLU specific settings
+        var_flag=1,
+        bandwidth=0.001,
         use_april_update_mode=True,
-        threshold_beta=0.999,
         
         # Full buffer settings
         n_ctxs=30000,
@@ -467,7 +441,6 @@ def create_full_config() -> ExperimentConfig:
         dtype="bfloat16",
         autocast_dtype="bfloat16",
         seed=42,
-        use_wandb=True,
     )
 
 
@@ -480,8 +453,8 @@ def main():
     # For full training, uncomment:
     # config = create_full_config()
     
-    # Run experiment (enable_logging=False for simple console output)
-    runner = ExperimentRunner(config, enable_logging=False)
+    # Run experiment
+    runner = ExperimentRunner(config)
     results = runner.run_training()
     
     # Print summary
@@ -498,6 +471,7 @@ def main():
             if metric in results:
                 print(f"{metric:<25} | {results[metric]:.4f}")
                 
+        print(f"\nFull results: {results}")
     else:
         print("No evaluation results available")
 

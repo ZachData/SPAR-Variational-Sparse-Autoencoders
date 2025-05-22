@@ -150,7 +150,9 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
             return
         print("Normalizing decoder weights")
 
-        test_input = t.randn(10, self.activation_dim)
+        # Create test input on the same device as the model parameters
+        device = self.decoder.weight.device
+        test_input = t.randn(10, self.activation_dim, device=device)
         initial_output = self(test_input)
 
         self.decoder.weight.data /= norms
@@ -167,7 +169,7 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
         assert t.allclose(initial_output, new_output, atol=1e-4)
 
     @classmethod
-    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=0):
+    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=None):
         """
         Load a pretrained autoencoder from a file.
         
@@ -177,11 +179,18 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
             device: Device to load model to
             normalize_decoder: Whether to normalize decoder weights
             var_flag: Whether to load with variance encoding (0: fixed, 1: learned)
+                    If None, will auto-detect from state_dict
             
         Returns:
             Loaded autoencoder
         """
         state_dict = t.load(path)
+        
+        # Auto-detect var_flag from state_dict if not explicitly provided
+        if var_flag is None:
+            # Check if the state dict contains variance encoder weights
+            has_var_encoder = "var_encoder.weight" in state_dict or "W_enc_var" in state_dict
+            var_flag = 1 if has_var_encoder else 0
         
         # Determine dimensions and mode based on state dict
         if 'encoder.weight' in state_dict:
@@ -210,19 +219,39 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
                     
                 state_dict = converted_dict
         
-        autoencoder = cls(activation_dim, dict_size, use_april_update_mode=use_april_update_mode, var_flag=var_flag)
-        autoencoder.load_state_dict(state_dict)
-
-        # This is useful for doing analysis where e.g. feature activation magnitudes are important
-        # If training the SAE using the April update, the decoder weights are not normalized
-        if normalize_decoder:
-            autoencoder.normalize_decoder()
-
+        # Create model with detected parameters
+        autoencoder = cls(activation_dim, dict_size, use_april_update_mode=use_april_update_mode, var_flag=var_flag, device=device)
+        
+        # Filter state_dict to only include keys that are in the model
+        model_keys = set(autoencoder.state_dict().keys())
+        filtered_state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
+        
+        # Load the filtered state dictionary
+        autoencoder.load_state_dict(filtered_state_dict, strict=False)
+        
+        # Check for missing keys
+        missing_keys = model_keys - set(filtered_state_dict.keys())
+        if missing_keys:
+            print(f"Warning: Missing keys in state_dict: {missing_keys}")
+            # Initialize missing parameters to default values
+            # This is typically just needed for var_encoder when loading a var_flag=0 model as var_flag=1
+            if var_flag == 1 and "var_encoder.weight" in missing_keys:
+                print("Initializing missing variance encoder parameters with default values")
+                # Set var_encoder to small random values
+                init.kaiming_uniform_(autoencoder.var_encoder.weight)
+                init.zeros_(autoencoder.var_encoder.bias)
+        
+        # Skip normalization if loaded model had learned variances, as it might break the model
+        if normalize_decoder and not (var_flag == 1 and "var_encoder.weight" in state_dict):
+            try:
+                autoencoder.normalize_decoder()
+            except AssertionError:
+                print("Warning: Could not normalize decoder weights. Skipping normalization.")
+        
         if device is not None:
             autoencoder.to(dtype=dtype, device=device)
-
+        
         return autoencoder
-
 
 class VSAEIsoTrainer(SAETrainer):
     """

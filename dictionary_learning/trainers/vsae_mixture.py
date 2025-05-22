@@ -243,8 +243,7 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
         assert t.allclose(initial_output, new_output, atol=1e-4)
 
     @classmethod
-    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=0, 
-                        n_correlated_pairs=0, n_anticorrelated_pairs=0):
+    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=None):
         """
         Load a pretrained autoencoder from a file.
         
@@ -254,18 +253,18 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
             device: Device to load model to
             normalize_decoder: Whether to normalize decoder weights
             var_flag: Whether to load with variance encoding (0: fixed, 1: learned)
-            n_correlated_pairs: Number of correlated feature pairs
-            n_anticorrelated_pairs: Number of anticorrelated feature pairs
+                    If None, will auto-detect from state_dict
             
         Returns:
             Loaded autoencoder
         """
-        # Determine device if not specified
-        if device is None:
-            device = 'cuda' if t.cuda.is_available() else 'cpu'
+        state_dict = t.load(path)
         
-        # Load state dict to the target device
-        state_dict = t.load(path, map_location=device)
+        # Auto-detect var_flag from state_dict if not explicitly provided
+        if var_flag is None:
+            # Check if the state dict contains variance encoder weights
+            has_var_encoder = "var_encoder.weight" in state_dict or "W_enc_var" in state_dict
+            var_flag = 1 if has_var_encoder else 0
         
         # Determine dimensions and mode based on state dict
         if 'encoder.weight' in state_dict:
@@ -273,12 +272,8 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
             use_april_update_mode = "decoder.bias" in state_dict
         else:
             # Handle older format with W_enc, W_dec parameters
-            if "W_enc" in state_dict:
-                activation_dim, dict_size = state_dict["W_enc"].shape
-            else: 
-                activation_dim, dict_size = state_dict["encoder.weight"].T.shape
-            
-            use_april_update_mode = "b_dec" in state_dict or "decoder.bias" in state_dict
+            activation_dim, dict_size = state_dict["W_enc"].shape if "W_enc" in state_dict else state_dict["encoder.weight"].T.shape
+            use_april_update_mode = "b_dec" in state_dict
             
             # Convert parameter names if needed
             if "W_enc" in state_dict:
@@ -298,7 +293,11 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
                     
                 state_dict = converted_dict
         
-        # Create the autoencoder with determined dimensions
+        # Try to extract correlation parameters from state_dict metadata
+        n_correlated_pairs = 0
+        n_anticorrelated_pairs = 0
+        
+        # Create model with detected parameters
         autoencoder = cls(
             activation_dim, 
             dict_size, 
@@ -309,22 +308,35 @@ class VSAEMixtureGaussian(Dictionary, nn.Module):
             device=device
         )
         
-        # Ensure all tensors in state_dict are on the specified device
-        for k, v in state_dict.items():
-            if isinstance(v, t.Tensor):
-                state_dict[k] = v.to(device)
+        # Filter state_dict to only include keys that are in the model
+        model_keys = set(autoencoder.state_dict().keys())
+        filtered_state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
         
-        # Load state dict
-        autoencoder.load_state_dict(state_dict)
-
-        # This is useful for doing analysis where e.g. feature activation magnitudes are important
-        # If training the SAE using the April update, the decoder weights are not normalized
-        if normalize_decoder:
-            autoencoder.normalize_decoder()
-
-        # Ensure model is on the correct device and dtype
-        autoencoder = autoencoder.to(dtype=dtype, device=device)
-
+        # Load the filtered state dictionary
+        autoencoder.load_state_dict(filtered_state_dict, strict=False)
+        
+        # Check for missing keys
+        missing_keys = model_keys - set(filtered_state_dict.keys())
+        if missing_keys:
+            print(f"Warning: Missing keys in state_dict: {missing_keys}")
+            # Initialize missing parameters to default values
+            # This is typically just needed for var_encoder when loading a var_flag=0 model as var_flag=1
+            if var_flag == 1 and "var_encoder.weight" in missing_keys:
+                print("Initializing missing variance encoder parameters with default values")
+                # Set var_encoder to small random values
+                init.kaiming_uniform_(autoencoder.var_encoder.weight)
+                init.zeros_(autoencoder.var_encoder.bias)
+        
+        # Skip normalization if loaded model had learned variances, as it might break the model
+        if normalize_decoder and not (var_flag == 1 and "var_encoder.weight" in state_dict):
+            try:
+                autoencoder.normalize_decoder()
+            except AssertionError:
+                print("Warning: Could not normalize decoder weights. Skipping normalization.")
+        
+        if device is not None:
+            autoencoder.to(dtype=dtype, device=device)
+        
         return autoencoder
 
 

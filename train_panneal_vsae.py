@@ -1,6 +1,6 @@
 import torch as t
 from transformer_lens import HookedTransformer
-from dictionary_learning.trainers.vsae_multi import VSAEMultiGaussianTrainer, VSAEMultiGaussian
+from dictionary_learning.trainers.vsae_panneal import VSAEPAnnealTrainer, VSAEPAnneal
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
@@ -8,75 +8,84 @@ import multiprocessing
 import os
 import time
 
-def run_training(dict_size_multiple, corr_rate, model, buffer, base_params):
-    """Run a single training with the specified dictionary size multiple and correlation rate"""
+def run_training(dict_size_multiple, model, buffer, base_params):
+    """Run a single training with the specified dictionary size multiple"""
     # Extract base parameters
     MODEL_NAME = base_params["MODEL_NAME"]
     LAYER = base_params["LAYER"]
     TOTAL_STEPS = base_params["TOTAL_STEPS"]
     LR = base_params["LR"]
-    KL_COEFF = base_params["KL_COEFF"]
+    SPARSITY_PENALTY = base_params["SPARSITY_PENALTY"]
     WARMUP_STEPS = base_params["WARMUP_STEPS"]
     SPARSITY_WARMUP_STEPS = base_params["SPARSITY_WARMUP_STEPS"]
     DECAY_START_STEP = base_params["DECAY_START_STEP"]
+    P_START = base_params["P_START"]
+    P_END = base_params["P_END"]
+    ANNEAL_START = base_params["ANNEAL_START"]
+    ANNEAL_END = base_params["ANNEAL_END"]
+    N_SPARSITY_UPDATES = base_params["N_SPARSITY_UPDATES"]
+    SPARSITY_FUNCTION = base_params["SPARSITY_FUNCTION"]
     LOG_STEPS = base_params["LOG_STEPS"]
     CHECKPOINT_STEPS = base_params["CHECKPOINT_STEPS"]
     WANDB_ENTITY = base_params["WANDB_ENTITY"]
     WANDB_PROJECT = base_params["WANDB_PROJECT"]
     USE_WANDB = base_params["USE_WANDB"]
-    VAR_FLAG = base_params["VAR_FLAG"]
     
     # Calculate dictionary size from multiple
     d_mlp = model.cfg.d_mlp
     DICT_SIZE = int(dict_size_multiple * d_mlp)
     
     print(f"\n\n{'='*50}")
-    print(f"STARTING TRAINING WITH DICT_SIZE_MULTIPLE = {dict_size_multiple}, CORR_RATE = {corr_rate}")
+    print(f"STARTING TRAINING WITH DICT_SIZE_MULTIPLE = {dict_size_multiple}")
     print(f"Dictionary size: {DICT_SIZE}")
+    print(f"P-Annealing: {P_START} -> {P_END}")
     print(f"{'='*50}\n")
     
     # Configure trainer for this run
     trainer_config = {
-        "trainer": VSAEMultiGaussianTrainer,
+        "trainer": VSAEPAnnealTrainer,
         "steps": TOTAL_STEPS,
         "activation_dim": d_mlp,
         "dict_size": DICT_SIZE,
         "layer": LAYER,
         "lm_name": MODEL_NAME,
         "lr": LR,
-        "kl_coeff": KL_COEFF,
+        "sparsity_penalty": SPARSITY_PENALTY,
         "warmup_steps": WARMUP_STEPS,
         "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS,
         "decay_start": DECAY_START_STEP,
-        "var_flag": VAR_FLAG,
-        "corr_rate": corr_rate,
+        "var_flag": 0,  # Use fixed variance
         "use_april_update_mode": True,
+        "p_start": P_START,
+        "p_end": P_END,
+        "anneal_start": ANNEAL_START,
+        "anneal_end": ANNEAL_END,
+        "n_sparsity_updates": N_SPARSITY_UPDATES,
+        "sparsity_function": SPARSITY_FUNCTION,
         "device": "cuda",
-        "wandb_name": f"VSAEMulti_{MODEL_NAME}_{DICT_SIZE}_cr{corr_rate}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_STEPS}_spwarm{SPARSITY_WARMUP_STEPS}",
-        "dict_class": VSAEMultiGaussian
+        "wandb_name": f"VSAEPAnneal_{MODEL_NAME}_{DICT_SIZE}_lr{LR}_sp{SPARSITY_PENALTY}_p{P_START}-{P_END}",
+        "dict_class": VSAEPAnneal
     }
     
     # Print configuration
     print("===== TRAINER CONFIGURATION =====")
-    print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items()))
+    for k, v in trainer_config.items():
+        if k != "trainer" and k != "dict_class":
+            print(f"{k}: {v}")
     
     # Set unique save directory for this run
-    save_dir = f"./VSAEMulti_{MODEL_NAME}_d{DICT_SIZE}_cr{corr_rate}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_STEPS}_spwarm{SPARSITY_WARMUP_STEPS}"
+    save_dir = f"./VSAEPAnneal_{MODEL_NAME}_d{DICT_SIZE}_lr{LR}_sp{SPARSITY_PENALTY}_p{P_START}-{P_END}"
     
     # Check if we're loading from a checkpoint or training from scratch
     checkpoint_path = f"{save_dir}/trainer_0/checkpoints"
     is_continuing = os.path.exists(checkpoint_path)
     
     if is_continuing:
-        print(f"\n{'='*50}")
-        print(f"LOADING EXISTING SAE FROM {checkpoint_path}")
-        print(f"CONTINUING TRAINING FROM CHECKPOINT")
-        print(f"{'='*50}\n")
+        print(f"Loading existing SAE from {checkpoint_path}")
+        print(f"Continuing training from checkpoint")
     else:
-        print(f"\n{'='*50}")
-        print(f"NO EXISTING CHECKPOINT FOUND AT {checkpoint_path}")
-        print(f"STARTING TRAINING FROM SCRATCH")
-        print(f"{'='*50}\n")
+        print(f"No existing checkpoint found at {checkpoint_path}")
+        print(f"Starting training from scratch")
     
     # Run training
     trainSAE(
@@ -94,11 +103,11 @@ def run_training(dict_size_multiple, corr_rate, model, buffer, base_params):
         wandb_project=WANDB_PROJECT,
         run_cfg={
             "model_type": MODEL_NAME,
-            "experiment_type": "vsae_multi",
-            "kl_coefficient": KL_COEFF,
-            "dict_size_multiple": dict_size_multiple,
-            "correlation_rate": corr_rate,
-            "var_flag": VAR_FLAG
+            "experiment_type": "panneal_vsae",
+            "sparsity_penalty": SPARSITY_PENALTY,
+            "p_start": P_START,
+            "p_end": P_END,
+            "dict_size_multiple": dict_size_multiple
         }
     )
     
@@ -141,15 +150,20 @@ def main():
         # Training parameters        
         "TOTAL_STEPS": 10000,
         "LR": 5e-4,  # 0.0005
-        "KL_COEFF": 5e2,  # 500
+        "SPARSITY_PENALTY": 5e2,  # 500
         
         # Fixed step values instead of fractions
         "WARMUP_STEPS": 200,          # Warmup period for learning rate
         "SPARSITY_WARMUP_STEPS": 500, # Warmup period for sparsity
         "DECAY_START_STEP": 8000,     # When to start LR decay
         
-        # VSAE Multi specific parameters
-        "VAR_FLAG": 0,  # Use fixed variance (0) or learned variance (1)
+        # P-annealing parameters
+        "P_START": 1.0,              # Starting p-norm value
+        "P_END": 0.5,                # Ending p-norm value
+        "ANNEAL_START": 1000,        # When to start annealing p
+        "ANNEAL_END": 8000,          # When to end annealing p
+        "N_SPARSITY_UPDATES": 10,    # How many times to update p
+        "SPARSITY_FUNCTION": "Lp",   # Can be "Lp" or "Lp^p"
         
         # Checkpointing
         "CHECKPOINT_STEPS": [5000, 10000],  # Save at these steps
@@ -167,25 +181,26 @@ def main():
         "USE_WANDB": True,
     }
 
-    # Dictionary size multiple and correlation rates to try
-    dict_size_multiples = [4]  # Train with 4x dictionary size multiple
-    correlation_rates = [0.3]  # Try with correlation rate of 0.3
+    # Only train with 4x dictionary size multiple
+    dict_size_multiple = 4
     
     # ========== LOAD MODEL & CREATE BUFFER ==========
-    # Only load the model once for all runs
+    print("Loading model...")
     model = HookedTransformer.from_pretrained(
         base_params["MODEL_NAME"], 
         device="cuda"
     )
     
     # Set up data generator
+    print("Setting up data generator...")
     data_gen = hf_dataset_to_generator(
         "NeelNanda/c4-code-tokenized-2b", 
         split="train", 
         return_tokens=True
     )
     
-    # Create activation buffer (reused for all runs)
+    # Create activation buffer
+    print("Creating activation buffer...")
     buffer = TransformerLensActivationBuffer(
         data=data_gen,
         model=model,
@@ -199,36 +214,27 @@ def main():
     )
     
     # ========== RUN TRAINING ==========
-    results = {}
+    print(f"\nStarting training with dictionary size multiple: {dict_size_multiple}")
+    start_time = time.time()
     
-    # Run for each combination of dictionary size multiple and correlation rate
-    for dict_size_multiple in dict_size_multiples:
-        for corr_rate in correlation_rates:
-            print(f"\nStarting training with dictionary size multiple: {dict_size_multiple}, correlation rate: {corr_rate}")
-            start_time = time.time()
-            
-            # Run training with these parameters
-            result = run_training(dict_size_multiple, corr_rate, model, buffer, base_params)
-            results[(dict_size_multiple, corr_rate)] = result
-            
-            elapsed_time = time.time() - start_time
-            print(f"Completed training in {elapsed_time:.2f} seconds")
+    # Run training
+    results = run_training(dict_size_multiple, model, buffer, base_params)
+    
+    elapsed_time = time.time() - start_time
+    print(f"Completed training in {elapsed_time:.2f} seconds")
     
     # ========== PRINT RESULTS ==========
-    print("\n\n" + "="*80)
+    print("\n\n" + "="*50)
     print("TRAINING RESULTS")
-    print("="*80)
+    print("="*50)
     
     # Print key metrics
     metrics = ["frac_variance_explained", "l0", "frac_alive"]
-    d_mlp = model.cfg.d_mlp
+    dict_size = int(dict_size_multiple * model.cfg.d_mlp)
     
-    print(f"{'Dict Size':15} | {'Corr Rate':10} | " + " | ".join(f"{metric:22}" for metric in metrics))
-    print("-" * (15 + 10 + 25 * len(metrics) + 4))
-    
-    for (dict_size_multiple, corr_rate), result in results.items():
-        dict_size = int(dict_size_multiple * d_mlp)
-        print(f"{dict_size:<15} | {corr_rate:<10.2f} | " + " | ".join(f"{result[metric]:<22.4f}" for metric in metrics))
+    print(f"{'Dict Size':15} | " + " | ".join(f"{metric:22}" for metric in metrics))
+    print("-" * (15 + 25 * len(metrics)))
+    print(f"{dict_size:<15} | " + " | ".join(f"{results[metric]:<22.4f}" for metric in metrics))
 
 if __name__ == "__main__":
     # Set the start method to spawn for Windows compatibility

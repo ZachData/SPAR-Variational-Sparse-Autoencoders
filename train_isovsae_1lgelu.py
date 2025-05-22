@@ -16,19 +16,18 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     TOTAL_STEPS = base_params["TOTAL_STEPS"]
     LR = base_params["LR"]
     KL_COEFF = base_params["KL_COEFF"]
-    WARMUP_FRAC = base_params["WARMUP_FRAC"]
-    SPARSITY_WARMUP_FRAC = base_params["SPARSITY_WARMUP_FRAC"]
-    DECAY_START_FRAC = base_params["DECAY_START_FRAC"]
+    WARMUP_STEPS = base_params["WARMUP_STEPS"]
+    SPARSITY_WARMUP_STEPS = base_params["SPARSITY_WARMUP_STEPS"]
+    DECAY_START_STEP = base_params["DECAY_START_STEP"]
     LOG_STEPS = base_params["LOG_STEPS"]
-    CHECKPOINT_FRACS = base_params["CHECKPOINT_FRACS"]
+    CHECKPOINT_STEPS = base_params["CHECKPOINT_STEPS"]
     WANDB_ENTITY = base_params["WANDB_ENTITY"]
     WANDB_PROJECT = base_params["WANDB_PROJECT"]
     USE_WANDB = base_params["USE_WANDB"]
     
-    # Calculate derived parameters
+    # Calculate dictionary size from multiple
     d_mlp = model.cfg.d_mlp
     DICT_SIZE = int(dict_size_multiple * d_mlp)
-    SAVE_STEPS = [int(frac * TOTAL_STEPS) for frac in CHECKPOINT_FRACS]
     
     print(f"\n\n{'='*50}")
     print(f"STARTING TRAINING WITH DICT_SIZE_MULTIPLE = {dict_size_multiple}")
@@ -45,13 +44,13 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         "lm_name": MODEL_NAME,
         "lr": LR,
         "kl_coeff": KL_COEFF,
-        "warmup_steps": int(WARMUP_FRAC * TOTAL_STEPS),
-        "sparsity_warmup_steps": int(SPARSITY_WARMUP_FRAC * TOTAL_STEPS),
-        "decay_start": int(DECAY_START_FRAC * TOTAL_STEPS),
-        "var_flag": 1,  # Use fixed variance
+        "warmup_steps": WARMUP_STEPS,
+        "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS,
+        "decay_start": DECAY_START_STEP,
+        "var_flag": 0,  # Use fixed variance
         "use_april_update_mode": True,
         "device": "cuda",
-        "wandb_name": f"VSAEIso_{MODEL_NAME}_{DICT_SIZE}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_FRAC}_spwarm{SPARSITY_WARMUP_FRAC}",
+        "wandb_name": f"VSAEIso_{MODEL_NAME}_{DICT_SIZE}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_STEPS}_spwarm{SPARSITY_WARMUP_STEPS}",
         "dict_class": VSAEIsoGaussian
     }
     
@@ -60,7 +59,18 @@ def run_training(dict_size_multiple, model, buffer, base_params):
     print('\n'.join(f"{k}: {v}" for k, v in trainer_config.items()))
     
     # Set unique save directory for this run
-    save_dir = f"./VSAEIso_{MODEL_NAME}_d{DICT_SIZE}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_FRAC}_spwarm{SPARSITY_WARMUP_FRAC}"
+    save_dir = f"./VSAEIso_{MODEL_NAME}_d{DICT_SIZE}_lr{LR}_kl{KL_COEFF}_warm{WARMUP_STEPS}_spwarm{SPARSITY_WARMUP_STEPS}"
+    
+    # Check if we're loading from a checkpoint or training from scratch
+    checkpoint_path = f"{save_dir}/trainer_0/checkpoints"
+    is_continuing = os.path.exists(checkpoint_path)
+    
+    if is_continuing:
+        print(f"Loading existing SAE from {checkpoint_path}")
+        print(f"Continuing training from checkpoint")
+    else:
+        print(f"No existing checkpoint found at {checkpoint_path}")
+        print(f"Starting training from scratch")
     
     # Run training
     trainSAE(
@@ -68,7 +78,7 @@ def run_training(dict_size_multiple, model, buffer, base_params):
         trainer_configs=[trainer_config],
         steps=TOTAL_STEPS,
         save_dir=save_dir,
-        save_steps=SAVE_STEPS,
+        save_steps=CHECKPOINT_STEPS,
         log_steps=LOG_STEPS,
         verbose=True,
         normalize_activations=True,
@@ -121,14 +131,18 @@ def main():
         "HOOK_NAME": "blocks.0.mlp.hook_post",
         
         # Training parameters        
-        "TOTAL_STEPS": 30000,
-        "LR": 5e-5,  # Updated from 1e-2 to 0.0005
-        "KL_COEFF": 500000,  # Updated from 1e2 to 50
+        "TOTAL_STEPS": 10000,
+        "LR": 5e-4,  # 0.0005
+        "KL_COEFF": 5e2,  # 500
         
-        # Step fractions
-        "WARMUP_FRAC": 0.05,
-        "SPARSITY_WARMUP_FRAC": 0.05,
-        "DECAY_START_FRAC": 0.8,
+        # Fixed step values instead of fractions
+        "WARMUP_STEPS": 200,          # Warmup period for learning rate
+        "SPARSITY_WARMUP_STEPS": 500, # Warmup period for sparsity
+        "DECAY_START_STEP": 1000,    # When to start LR decay
+        
+        # Checkpointing
+        "CHECKPOINT_STEPS": [5000, 10000],  # Save at these steps
+        "LOG_STEPS": 100,
         
         # Buffer parameters
         "N_CTXS": 3000,
@@ -136,16 +150,12 @@ def main():
         "REFRESH_BATCH_SIZE": 32,
         "OUT_BATCH_SIZE": 1024,
         
-        # Saving parameters
-        "CHECKPOINT_FRACS": [0.5, 1.0],
-        "LOG_STEPS": 100,
-        
         # WandB parameters
         "WANDB_ENTITY": os.environ.get("WANDB_ENTITY", "zachdata"),
         "WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "vsae-experiments"),
         "USE_WANDB": True,
     }
-    
+
     # Only train with 4x dictionary size multiple
     dict_size_multiples = [4]
     
