@@ -1,18 +1,84 @@
 """
-Implements a combination of Variational Sparse Autoencoder (VSAE) with Gated Annealing.
-This combines techniques from vsae_iso.py and gated_anneal.py.
+Improved implementation of combined Variational Sparse Autoencoder (VSAE) with Gated Annealing.
+
+This module combines variational techniques with p-norm annealing to achieve
+better feature learning and controlled sparsity, following better PyTorch practices.
 """
 
-import torch as t
-from torch import nn
+import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
-from typing import Optional, List
+from typing import Optional, List, Tuple, Dict, Any
 from collections import namedtuple
+from dataclasses import dataclass
+import math
 
-from ..trainers.trainer import SAETrainer, get_lr_schedule, get_sparsity_warmup_fn, ConstrainedAdam
-from ..config import DEBUG
 from ..dictionary import Dictionary
+from ..trainers.trainer import (
+    SAETrainer,
+    get_lr_schedule,
+    get_sparsity_warmup_fn,
+    ConstrainedAdam
+)
+
+
+@dataclass
+class VSAEGatedConfig:
+    """Configuration for VSAE Gated model."""
+    activation_dim: int
+    dict_size: int
+    var_flag: int = 0  # 0: fixed variance, 1: learned variance
+    dtype: torch.dtype = torch.float32
+    device: Optional[torch.device] = None
+
+
+@dataclass
+class AnnealingConfig:
+    """Configuration for p-norm annealing schedule."""
+    anneal_start: int
+    anneal_end: int
+    p_start: float = 1.0
+    p_end: float = 0.0
+    n_sparsity_updates: int = 10
+    sparsity_function: str = 'Lp^p'  # 'Lp' or 'Lp^p'
+    sparsity_queue_length: int = 10
+    
+    def __post_init__(self):
+        if self.sparsity_function not in ['Lp', 'Lp^p']:
+            raise ValueError("sparsity_function must be 'Lp' or 'Lp^p'")
+        if self.anneal_end <= self.anneal_start:
+            raise ValueError("anneal_end must be greater than anneal_start")
+        if self.n_sparsity_updates < 1:
+            raise ValueError("n_sparsity_updates must be at least 1")
+        if self.anneal_end - self.anneal_start < self.n_sparsity_updates:
+            # Adjust n_sparsity_updates if the annealing period is too short
+            max_updates = max(1, self.anneal_end - self.anneal_start)
+            print(f"Warning: n_sparsity_updates ({self.n_sparsity_updates}) too large for annealing period "
+                  f"({self.anneal_end - self.anneal_start} steps). Reducing to {max_updates}")
+            self.n_sparsity_updates = max_updates
+
+
+@dataclass 
+class TrainingConfig:
+    """Configuration for training the VSAEGated model."""
+    steps: int
+    lr: float = 5e-4
+    kl_coeff: float = 500.0
+    warmup_steps: Optional[int] = None
+    sparsity_warmup_steps: Optional[int] = None
+    decay_start: Optional[int] = None
+    resample_steps: Optional[int] = None
+    gradient_clip_norm: float = 1.0
+    
+    def __post_init__(self):
+        # Set defaults based on total steps
+        if self.warmup_steps is None:
+            self.warmup_steps = max(1000, int(0.05 * self.steps))
+        if self.sparsity_warmup_steps is None:
+            self.sparsity_warmup_steps = int(0.05 * self.steps)
+        if self.decay_start is None:
+            self.decay_start = int(0.8 * self.steps)
 
 
 class VSAEGatedAutoEncoder(Dictionary, nn.Module):
@@ -21,63 +87,90 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
     
     This model combines ideas from standard VSAEs with gated networks to improve
     feature learning and interpretability through controlled sparsity.
-    
-    Args:
-        activation_dim (int): Dimension of input activations
-        dict_size (int): Size of the learned dictionary
-        var_flag (int): Determines variance behavior (0: fixed, 1: learned)
-        initialization (str): Weight initialization strategy
-        device (torch.device): Device to place model on
     """
 
-    def __init__(self, activation_dim, dict_size, var_flag=0, initialization="default", device=None):
+    def __init__(self, config: VSAEGatedConfig):
         super().__init__()
-        self.activation_dim = activation_dim
-        self.dict_size = dict_size
-        self.var_flag = var_flag
+        self.config = config
+        self.activation_dim = config.activation_dim
+        self.dict_size = config.dict_size
+        self.var_flag = config.var_flag
         
-        # Initialize decoder bias and main components
-        self.decoder_bias = nn.Parameter(t.empty(activation_dim, device=device))
-        self.encoder = nn.Linear(activation_dim, dict_size, bias=False, device=device)
+        # Initialize layers
+        self._init_layers()
+        self._init_weights()
+    
+    def _init_layers(self) -> None:
+        """Initialize neural network layers."""
+        # Main encoder/decoder
+        self.encoder = nn.Linear(
+            self.activation_dim, 
+            self.dict_size, 
+            bias=False,
+            dtype=self.config.dtype,
+            device=self.config.device
+        )
+        self.decoder = nn.Linear(
+            self.dict_size, 
+            self.activation_dim, 
+            bias=False,
+            dtype=self.config.dtype,
+            device=self.config.device
+        )
+        
+        # Bias parameters
+        self.decoder_bias = nn.Parameter(
+            torch.empty(self.activation_dim, dtype=self.config.dtype, device=self.config.device)
+        )
         
         # Gating specific parameters
-        self.r_mag = nn.Parameter(t.empty(dict_size, device=device))
-        self.gate_bias = nn.Parameter(t.empty(dict_size, device=device))
-        self.mag_bias = nn.Parameter(t.empty(dict_size, device=device))
-        self.decoder = nn.Linear(dict_size, activation_dim, bias=False, device=device)
+        self.r_mag = nn.Parameter(
+            torch.empty(self.dict_size, dtype=self.config.dtype, device=self.config.device)
+        )
+        self.gate_bias = nn.Parameter(
+            torch.empty(self.dict_size, dtype=self.config.dtype, device=self.config.device)
+        )
+        self.mag_bias = nn.Parameter(
+            torch.empty(self.dict_size, dtype=self.config.dtype, device=self.config.device)
+        )
         
         # Variance encoder (only used when var_flag=1)
-        if var_flag == 1:
-            self.var_encoder = nn.Linear(activation_dim, dict_size, bias=True, device=device)
-            init.zeros_(self.var_encoder.bias)
-        
-        # Initialize parameters
-        if initialization == "default":
-            self._reset_parameters()
-        else:
-            initialization(self)
-
-    def _reset_parameters(self):
-        """
-        Default method for initializing weights and biases.
-        """
-        # Biases are initialized to zero
-        init.zeros_(self.decoder_bias)
-        init.zeros_(self.r_mag)
-        init.zeros_(self.gate_bias)
-        init.zeros_(self.mag_bias)
-        
-        # Decoder weights are initialized to random unit vectors
-        dec_weight = t.randn_like(self.decoder.weight)
-        dec_weight = dec_weight / dec_weight.norm(dim=0, keepdim=True)
-        self.decoder.weight = nn.Parameter(dec_weight)
-        self.encoder.weight = nn.Parameter(dec_weight.clone().T)
-        
-        # Initialize variance encoder if needed
         if self.var_flag == 1:
-            init.kaiming_uniform_(self.var_encoder.weight)
+            self.var_encoder = nn.Linear(
+                self.activation_dim, 
+                self.dict_size, 
+                bias=True,
+                dtype=self.config.dtype,
+                device=self.config.device
+            )
+    
+    def _init_weights(self) -> None:
+        """Initialize model weights following best practices."""
+        # Biases are initialized to zero
+        with torch.no_grad():
+            nn.init.zeros_(self.decoder_bias)
+            nn.init.zeros_(self.r_mag)
+            nn.init.zeros_(self.gate_bias)
+            nn.init.zeros_(self.mag_bias)
+            
+            # Decoder weights are initialized to random unit vectors
+            dec_weight = torch.randn_like(self.decoder.weight)
+            dec_weight = dec_weight / dec_weight.norm(dim=0, keepdim=True)
+            self.decoder.weight.copy_(dec_weight)
+            self.encoder.weight.copy_(dec_weight.clone().T)
+            
+            # Initialize variance encoder if needed
+            if self.var_flag == 1:
+                nn.init.kaiming_uniform_(self.var_encoder.weight)
+                nn.init.zeros_(self.var_encoder.bias)
 
-    def encode(self, x: t.Tensor, return_gate=False, normalize_decoder=False, return_log_var=False):
+    def encode(
+        self, 
+        x: torch.Tensor, 
+        return_gate: bool = False, 
+        normalize_decoder: bool = False, 
+        return_log_var: bool = False
+    ) -> Tuple[torch.Tensor, ...]:
         """
         Encode input activations to latent space.
         
@@ -90,6 +183,9 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
         Returns:
             Features, and optionally gate values and log variance
         """
+        # Ensure input matches encoder dtype
+        x = x.to(dtype=self.encoder.weight.dtype)
+        
         x_enc = self.encoder(x - self.decoder_bias)
 
         # Gating network
@@ -98,7 +194,7 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
 
         # Magnitude network
         pi_mag = self.r_mag.exp() * x_enc + self.mag_bias
-        f_mag = nn.ReLU()(pi_mag)
+        f_mag = F.relu(pi_mag)
 
         # Combined features
         f = f_gate * f_mag
@@ -112,15 +208,15 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
             log_var = F.relu(self.var_encoder(x - self.decoder_bias))
             
             if return_gate:
-                return f, nn.ReLU()(pi_gate), log_var
+                return f, F.relu(pi_gate), log_var
             return f, log_var
             
         if return_gate:
-            return f, nn.ReLU()(pi_gate)
+            return f, F.relu(pi_gate)
 
         return f
 
-    def reparameterize(self, mu, log_var):
+    def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
         """
         Apply reparameterization trick for variational sampling.
         
@@ -131,11 +227,17 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
         Returns:
             Sampled latent code
         """
-        std = t.exp(0.5 * log_var)
-        eps = t.randn_like(std)
-        return mu + eps * std
+        if log_var is None:
+            return mu
+            
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        z = mu + eps * std
+        
+        # Ensure output matches mu dtype
+        return z.to(dtype=mu.dtype)
 
-    def decode(self, f: t.Tensor, normalize_decoder=False):
+    def decode(self, f: torch.Tensor, normalize_decoder: bool = False) -> torch.Tensor:
         """
         Decode features back to activation space.
         
@@ -146,11 +248,19 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
         Returns:
             Reconstructed activations
         """
+        # Ensure f matches decoder weight dtype
+        f = f.to(dtype=self.decoder.weight.dtype)
+        
         if normalize_decoder:
             f = f / self.decoder.weight.norm(dim=0, keepdim=True)
         return self.decoder(f) + self.decoder_bias
 
-    def forward(self, x: t.Tensor, output_features=False, normalize_decoder=False):
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        output_features: bool = False, 
+        normalize_decoder: bool = False
+    ) -> torch.Tensor:
         """
         Forward pass through the autoencoder.
         
@@ -162,6 +272,12 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
         Returns:
             Reconstructed activations and optionally features
         """
+        # Store original dtype to return output in same format
+        original_dtype = x.dtype
+        
+        # Ensure input matches model dtype
+        x = x.to(dtype=self.encoder.weight.dtype)
+        
         # For variational version
         if self.var_flag == 1:
             mu, log_var = self.encode(x, return_log_var=True)
@@ -176,32 +292,46 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
         if normalize_decoder:
             f = f * self.decoder.weight.norm(dim=0, keepdim=True)
 
+        # Convert back to original dtype
+        x_hat = x_hat.to(dtype=original_dtype)
+        
         if output_features:
+            f = f.to(dtype=original_dtype)
             return x_hat, f
         else:
             return x_hat
 
-    def scale_biases(self, scale: float):
+    def scale_biases(self, scale: float) -> None:
         """
         Scale all bias parameters by a given factor.
         
         Args:
             scale: Scale factor to apply
         """
-        self.decoder_bias.data *= scale
-        self.mag_bias.data *= scale
-        self.gate_bias.data *= scale
-        
-        if self.var_flag == 1:
-            self.var_encoder.bias.data *= scale
+        with torch.no_grad():
+            self.decoder_bias.mul_(scale)
+            self.mag_bias.mul_(scale)
+            self.gate_bias.mul_(scale)
+            
+            if self.var_flag == 1:
+                self.var_encoder.bias.mul_(scale)
 
     @classmethod
-    def from_pretrained(cls, path, dtype=t.float, device=None, normalize_decoder=True, var_flag=None):
+    def from_pretrained(
+        cls, 
+        path: str, 
+        config: Optional[VSAEGatedConfig] = None,
+        dtype: torch.dtype = torch.float32, 
+        device: Optional[torch.device] = None, 
+        normalize_decoder: bool = True, 
+        var_flag: Optional[int] = None
+    ) -> 'VSAEGatedAutoEncoder':
         """
         Load a pretrained autoencoder from a file.
         
         Args:
             path: Path to the saved model
+            config: Model configuration (if None, will auto-detect from state_dict)
             dtype: Data type to convert model to
             device: Device to load model on
             normalize_decoder: Whether to normalize decoder weights
@@ -211,39 +341,48 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
         Returns:
             Loaded autoencoder
         """
-        state_dict = t.load(path)
+        state_dict = torch.load(path, map_location=device)
         
-        # Auto-detect var_flag from state_dict if not explicitly provided
-        if var_flag is None:
-            # Check if the state dict contains variance encoder weights
-            has_var_encoder = "var_encoder.weight" in state_dict or "W_enc_var" in state_dict
-            var_flag = 1 if has_var_encoder else 0
-        
-        # Determine dimensions from state dict
-        if 'encoder.weight' in state_dict:
-            dict_size, activation_dim = state_dict["encoder.weight"].shape
-        else:
-            # Handle older format with W_enc, W_dec parameters
-            activation_dim, dict_size = state_dict["W_enc"].shape if "W_enc" in state_dict else state_dict["encoder.weight"].T.shape
+        if config is None:
+            # Auto-detect config from state_dict
+            if var_flag is None:
+                # Check if the state dict contains variance encoder weights
+                has_var_encoder = "var_encoder.weight" in state_dict or "W_enc_var" in state_dict
+                var_flag = 1 if has_var_encoder else 0
             
-            # Convert parameter names if needed
-            if "W_enc" in state_dict:
-                converted_dict = {}
-                converted_dict["encoder.weight"] = state_dict["W_enc"].T
-                converted_dict["decoder.weight"] = state_dict["W_dec"].T
-                converted_dict["decoder_bias"] = state_dict["b_dec"]
-                converted_dict["r_mag"] = state_dict["r_mag"]
-                converted_dict["gate_bias"] = state_dict["gate_bias"]
-                converted_dict["mag_bias"] = state_dict["mag_bias"]
+            # Determine dimensions from state dict
+            if 'encoder.weight' in state_dict:
+                dict_size, activation_dim = state_dict["encoder.weight"].shape
+            else:
+                # Handle older format with W_enc, W_dec parameters
+                activation_dim, dict_size = state_dict["W_enc"].shape if "W_enc" in state_dict else state_dict["encoder.weight"].T.shape
                 
-                if var_flag == 1 and "W_enc_var" in state_dict:
-                    converted_dict["var_encoder.weight"] = state_dict["W_enc_var"].T
-                    converted_dict["var_encoder.bias"] = state_dict["b_enc_var"]
+                # Convert parameter names if needed
+                if "W_enc" in state_dict:
+                    converted_dict = {}
+                    converted_dict["encoder.weight"] = state_dict["W_enc"].T
+                    converted_dict["decoder.weight"] = state_dict["W_dec"].T
+                    converted_dict["decoder_bias"] = state_dict["b_dec"]
+                    converted_dict["r_mag"] = state_dict["r_mag"]
+                    converted_dict["gate_bias"] = state_dict["gate_bias"]
+                    converted_dict["mag_bias"] = state_dict["mag_bias"]
                     
-                state_dict = converted_dict
+                    if var_flag == 1 and "W_enc_var" in state_dict:
+                        converted_dict["var_encoder.weight"] = state_dict["W_enc_var"].T
+                        converted_dict["var_encoder.bias"] = state_dict["b_enc_var"]
+                        
+                    state_dict = converted_dict
+            
+            config = VSAEGatedConfig(
+                activation_dim=activation_dim,
+                dict_size=dict_size,
+                var_flag=var_flag,
+                dtype=dtype,
+                device=device
+            )
         
         # Create model with detected parameters
-        autoencoder = cls(activation_dim, dict_size, var_flag=var_flag, device=device)
+        autoencoder = cls(config)
         
         # Filter state_dict to only include keys that are in the model
         model_keys = set(autoencoder.state_dict().keys())
@@ -257,17 +396,38 @@ class VSAEGatedAutoEncoder(Dictionary, nn.Module):
         if missing_keys:
             print(f"Warning: Missing keys in state_dict: {missing_keys}")
             # Initialize missing parameters to default values
-            # This is typically just needed for var_encoder when loading a var_flag=0 model as var_flag=1
             if var_flag == 1 and "var_encoder.weight" in missing_keys:
                 print("Initializing missing variance encoder parameters with default values")
-                # Set var_encoder to small random values
-                init.kaiming_uniform_(autoencoder.var_encoder.weight)
-                init.zeros_(autoencoder.var_encoder.bias)
+                with torch.no_grad():
+                    nn.init.kaiming_uniform_(autoencoder.var_encoder.weight)
+                    nn.init.zeros_(autoencoder.var_encoder.bias)
         
         if device is not None:
-            autoencoder.to(dtype=dtype, device=device)
+            autoencoder = autoencoder.to(dtype=dtype, device=device)
         
         return autoencoder
+
+
+class DeadFeatureTracker:
+    """Tracks dead features for resampling."""
+    
+    def __init__(self, dict_size: int, device: torch.device):
+        self.steps_since_active = torch.zeros(
+            dict_size, dtype=torch.long, device=device
+        )
+    
+    def update(self, active_features: torch.Tensor) -> torch.Tensor:
+        """Update dead feature tracking and return dead feature mask."""
+        # Update counters
+        deads = (active_features == 0).all(dim=0)
+        self.steps_since_active[deads] += 1
+        self.steps_since_active[~deads] = 0
+        
+        return self.steps_since_active
+    
+    def get_dead_mask(self, threshold: int) -> torch.Tensor:
+        """Get boolean mask of dead features."""
+        return self.steps_since_active > threshold
 
 
 class VSAEGatedAnnealTrainer(SAETrainer):
@@ -276,198 +436,165 @@ class VSAEGatedAnnealTrainer(SAETrainer):
     
     This trainer uses both variational techniques and p-norm annealing to achieve
     better feature learning and controlled sparsity.
-    
-    Args:
-        steps: Total number of training steps
-        activation_dim: Dimension of input activations
-        dict_size: Size of the learned dictionary
-        layer: Layer index in the model
-        lm_name: Language model name
-        dict_class: Dictionary class to use
-        lr: Learning rate
-        kl_coeff: KL divergence penalty coefficient
-        anneal_start: Step to start annealing p
-        anneal_end: Step to end annealing p
-        p_start: Initial p value
-        p_end: Final p value
-        var_flag: Variance flag (0: fixed, 1: learned)
-        sparsity_function: Type of sparsity function (Lp or Lp^p)
-        n_sparsity_updates: Number of sparsity updates during annealing
-        sparsity_queue_length: Length of sparsity queue for adaptive updates
-        warmup_steps: Learning rate warmup steps
-        sparsity_warmup_steps: Sparsity warmup steps
-        decay_start: Learning rate decay start step
-        resample_steps: Steps between neuron resampling
-        device: Device to use
-        seed: Random seed
-        wandb_name: W&B experiment name
     """
     
-    def __init__(self,
-                 steps: int,
-                 activation_dim: int,
-                 dict_size: int,
-                 layer: int,
-                 lm_name: str,
-                 dict_class=VSAEGatedAutoEncoder,
-                 lr: float = 5e-5,
-                 kl_coeff: float = 5e4,
-                 anneal_start: int = 15000,
-                 anneal_end: Optional[int] = None,
-                 p_start: float = 1,
-                 p_end: float = 0,
-                 var_flag: int = 0,
-                 sparsity_function: str = 'Lp^p',
-                 n_sparsity_updates: int | str = 10,
-                 sparsity_queue_length: int = 10,
-                 warmup_steps: int = 1000,
-                 sparsity_warmup_steps: Optional[int] = None,
-                 decay_start: Optional[int] = None,
-                 resample_steps: Optional[int] = None,
-                 device=None,
-                 seed: Optional[int] = 42,
-                 wandb_name: Optional[str] = 'VSAEGatedAnnealTrainer',
-                 submodule_name: Optional[str] = None,
+    def __init__(
+        self,
+        model_config: VSAEGatedConfig = None,
+        training_config: TrainingConfig = None,
+        annealing_config: AnnealingConfig = None,
+        layer: int = None,
+        lm_name: str = None,
+        submodule_name: Optional[str] = None,
+        wandb_name: Optional[str] = None,
+        seed: Optional[int] = None,
+        # Alternative parameters for backwards compatibility
+        steps: Optional[int] = None,
+        activation_dim: Optional[int] = None,
+        dict_size: Optional[int] = None,
+        lr: Optional[float] = None,
+        kl_coeff: Optional[float] = None,
+        var_flag: Optional[int] = None,
+        anneal_start: Optional[int] = None,
+        anneal_end: Optional[int] = None,
+        p_start: Optional[float] = None,
+        p_end: Optional[float] = None,
+        n_sparsity_updates: Optional[int] = None,
+        sparsity_function: Optional[str] = None,
+        device: Optional[str] = None,
+        **kwargs  # Catch any other parameters
     ):
         super().__init__(seed)
-
-        assert layer is not None and lm_name is not None
+        
+        # Handle backwards compatibility - if individual parameters are passed, create configs
+        if model_config is None or training_config is None or annealing_config is None:
+            # Create configs from individual parameters
+            if model_config is None:
+                if activation_dim is None or dict_size is None:
+                    raise ValueError("Must provide either model_config or activation_dim + dict_size")
+                
+                device_obj = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                
+                model_config = VSAEGatedConfig(
+                    activation_dim=activation_dim,
+                    dict_size=dict_size,
+                    var_flag=var_flag or 0,
+                    device=device_obj
+                )
+            
+            if training_config is None:
+                if steps is None:
+                    raise ValueError("Must provide either training_config or steps")
+                
+                training_config = TrainingConfig(
+                    steps=steps,
+                    lr=lr or 5e-4,
+                    kl_coeff=kl_coeff or 500.0,
+                )
+            
+            if annealing_config is None:
+                if anneal_start is None or anneal_end is None:
+                    raise ValueError("Must provide either annealing_config or anneal_start + anneal_end")
+                
+                annealing_config = AnnealingConfig(
+                    anneal_start=anneal_start,
+                    anneal_end=anneal_end,
+                    p_start=p_start or 1.0,
+                    p_end=p_end or 0.0,
+                    n_sparsity_updates=n_sparsity_updates or 10,
+                    sparsity_function=sparsity_function or 'Lp^p'
+                )
+        
+        self.model_config = model_config
+        self.training_config = training_config
+        self.annealing_config = annealing_config
         self.layer = layer
         self.lm_name = lm_name
         self.submodule_name = submodule_name
-        self.var_flag = var_flag
-
-        if seed is not None:
-            t.manual_seed(seed)
-            t.cuda.manual_seed_all(seed)
-
-        # Use the defaults from both methods if not specified
-        if sparsity_warmup_steps is None:
-            sparsity_warmup_steps = int(0.05 * steps)  # 5% of steps (from VSAE)
+        self.wandb_name = wandb_name or "VSAEGatedAnnealTrainer"
         
-        if decay_start is None:
-            decay_start = int(0.8 * steps)  # Start decay at 80% of training (from VSAE)
-            
-        anneal_end = anneal_end if anneal_end is not None else steps
-
-        # Initialize dictionary
-        self.activation_dim = activation_dim
-        self.dict_size = dict_size
-        
-        if device is None:
-            self.device = 'cuda' if t.cuda.is_available() else 'cpu'
-        else:
-            self.device = device
-            
-        self.ae = dict_class(
-            activation_dim=activation_dim, 
-            dict_size=dict_size, 
-            var_flag=var_flag,
-            device=self.device
+        # Set device
+        self.device = model_config.device or (
+            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
+        
+        # Initialize model
+        self.ae = VSAEGatedAutoEncoder(model_config)
         self.ae.to(self.device)
-
-        # Core parameters
-        self.lr = lr
-        self.kl_coeff = kl_coeff
-        self.warmup_steps = warmup_steps
-        self.sparsity_warmup_steps = sparsity_warmup_steps
-        self.steps = steps
-        self.decay_start = decay_start
-        self.wandb_name = wandb_name
         
-        # Annealing parameters
-        self.sparsity_function = sparsity_function
-        self.anneal_start = anneal_start
-        self.anneal_end = anneal_end
-        self.p_start = p_start
-        self.p_end = p_end
-        self.p = p_start  # p is set in self.loss()
-        self.next_p = None  # set in self.loss()
-        self.kl_loss = None  # set in self.loss()
-        self.scaled_kl_loss = None  # set in self.loss()
+        # Initialize annealing state
+        self.p = annealing_config.p_start
+        self.next_p = None
         
-        if n_sparsity_updates == "continuous":
-            self.n_sparsity_updates = self.anneal_end - anneal_start + 1
+        # Create annealing schedule - ensure we have the right number of steps
+        if annealing_config.n_sparsity_updates > 1:
+            self.sparsity_update_steps = torch.linspace(
+                annealing_config.anneal_start, 
+                annealing_config.anneal_end, 
+                annealing_config.n_sparsity_updates, 
+                dtype=torch.long
+            )
+            self.p_values = torch.linspace(
+                annealing_config.p_start, 
+                annealing_config.p_end, 
+                annealing_config.n_sparsity_updates
+            )
         else:
-            self.n_sparsity_updates = n_sparsity_updates
+            # Handle edge case where we only have 1 update
+            self.sparsity_update_steps = torch.tensor([annealing_config.anneal_start], dtype=torch.long)
+            self.p_values = torch.tensor([annealing_config.p_end])
             
-        self.sparsity_update_steps = t.linspace(anneal_start, self.anneal_end, self.n_sparsity_updates, dtype=int)
-        self.p_values = t.linspace(p_start, p_end, self.n_sparsity_updates)
         self.p_step_count = 0
-        self.sparsity_queue_length = sparsity_queue_length
         self.sparsity_queue = []
         
-        # Resampling for dead neurons
-        self.resample_steps = resample_steps
-        if self.resample_steps is not None:
-            # How many steps since each neuron was last activated?
-            self.steps_since_active = t.zeros(self.dict_size, dtype=int).to(self.device)
+        # Set the initial next_p if we have more than one update
+        if len(self.p_values) > 1:
+            self.next_p = self.p_values[1].item()
         else:
-            self.steps_since_active = None 
-
-        # Optimization setup
-        self.optimizer = ConstrainedAdam(self.ae.parameters(), self.ae.decoder.parameters(), lr=lr, betas=(0.9, 0.999))
+            self.next_p = annealing_config.p_end
         
-        lr_fn = get_lr_schedule(steps, warmup_steps, decay_start, resample_steps, sparsity_warmup_steps)
-        self.scheduler = t.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
+        # Initialize dead feature tracking
+        if training_config.resample_steps is not None:
+            self.dead_feature_tracker = DeadFeatureTracker(
+                model_config.dict_size,
+                self.device
+            )
+        else:
+            self.dead_feature_tracker = None
         
-        self.sparsity_warmup_fn = get_sparsity_warmup_fn(steps, sparsity_warmup_steps)
+        # Initialize optimizer and scheduler
+        self.optimizer = ConstrainedAdam(
+            self.ae.parameters(), 
+            self.ae.decoder.parameters(), 
+            lr=training_config.lr,
+            betas=(0.9, 0.999)
+        )
+        
+        lr_fn = get_lr_schedule(
+            training_config.steps,
+            training_config.warmup_steps,
+            training_config.decay_start,
+            training_config.resample_steps,
+            training_config.sparsity_warmup_steps
+        )
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
+        self.sparsity_warmup_fn = get_sparsity_warmup_fn(
+            training_config.steps, 
+            training_config.sparsity_warmup_steps
+        )
         
         # Logging parameters
         self.logging_parameters = ['p', 'next_p', 'kl_loss', 'scaled_kl_loss', 'kl_coeff']
+        self.kl_loss = None
+        self.scaled_kl_loss = None
+        self.kl_coeff = training_config.kl_coeff
         
-    def resample_neurons(self, deads, activations):
-        """
-        Resample dead neurons to prevent wasted capacity.
-        
-        Args:
-            deads: Boolean tensor indicating dead neurons
-            activations: Batch of activations to sample from
-        """
-        with t.no_grad():
-            if deads.sum() == 0: 
-                return
-                
-            print(f"Resampling {deads.sum().item()} neurons")
-
-            # Compute loss for each activation
-            losses = (activations - self.ae(activations)).norm(dim=-1)
-
-            # Sample input to create encoder/decoder weights from
-            n_resample = min([deads.sum(), losses.shape[0]])
-            indices = t.multinomial(losses, num_samples=n_resample, replacement=False)
-            sampled_vecs = activations[indices]
-
-            # Reset encoder/decoder weights for dead neurons
-            alive_norm = self.ae.encoder.weight[~deads].norm(dim=-1).mean()
-            
-            # Handle encoder and decoder weight resampling
-            self.ae.encoder.weight[deads][:n_resample] = sampled_vecs * alive_norm * 0.2
-            self.ae.decoder.weight[:,deads][:,:n_resample] = (sampled_vecs / sampled_vecs.norm(dim=-1, keepdim=True)).T
-            
-            # Reset biases
-            self.ae.gate_bias[deads][:n_resample] = 0.
-            self.ae.mag_bias[deads][:n_resample] = 0.
-
-            # Reset Adam parameters for dead neurons
-            state_dict = self.optimizer.state_dict()['state']
-            
-            for param_idx, param in enumerate(self.ae.parameters()):
-                if param_idx in state_dict and param.shape == self.ae.encoder.weight.shape:
-                    state_dict[param_idx]['exp_avg'][deads] = 0.
-                    state_dict[param_idx]['exp_avg_sq'][deads] = 0.
-                elif param_idx in state_dict and param.shape == self.ae.decoder.weight.shape:
-                    state_dict[param_idx]['exp_avg'][:,deads] = 0.
-                    state_dict[param_idx]['exp_avg_sq'][:,deads] = 0.
-                elif param_idx in state_dict and param.shape == self.ae.gate_bias.shape:
-                    state_dict[param_idx]['exp_avg'][deads] = 0.
-                    state_dict[param_idx]['exp_avg_sq'][deads] = 0.
-                elif param_idx in state_dict and param.shape == self.ae.mag_bias.shape:
-                    state_dict[param_idx]['exp_avg'][deads] = 0.
-                    state_dict[param_idx]['exp_avg_sq'][deads] = 0.
-    
-    def kl_divergence_p(self, mu, log_var=None, p=1.0):
+    def _compute_kl_divergence_p(
+        self, 
+        mu: torch.Tensor, 
+        log_var: Optional[torch.Tensor] = None, 
+        p: float = 1.0
+    ) -> torch.Tensor:
         """
         Calculate KL divergence with p-norm regularization.
         
@@ -485,21 +612,69 @@ class VSAEGatedAnnealTrainer(SAETrainer):
         if p == 2.0:
             # Standard KL divergence for VAE with Gaussian prior
             if log_var is not None:
-                kl = -0.5 * t.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1)
+                kl = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1)
             else:
                 kl = 0.5 * mu.pow(2).sum(dim=-1)
                 
             return kl.mean()
         else:
             # Modified p-norm version for sparsity
-            if self.sparsity_function == 'Lp^p':
+            if self.annealing_config.sparsity_function == 'Lp^p':
                 return mu.pow(p).sum(dim=-1).mean()
-            elif self.sparsity_function == 'Lp':
+            elif self.annealing_config.sparsity_function == 'Lp':
                 return mu.pow(p).sum(dim=-1).pow(1/p).mean()
             else:
                 raise ValueError("Sparsity function must be 'Lp' or 'Lp^p'")
+    
+    def _resample_neurons(self, dead_mask: torch.Tensor, activations: torch.Tensor) -> None:
+        """
+        Resample dead neurons to prevent wasted capacity.
         
-    def loss(self, x, step: int, logging=False, **kwargs):
+        Args:
+            dead_mask: Boolean tensor indicating dead neurons
+            activations: Batch of activations to sample from
+        """
+        with torch.no_grad():
+            if dead_mask.sum() == 0: 
+                return
+                
+            print(f"Resampling {dead_mask.sum().item()} neurons")
+
+            # Compute loss for each activation
+            losses = (activations - self.ae(activations)).norm(dim=-1)
+
+            # Sample input to create encoder/decoder weights from
+            n_resample = min([dead_mask.sum(), losses.shape[0]])
+            indices = torch.multinomial(losses, num_samples=n_resample, replacement=False)
+            sampled_vecs = activations[indices]
+
+            # Reset encoder/decoder weights for dead neurons
+            alive_norm = self.ae.encoder.weight[~dead_mask].norm(dim=-1).mean()
+            
+            # Handle encoder and decoder weight resampling
+            self.ae.encoder.weight[dead_mask][:n_resample] = sampled_vecs * alive_norm * 0.2
+            decoder_dtype = self.ae.decoder.weight.dtype
+            normalized_vecs = (sampled_vecs / sampled_vecs.norm(dim=-1, keepdim=True)).T
+            self.ae.decoder.weight[:,dead_mask][:,:n_resample] = normalized_vecs.to(dtype=decoder_dtype)
+            
+            # Reset biases
+            self.ae.gate_bias[dead_mask][:n_resample] = 0.
+            self.ae.mag_bias[dead_mask][:n_resample] = 0.
+
+            # Reset Adam parameters for dead neurons
+            state_dict = self.optimizer.state_dict()['state']
+            
+            # Reset for encoder weight (parameter index 1)
+            if 1 in state_dict:
+                state_dict[1]['exp_avg'][dead_mask] = 0.
+                state_dict[1]['exp_avg_sq'][dead_mask] = 0.
+            
+            # Reset for decoder weight (parameter index 3) 
+            if 3 in state_dict:
+                state_dict[3]['exp_avg'][:,dead_mask] = 0.
+                state_dict[3]['exp_avg_sq'][:,dead_mask] = 0.
+    
+    def loss(self, x: torch.Tensor, step: int, logging: bool = False) -> torch.Tensor:
         """
         Calculate loss for the VSAE with p-annealing.
         
@@ -513,8 +688,11 @@ class VSAEGatedAnnealTrainer(SAETrainer):
         """
         sparsity_scale = self.sparsity_warmup_fn(step)
         
+        # Store original dtype for final output
+        original_dtype = x.dtype
+        
         # Handle variational encoding
-        if self.var_flag == 1:
+        if self.model_config.var_flag == 1:
             # Encode with variance
             mu, gate, log_var = self.ae.encode(x, return_gate=True, return_log_var=True)
             # Sample from the latent distribution
@@ -539,6 +717,10 @@ class VSAEGatedAnnealTrainer(SAETrainer):
             # Feature activations for sparsity
             fs = gate
         
+        # Ensure outputs match original dtype
+        x_hat = x_hat.to(dtype=original_dtype)
+        x_hat_gate = x_hat_gate.to(dtype=original_dtype)
+        
         # Reconstruction loss
         recon_loss = (x - x_hat).pow(2).sum(dim=-1).mean()
         
@@ -546,53 +728,60 @@ class VSAEGatedAnnealTrainer(SAETrainer):
         aux_loss = (x - x_hat_gate).pow(2).sum(dim=-1).mean()
         
         # KL divergence with p-annealing
-        if self.var_flag == 1:
-            kl_loss = self.kl_divergence_p(fs, log_var, self.p)
+        if self.model_config.var_flag == 1:
+            kl_loss = self._compute_kl_divergence_p(fs, log_var, self.p)
         else:
-            kl_loss = self.kl_divergence_p(fs, None, self.p)
+            kl_loss = self._compute_kl_divergence_p(fs, None, self.p)
             
         # Apply decoder norm scaling for better regularization
         decoder_norms = self.ae.decoder.weight.norm(p=2, dim=0)
         scaled_kl_loss = (kl_loss * decoder_norms.mean()) * self.kl_coeff * sparsity_scale
         
+        # Store for logging
         self.kl_loss = kl_loss
         self.scaled_kl_loss = scaled_kl_loss
 
         # P-annealing handling
         if self.next_p is not None:
-            if self.var_flag == 1:
-                kl_next = self.kl_divergence_p(fs, log_var, self.next_p)
+            if self.model_config.var_flag == 1:
+                kl_next = self._compute_kl_divergence_p(fs, log_var, self.next_p)
             else:
-                kl_next = self.kl_divergence_p(fs, None, self.next_p)
+                kl_next = self._compute_kl_divergence_p(fs, None, self.next_p)
                 
             self.sparsity_queue.append([self.kl_loss.item(), kl_next.item()])
-            self.sparsity_queue = self.sparsity_queue[-self.sparsity_queue_length:]
+            self.sparsity_queue = self.sparsity_queue[-self.annealing_config.sparsity_queue_length:]
     
         # Update p-value at scheduled steps
-        if step in self.sparsity_update_steps:
+        if step in self.sparsity_update_steps and self.p_step_count < len(self.sparsity_update_steps):
             # Check to make sure we don't update on repeat step
             if step >= self.sparsity_update_steps[self.p_step_count]:
                 # Adapt KL coefficient
                 if self.next_p is not None and len(self.sparsity_queue) > 0:
-                    local_sparsity_new = t.tensor([i[0] for i in self.sparsity_queue]).mean()
-                    local_sparsity_old = t.tensor([i[1] for i in self.sparsity_queue]).mean()
+                    local_sparsity_new = torch.tensor([i[0] for i in self.sparsity_queue]).mean()
+                    local_sparsity_old = torch.tensor([i[1] for i in self.sparsity_queue]).mean()
                     if local_sparsity_old > 0:  # Avoid division by zero
                         self.kl_coeff = self.kl_coeff * (local_sparsity_new / local_sparsity_old).item()
                 
-                # Update p
-                self.p = self.p_values[self.p_step_count].item()
-                if self.p_step_count < self.n_sparsity_updates-1:
-                    self.next_p = self.p_values[self.p_step_count+1].item()
-                else:
-                    self.next_p = self.p_end
-                self.p_step_count += 1
+                # Update p only if we haven't exceeded the number of updates
+                if self.p_step_count < len(self.p_values):
+                    self.p = self.p_values[self.p_step_count].item()
+                    
+                    # Set next_p for the queue
+                    if self.p_step_count < len(self.p_values) - 1:
+                        self.next_p = self.p_values[self.p_step_count + 1].item()
+                    else:
+                        self.next_p = self.annealing_config.p_end
+                        
+                    self.p_step_count += 1
 
         # Update dead feature count
-        if self.steps_since_active is not None:
-            # Update steps_since_active
-            deads = (z == 0).all(dim=0)
-            self.steps_since_active[deads] += 1
-            self.steps_since_active[~deads] = 0       
+        if self.dead_feature_tracker is not None:
+            self.dead_feature_tracker.update(z)
+            
+        # Convert loss components to original dtype
+        recon_loss = recon_loss.to(dtype=original_dtype)
+        aux_loss = aux_loss.to(dtype=original_dtype)
+        scaled_kl_loss = scaled_kl_loss.to(dtype=original_dtype)
             
         # Total loss
         loss = recon_loss + scaled_kl_loss + aux_loss
@@ -614,7 +803,7 @@ class VSAEGatedAnnealTrainer(SAETrainer):
                 }
             )
         
-    def update(self, step, activations):
+    def update(self, step: int, activations: torch.Tensor) -> None:
         """
         Update the model parameters for one step.
         
@@ -629,44 +818,57 @@ class VSAEGatedAnnealTrainer(SAETrainer):
         loss.backward()
         
         # Apply gradient clipping (recommended for stability)
-        t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(
+            self.ae.parameters(), 
+            self.training_config.gradient_clip_norm
+        )
         
         self.optimizer.step()
         self.scheduler.step()
 
         # Resample dead neurons if needed
-        if self.resample_steps is not None and step % self.resample_steps == self.resample_steps - 1:
-            self.resample_neurons(self.steps_since_active > self.resample_steps / 2, activations)
+        if (self.training_config.resample_steps is not None and 
+            step % self.training_config.resample_steps == self.training_config.resample_steps - 1 and
+            self.dead_feature_tracker is not None):
+            
+            dead_mask = self.dead_feature_tracker.get_dead_mask(self.training_config.resample_steps // 2)
+            self._resample_neurons(dead_mask, activations)
 
     @property
-    def config(self):
+    def config(self) -> Dict[str, Any]:
         """
-        Return the configuration of this trainer.
+        Return the configuration of this trainer (JSON serializable).
         """
         return {
             'dict_class': 'VSAEGatedAutoEncoder',
             'trainer_class': 'VSAEGatedAnnealTrainer',
-            'activation_dim': self.activation_dim,
-            'dict_size': self.dict_size,
-            'lr': self.lr,
-            'kl_coeff': self.kl_coeff,
-            'sparsity_function': self.sparsity_function,
-            'p_start': self.p_start,
-            'p_end': self.p_end,
-            'var_flag': self.var_flag,
-            'anneal_start': self.anneal_start,
-            'anneal_end': self.anneal_end,
-            'sparsity_queue_length': self.sparsity_queue_length,
-            'n_sparsity_updates': self.n_sparsity_updates,
-            'warmup_steps': self.warmup_steps,
-            'sparsity_warmup_steps': self.sparsity_warmup_steps,
-            'resample_steps': self.resample_steps,
-            'decay_start': self.decay_start,
-            'steps': self.steps,
-            'seed': self.seed,
-            'device': self.device,
+            # Model config (serializable)
+            'activation_dim': self.model_config.activation_dim,
+            'dict_size': self.model_config.dict_size,
+            'var_flag': self.model_config.var_flag,
+            'dtype': str(self.model_config.dtype),
+            'device': str(self.model_config.device),
+            # Training config (serializable)
+            'steps': self.training_config.steps,
+            'lr': self.training_config.lr,
+            'kl_coeff': self.training_config.kl_coeff,
+            'warmup_steps': self.training_config.warmup_steps,
+            'sparsity_warmup_steps': self.training_config.sparsity_warmup_steps,
+            'decay_start': self.training_config.decay_start,
+            'resample_steps': self.training_config.resample_steps,
+            'gradient_clip_norm': self.training_config.gradient_clip_norm,
+            # Annealing config (serializable)
+            'anneal_start': self.annealing_config.anneal_start,
+            'anneal_end': self.annealing_config.anneal_end,
+            'p_start': self.annealing_config.p_start,
+            'p_end': self.annealing_config.p_end,
+            'n_sparsity_updates': self.annealing_config.n_sparsity_updates,
+            'sparsity_function': self.annealing_config.sparsity_function,
+            'sparsity_queue_length': self.annealing_config.sparsity_queue_length,
+            # Other attributes
             'layer': self.layer,
             'lm_name': self.lm_name,
             'wandb_name': self.wandb_name,
             'submodule_name': self.submodule_name,
+            'seed': self.seed,
         }
