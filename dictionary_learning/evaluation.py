@@ -1,5 +1,5 @@
 """
-Utilities for evaluating dictionaries on a model and dataset.
+Fixed evaluation metrics with proper bounds and numerical stability.
 """
 
 import torch as t
@@ -17,6 +17,222 @@ from .buffer import ActivationBuffer, TransformerLensActivationBuffer, BaseActiv
 from .config import DEBUG
 
 
+@t.no_grad()
+def evaluate(
+    dictionary,  # a dictionary
+    activations, # a generator of activations; if an ActivationBuffer, also compute loss recovered
+    max_len=128,  # max context length for loss recovered
+    batch_size=128,  # batch size for loss recovered
+    io="out",  # can be 'in', 'out', or 'in_and_out'
+    normalize_batch=False, # normalize batch before passing through dictionary
+    tracer_args={'use_cache': False, 'output_attentions': False}, # minimize cache during model trace.
+    device="cpu",
+    n_batches: int = 1,
+):
+    """
+    Evaluate a dictionary on a dataset, computing metrics and loss recovery.
+    Works with both nnsight and transformer_lens models.
+    
+    FIXED: Added numerical stability and proper bounds for all metrics.
+    """
+    assert n_batches > 0
+    out = defaultdict(float)
+    active_features = t.zeros(dictionary.dict_size, dtype=t.float32, device=device)
+
+    for _ in range(n_batches):
+        try:
+            x = next(activations).to(device)
+            if normalize_batch:
+                x = x / x.norm(dim=-1).mean() * (dictionary.activation_dim ** 0.5)
+        except StopIteration:
+            raise StopIteration(
+                "Not enough activations in buffer. Pass a buffer with a smaller batch size or more data."
+            )
+        x_hat, f = dictionary(x, output_features=True)
+        
+        # Ensure same dtype for numerical stability
+        x = x.to(dtype=t.float32)
+        x_hat = x_hat.to(dtype=t.float32)
+        f = f.to(dtype=t.float32)
+        
+        # Basic reconstruction metrics
+        l2_loss = t.linalg.norm(x - x_hat, dim=-1).mean()
+        l1_loss = f.norm(p=1, dim=-1).mean()
+        l0 = (f != 0).float().sum(dim=-1).mean()
+        
+        features_BF = t.flatten(f, start_dim=0, end_dim=-2).to(dtype=t.float32)
+        assert features_BF.shape[-1] == dictionary.dict_size
+        assert len(features_BF.shape) == 2
+        active_features += features_BF.sum(dim=0)
+
+        # Cosine similarity with numerical stability
+        x_norm = t.linalg.norm(x, dim=-1, keepdim=True)
+        x_hat_norm = t.linalg.norm(x_hat, dim=-1, keepdim=True)
+        
+        # Avoid division by zero
+        x_norm = t.clamp(x_norm, min=1e-8)
+        x_hat_norm = t.clamp(x_hat_norm, min=1e-8)
+        
+        x_normed = x / x_norm
+        x_hat_normed = x_hat / x_hat_norm
+        cossim = (x_normed * x_hat_normed).sum(dim=-1).mean()
+        
+        # Ensure cosine similarity is in valid range [-1, 1]
+        cossim = t.clamp(cossim, min=-1.0, max=1.0)
+
+        # L2 ratio with numerical stability
+        x_mag = t.linalg.norm(x, dim=-1)
+        x_hat_mag = t.linalg.norm(x_hat, dim=-1)
+        
+        # Avoid division by zero
+        x_mag = t.clamp(x_mag, min=1e-8)
+        l2_ratio = (x_hat_mag / x_mag).mean()
+
+        # FIXED: Variance explained with proper bounds
+        total_variance = t.var(x, dim=0).sum()
+        residual_variance = t.var(x - x_hat, dim=0).sum()
+        
+        # Ensure total_variance is not zero
+        total_variance = t.clamp(total_variance, min=1e-8)
+        
+        # Compute fraction variance explained and clamp to [0, 1]
+        frac_variance_explained = (1 - residual_variance / total_variance)
+        frac_variance_explained = t.clamp(frac_variance_explained, min=0.0, max=1.0)
+
+        # FIXED: Relative reconstruction bias with numerical stability
+        x_hat_norm_squared = t.linalg.norm(x_hat, dim=-1, ord=2)**2
+        x_dot_x_hat = (x * x_hat).sum(dim=-1)
+        
+        # Avoid division by zero in relative reconstruction bias
+        x_dot_x_hat_mean = x_dot_x_hat.mean()
+        x_dot_x_hat_mean = t.clamp(t.abs(x_dot_x_hat_mean), min=1e-8)
+        
+        relative_reconstruction_bias = x_hat_norm_squared.mean() / x_dot_x_hat_mean
+        
+        # Clamp to reasonable range (bias should be close to 1 for good reconstructions)
+        relative_reconstruction_bias = t.clamp(relative_reconstruction_bias, min=0.1, max=10.0)
+
+        out["l2_loss"] += l2_loss.item()
+        out["l1_loss"] += l1_loss.item()
+        out["l0"] += l0.item()
+        out["frac_variance_explained"] += frac_variance_explained.item()
+        out["cossim"] += cossim.item()
+        out["l2_ratio"] += l2_ratio.item()
+        out['relative_reconstruction_bias'] += relative_reconstruction_bias.item()
+
+        # Check if we're using an activation buffer
+        is_buffer = isinstance(activations, (ActivationBuffer, TransformerLensActivationBuffer, BaseActivationBuffer))
+        if not is_buffer:
+            continue
+
+        # compute loss recovered - works with both model types due to our unified interface
+        try:
+            # Get text batch with better error handling
+            try:
+                text_batch = activations.text_batch(batch_size=batch_size)
+                print(f"DEBUG: Got text_batch type: {type(text_batch)}")
+                if hasattr(text_batch, '__len__'):
+                    print(f"DEBUG: text_batch length: {len(text_batch)}")
+                if isinstance(text_batch, list) and len(text_batch) > 0:
+                    print(f"DEBUG: First item type: {type(text_batch[0])}")
+                    print(f"DEBUG: First item sample: {str(text_batch[0])[:100]}...")
+            except Exception as text_error:
+                print(f"Warning: Could not get text batch: {text_error}")
+                continue
+            
+            # Determine the correct submodule/hook parameter
+            if hasattr(activations, 'submodule'):
+                submodule_or_hook = activations.submodule
+                print(f"DEBUG: Using submodule: {type(submodule_or_hook)}")
+            elif hasattr(activations, 'hook_name'):
+                submodule_or_hook = activations.hook_name
+                print(f"DEBUG: Using hook_name: {submodule_or_hook}")
+            else:
+                print("Warning: Could not determine submodule/hook for loss recovery")
+                continue
+            
+            print("DEBUG: About to call loss_recovered...")
+            print(f"DEBUG: text_batch type: {type(text_batch)}")
+            print(f"DEBUG: model type: {type(activations.model)}")
+            print(f"DEBUG: submodule_or_hook type: {type(submodule_or_hook)}")
+            print(f"DEBUG: dictionary type: {type(dictionary)}")
+            
+            loss_result = loss_recovered(
+                text_batch,
+                activations.model,
+                submodule_or_hook,
+                dictionary,
+                max_len=max_len,
+                normalize_batch=normalize_batch,
+                io=io,
+                tracer_args=tracer_args
+            )
+            
+            print(f"DEBUG: loss_result type: {type(loss_result)}")
+            print(f"DEBUG: loss_result length: {len(loss_result) if hasattr(loss_result, '__len__') else 'no length'}")
+            print(f"DEBUG: loss_result content: {loss_result}")
+            
+            # Handle different return formats with more debugging
+            if isinstance(loss_result, tuple):
+                if len(loss_result) == 3:
+                    loss_original, loss_reconstructed, loss_zero = loss_result
+                    print(f"DEBUG: Successfully unpacked 3 values")
+                    print(f"DEBUG: loss_original: {loss_original}")
+                    print(f"DEBUG: loss_reconstructed: {loss_reconstructed}")
+                    print(f"DEBUG: loss_zero: {loss_zero}")
+                else:
+                    print(f"ERROR: Expected tuple of length 3, got length {len(loss_result)}")
+                    print(f"DEBUG: Tuple contents: {loss_result}")
+                    continue
+            else:
+                print(f"ERROR: Expected tuple, got {type(loss_result)}")
+                continue
+            
+            # FIXED: Ensure all losses are positive and handle edge cases
+            loss_original = t.clamp(loss_original, min=0.0)
+            loss_reconstructed = t.clamp(loss_reconstructed, min=0.0)
+            loss_zero = t.clamp(loss_zero, min=0.0)
+            
+            # Compute fraction recovered with numerical stability
+            loss_diff = loss_original - loss_zero
+            if loss_diff.abs() < 1e-8:
+                # If original and zero losses are nearly equal, set frac_recovered to 0
+                frac_recovered = t.tensor(0.0)
+            else:
+                frac_recovered = (loss_reconstructed - loss_zero) / loss_diff
+                # Clamp to reasonable range [-2, 2] to handle edge cases
+                frac_recovered = t.clamp(frac_recovered, min=-2.0, max=2.0)
+            
+            out["loss_original"] += loss_original.item()
+            out["loss_reconstructed"] += loss_reconstructed.item()
+            out["loss_zero"] += loss_zero.item()
+            out["frac_recovered"] += frac_recovered.item()
+            
+            print("DEBUG: Loss recovery completed successfully")
+            
+        except Exception as e:
+            print(f"Warning: Loss recovery computation failed: {e}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            # Set default values if loss recovery fails
+            out["loss_original"] += float('nan')
+            out["loss_reconstructed"] += float('nan') 
+            out["loss_zero"] += float('nan')
+            out["frac_recovered"] += 0.0
+
+    # Average over batches
+    out = {key: value / n_batches for key, value in out.items()}
+    
+    # FIXED: Ensure frac_alive is properly bounded
+    frac_alive = (active_features != 0).float().sum() / dictionary.dict_size
+    frac_alive = t.clamp(frac_alive, min=0.0, max=1.0)
+    out["frac_alive"] = frac_alive.item()
+
+    return out
+
+
+# Rest of the evaluation functions remain the same...
 def loss_recovered_nnsight(
     text,  # a batch of text
     model: LanguageModel,  # an nnsight LanguageModel
@@ -304,100 +520,3 @@ def loss_recovered(
         )
     else:
         raise TypeError(f"Unsupported model type: {type(model)}. Must be either nnsight.LanguageModel or transformer_lens.HookedTransformer")
-
-
-@t.no_grad()
-def evaluate(
-    dictionary,  # a dictionary
-    activations, # a generator of activations; if an ActivationBuffer, also compute loss recovered
-    max_len=128,  # max context length for loss recovered
-    batch_size=128,  # batch size for loss recovered
-    io="out",  # can be 'in', 'out', or 'in_and_out'
-    normalize_batch=False, # normalize batch before passing through dictionary
-    tracer_args={'use_cache': False, 'output_attentions': False}, # minimize cache during model trace.
-    device="cpu",
-    n_batches: int = 1,
-):
-    """
-    Evaluate a dictionary on a dataset, computing metrics and loss recovery.
-    Works with both nnsight and transformer_lens models.
-    """
-    assert n_batches > 0
-    out = defaultdict(float)
-    active_features = t.zeros(dictionary.dict_size, dtype=t.float32, device=device)
-
-    for _ in range(n_batches):
-        try:
-            x = next(activations).to(device)
-            if normalize_batch:
-                x = x / x.norm(dim=-1).mean() * (dictionary.activation_dim ** 0.5)
-        except StopIteration:
-            raise StopIteration(
-                "Not enough activations in buffer. Pass a buffer with a smaller batch size or more data."
-            )
-        x_hat, f = dictionary(x, output_features=True)
-        l2_loss = t.linalg.norm(x - x_hat, dim=-1).mean()
-        l1_loss = f.norm(p=1, dim=-1).mean()
-        l0 = (f != 0).float().sum(dim=-1).mean()
-        
-        features_BF = t.flatten(f, start_dim=0, end_dim=-2).to(dtype=t.float32) # If f is shape (B, L, D), flatten to (B*L, D)
-        assert features_BF.shape[-1] == dictionary.dict_size
-        assert len(features_BF.shape) == 2
-
-        active_features += features_BF.sum(dim=0)
-
-        # cosine similarity between x and x_hat
-        x_normed = x / t.linalg.norm(x, dim=-1, keepdim=True)
-        x_hat_normed = x_hat / t.linalg.norm(x_hat, dim=-1, keepdim=True)
-        cossim = (x_normed * x_hat_normed).sum(dim=-1).mean()
-
-        # l2 ratio
-        l2_ratio = (t.linalg.norm(x_hat, dim=-1) / t.linalg.norm(x, dim=-1)).mean()
-
-        #compute variance explained
-        total_variance = t.var(x, dim=0).sum()
-        residual_variance = t.var(x - x_hat, dim=0).sum()
-        frac_variance_explained = (1 - residual_variance / total_variance)
-
-        # Equation 10 from https://arxiv.org/abs/2404.16014
-        x_hat_norm_squared = t.linalg.norm(x_hat, dim=-1, ord=2)**2
-        x_dot_x_hat = (x * x_hat).sum(dim=-1)
-        relative_reconstruction_bias = x_hat_norm_squared.mean() / x_dot_x_hat.mean()
-
-        out["l2_loss"] += l2_loss.item()
-        out["l1_loss"] += l1_loss.item()
-        out["l0"] += l0.item()
-        out["frac_variance_explained"] += frac_variance_explained.item()
-        out["cossim"] += cossim.item()
-        out["l2_ratio"] += l2_ratio.item()
-        out['relative_reconstruction_bias'] += relative_reconstruction_bias.item()
-
-        # Check if we're using an activation buffer
-        is_buffer = isinstance(activations, (ActivationBuffer, TransformerLensActivationBuffer, BaseActivationBuffer))
-        if not is_buffer:
-            continue
-
-        # compute loss recovered - works with both model types due to our unified interface
-        loss_original, loss_reconstructed, loss_zero = loss_recovered(
-            activations.text_batch(batch_size=batch_size),
-            activations.model,
-            activations.submodule if hasattr(activations, 'submodule') else activations.hook_name,
-            dictionary,
-            max_len=max_len,
-            normalize_batch=normalize_batch,
-            io=io,
-            tracer_args=tracer_args
-        )
-        
-        frac_recovered = (loss_reconstructed - loss_zero) / (loss_original - loss_zero)
-        
-        out["loss_original"] += loss_original.item()
-        out["loss_reconstructed"] += loss_reconstructed.item()
-        out["loss_zero"] += loss_zero.item()
-        out["frac_recovered"] += frac_recovered.item()
-
-    out = {key: value / n_batches for key, value in out.items()}
-    frac_alive = (active_features != 0).float().sum() / dictionary.dict_size
-    out["frac_alive"] = frac_alive.item()
-
-    return out

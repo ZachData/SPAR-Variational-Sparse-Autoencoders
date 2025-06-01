@@ -107,7 +107,6 @@ def get_norm_factor(data, steps: int) -> float:
     
     return norm_factor
 
-
 def trainSAE(
     data,
     trainer_configs: list[dict],

@@ -18,6 +18,7 @@ from .trainers.vsae_jump_relu import VSAEJumpReLU
 from .trainers.vsae_matryoshka import MatryoshkaVSAEIso
 from .trainers.vsae_panneal import VSAEPAnneal
 from .trainers.vsae_topk import VSAETopK
+from .trainers.vsae_priors import VSAEPriorsGaussian
 from .dictionary import (
     AutoEncoder,
     GatedAutoEncoder,
@@ -134,7 +135,6 @@ def load_dictionary(base_path: str, device: str) -> tuple:
             constrain_decoder=constrain_decoder,
             device=device
         )
-
     elif dict_class == "VSAEGated":
         # Get parameters from config
         var_flag = config["trainer"].get("var_flag", 1)
@@ -151,17 +151,19 @@ def load_dictionary(base_path: str, device: str) -> tuple:
             var_flag=var_flag,
             device=device
         )
-
     elif dict_class == "VSAEJumpReLU":
+        # Get parameters from config
+        var_flag = config["trainer"].get("var_flag", 0)
+        bandwidth = config["trainer"].get("bandwidth", 0.001)
         dictionary = VSAEJumpReLU.from_pretrained(
-            ae_path,
+            ae_path, 
+            var_flag=var_flag,
+            bandwidth=bandwidth,
             device=device
         )
-
     elif dict_class == "MatryoshkaBatchTopKSAE":
         k = config["trainer"]["k"]
         dictionary = MatryoshkaBatchTopKSAE.from_pretrained(ae_path, k=k, device=device)
-
     elif dict_class == "VSAEPAnneal":
         # Get parameters from config
         var_flag = config["trainer"].get("var_flag", 0)
@@ -172,7 +174,34 @@ def load_dictionary(base_path: str, device: str) -> tuple:
         )
     elif dict_class == "VSAETopK":
         k = config["trainer"]["k"]
-        dictionary = VSAETopK.from_pretrained(ae_path, device=device)   
+        dictionary = VSAETopK.from_pretrained(ae_path, device=device)
+    # ADD THIS NEW CASE FOR VSAEPriorsGaussian:
+    elif dict_class == "VSAEPriorsGaussian":
+        # VSAEPriors has complex configuration, so we'll reconstruct it from the trainer config
+        from .trainers.vsae_priors import VSAEPriorsConfig
+        
+        # Extract configuration from trainer config
+        trainer_config = config["trainer"]
+        
+        # Create VSAEPriorsConfig from saved parameters
+        vsae_config = VSAEPriorsConfig(
+            activation_dim=trainer_config["activation_dim"],
+            dict_size=trainer_config["dict_size"],
+            prior_types=trainer_config.get("prior_types", ["gaussian"]),
+            prior_assignment_strategy=trainer_config.get("prior_assignment_strategy", "single"),
+            prior_proportions=trainer_config.get("prior_proportions", None),
+            prior_params=trainer_config.get("prior_params", {}),
+            var_flag=trainer_config.get("var_flag", 0),
+            use_april_update_mode=trainer_config.get("use_april_update_mode", True),
+            log_var_init=trainer_config.get("log_var_init", -2.0),
+            device=device
+        )
+        
+        dictionary = VSAEPriorsGaussian.from_pretrained(
+            ae_path, 
+            config=vsae_config,
+            device=device
+        )
     else:
         raise ValueError(f"Dictionary class {dict_class} not supported")
 

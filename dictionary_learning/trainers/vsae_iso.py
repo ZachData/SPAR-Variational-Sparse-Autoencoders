@@ -1,15 +1,12 @@
 """
-Improved implementation of Variational Sparse Autoencoder with isotropic Gaussian prior.
-
-This module provides a robust implementation following modern PyTorch best practices,
-with better error handling, cleaner architecture, and improved memory management.
+VSAEIso implementation
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, Callable
 from collections import namedtuple
 from dataclasses import dataclass
 
@@ -30,6 +27,7 @@ class VSAEIsoConfig:
     use_april_update_mode: bool = True
     dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
+    log_var_init: float = -2.0  # Initialize log_var around exp(-2) ≈ 0.135 variance
     
     def get_device(self) -> torch.device:
         """Get the device, defaulting to CUDA if available."""
@@ -40,14 +38,12 @@ class VSAEIsoConfig:
 
 class VSAEIsoGaussian(Dictionary, nn.Module):
     """
-    Improved Variational Sparse Autoencoder with isotropic Gaussian prior.
-    
-    Features:
-    - Clean separation between fixed and learned variance modes
-    - Proper dtype and device management
-    - Better memory efficiency
-    - Robust error handling
-    - Cleaner forward pass logic
+    improvements:
+    - Unconstrained mean encoding (no ReLU)
+    - Consistent log_var = log(σ²) interpretation throughout
+    - Conservative clamping ranges
+    - Proper separation of KL and sparsity scaling
+    - Clean architecture without unnecessary complications
     """
 
     def __init__(self, config: VSAEIsoConfig):
@@ -64,21 +60,24 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
     
     def _init_layers(self) -> None:
         """Initialize neural network layers with proper configuration."""
+        device = self.config.get_device()
+        dtype = self.config.dtype
+        
         # Main encoder and decoder
         self.encoder = nn.Linear(
             self.activation_dim,
             self.dict_size,
             bias=True,
-            dtype=self.config.dtype,
-            device=self.config.get_device()
+            dtype=dtype,
+            device=device
         )
         
         self.decoder = nn.Linear(
             self.dict_size,
             self.activation_dim,
             bias=self.use_april_update_mode,
-            dtype=self.config.dtype,
-            device=self.config.get_device()
+            dtype=dtype,
+            device=device
         )
         
         # Bias parameter for standard mode
@@ -86,8 +85,8 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
             self.bias = nn.Parameter(
                 torch.zeros(
                     self.activation_dim,
-                    dtype=self.config.dtype,
-                    device=self.config.get_device()
+                    dtype=dtype,
+                    device=device
                 )
             )
         
@@ -97,19 +96,21 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
                 self.activation_dim,
                 self.dict_size,
                 bias=True,
-                dtype=self.config.dtype,
-                device=self.config.get_device()
+                dtype=dtype,
+                device=device
             )
+            # REMOVED: No layer norm - let model learn input-dependent variance naturally
     
     def _init_weights(self) -> None:
         """Initialize model weights following best practices."""
         device = self.config.get_device()
+        dtype = self.config.dtype
         
         # Tied initialization for encoder and decoder
         w = torch.randn(
             self.activation_dim,
             self.dict_size,
-            dtype=self.config.dtype,
+            dtype=dtype,
             device=device
         )
         w = w / w.norm(dim=0, keepdim=True) * 0.1
@@ -128,8 +129,12 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
             
             # Initialize variance encoder if present
             if self.var_flag == 1:
-                nn.init.kaiming_uniform_(self.var_encoder.weight)
-                nn.init.zeros_(self.var_encoder.bias)
+                # Initialize variance encoder weights
+                nn.init.kaiming_uniform_(self.var_encoder.weight, a=0.01)
+                
+                # Initialize log_var bias to reasonable value
+                # log_var = log(σ²), so log_var = -2 means σ² ≈ 0.135
+                nn.init.constant_(self.var_encoder.bias, self.config.log_var_init)
     
     def _preprocess_input(self, x: torch.Tensor) -> torch.Tensor:
         """Preprocess input to handle bias subtraction in standard mode."""
@@ -145,32 +150,37 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
         """
         Encode input to latent space.
         
+        FIXED: No ReLU on mean - VAE means should be unconstrained for expressiveness
+        
         Args:
             x: Input activations [batch_size, activation_dim]
             
         Returns:
-            mu: Mean of latent distribution [batch_size, dict_size]
+            mu: Mean of latent distribution [batch_size, dict_size] (unconstrained)
             log_var: Log variance (None if var_flag=0) [batch_size, dict_size]
         """
         x_processed = self._preprocess_input(x)
         
-        # Encode mean
-        mu = F.relu(self.encoder(x_processed))
+        # FIXED: No ReLU constraint on mean - let it be unconstrained
+        mu = self.encoder(x_processed)
         
         # Encode variance if learning it
         log_var = None
         if self.var_flag == 1:
-            log_var = F.relu(self.var_encoder(x_processed))
+            # FIXED: No layer norm - direct encoding of log variance
+            log_var = self.var_encoder(x_processed)
         
         return mu, log_var
     
     def reparameterize(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
         """
-        Apply reparameterization trick for sampling from latent distribution.
+        Apply reparameterization trick with consistent log_var = log(σ²) interpretation.
+        
+        FIXED: Consistent interpretation where log_var = log(σ²) throughout
         
         Args:
             mu: Mean of latent distribution
-            log_var: Log variance (None for fixed variance)
+            log_var: Log variance = log(σ²) (None for fixed variance)
             
         Returns:
             z: Sampled latent features
@@ -178,8 +188,17 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
         if log_var is None or self.var_flag == 0:
             return mu
         
-        std = torch.exp(0.5 * log_var)
+        # FIXED: More conservative clamping range
+        # log_var ∈ [-6, 2] means σ² ∈ [0.002, 7.4] - reasonable range
+        log_var_clamped = torch.clamp(log_var, min=-6.0, max=2.0)
+        
+        # Since log_var = log(σ²), we have σ = sqrt(exp(log_var)) = sqrt(σ²)
+        std = torch.sqrt(torch.exp(log_var_clamped))
+        
+        # Sample noise
         eps = torch.randn_like(std)
+        
+        # Reparameterize
         z = mu + eps * std
         
         return z.to(dtype=mu.dtype)
@@ -237,6 +256,45 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
             z = z.to(dtype=original_dtype)
             return x_hat, z
         return x_hat
+    
+    def get_kl_diagnostics(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Get detailed KL diagnostics for monitoring training.
+        
+        Returns:
+            Dictionary with KL components and statistics
+        """
+        with torch.no_grad():
+            mu, log_var = self.encode(x)
+            
+            if self.var_flag == 1 and log_var is not None:
+                log_var_safe = torch.clamp(log_var, -6, 2)
+                var = torch.exp(log_var_safe)  # σ²
+                
+                kl_mu = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
+                kl_var = 0.5 * torch.sum(var - 1 - log_var_safe, dim=1).mean()
+                kl_total = kl_mu + kl_var
+                
+                return {
+                    'kl_total': kl_total,
+                    'kl_mu_term': kl_mu,
+                    'kl_var_term': kl_var,
+                    'mean_log_var': log_var.mean(),
+                    'mean_var': var.mean(),
+                    'mean_mu': mu.mean(),
+                    'mean_mu_magnitude': mu.norm(dim=-1).mean(),
+                    'mu_std': mu.std(),
+                }
+            else:
+                kl_total = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
+                return {
+                    'kl_total': kl_total,
+                    'kl_mu_term': kl_total,
+                    'kl_var_term': torch.tensor(0.0),
+                    'mean_mu': mu.mean(),
+                    'mean_mu_magnitude': mu.norm(dim=-1).mean(),
+                    'mu_std': mu.std(),
+                }
     
     def scale_biases(self, scale: float) -> None:
         """Scale all bias parameters by a given factor."""
@@ -355,8 +413,8 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
                 if var_flag == 1 and any("var_encoder" in key for key in missing_keys):
                     print("Initializing missing variance encoder parameters")
                     with torch.no_grad():
-                        nn.init.kaiming_uniform_(model.var_encoder.weight)
-                        nn.init.zeros_(model.var_encoder.bias)
+                        nn.init.kaiming_uniform_(model.var_encoder.weight, a=0.01)
+                        nn.init.constant_(model.var_encoder.bias, config.log_var_init)
             
             if unexpected_keys:
                 print(f"Warning: Unexpected keys in state_dict: {unexpected_keys}")
@@ -400,36 +458,72 @@ class VSAEIsoGaussian(Dictionary, nn.Module):
         return converted
 
 
+def get_kl_warmup_fn(total_steps: int, kl_warmup_steps: Optional[int] = None) -> Callable[[int], float]:
+    """
+    Return a function that computes KL annealing scale factor at a given step.
+    Helps prevent posterior collapse in early training.
+    
+    Args:
+        total_steps: Total training steps
+        kl_warmup_steps: Steps to warm up KL coefficient from 0 to 1
+        
+    Returns:
+        Function that returns KL scale factor for given step
+    """
+    if kl_warmup_steps is None or kl_warmup_steps == 0:
+        return lambda step: 1.0
+    
+    assert 0 < kl_warmup_steps <= total_steps, "kl_warmup_steps must be > 0 and <= total_steps"
+    
+    def scale_fn(step: int) -> float:
+        if step < kl_warmup_steps:
+            return step / kl_warmup_steps  # Linear warmup from 0 to 1
+        else:
+            return 1.0
+    
+    return scale_fn
+
+
 @dataclass
 class VSAEIsoTrainingConfig:
-    """Configuration for VSAEIso training."""
+    """Enhanced training configuration with proper scaling separation."""
     steps: int
     lr: float = 5e-4
     kl_coeff: float = 500.0
+    kl_warmup_steps: Optional[int] = None  # KL annealing to prevent posterior collapse
     warmup_steps: Optional[int] = None
-    sparsity_warmup_steps: Optional[int] = None
+    sparsity_warmup_steps: Optional[int] = None  # For any actual sparsity penalties
     decay_start: Optional[int] = None
     gradient_clip_norm: float = 1.0
-    
+
     def __post_init__(self):
-        """Set default step values based on total steps."""
+        """Set derived configuration values."""
         if self.warmup_steps is None:
-            self.warmup_steps = max(1000, int(0.02 * self.steps))
+            self.warmup_steps = max(200, int(0.02 * self.steps))
         if self.sparsity_warmup_steps is None:
             self.sparsity_warmup_steps = int(0.05 * self.steps)
-        if self.decay_start is None:
-            self.decay_start = int(0.8 * self.steps)
+        # KL annealing to prevent posterior collapse
+        if self.kl_warmup_steps is None:
+            self.kl_warmup_steps = int(0.1 * self.steps)  # 10% of training
+
+        min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
+        default_decay_start = int(0.8 * self.steps)
+        
+        if default_decay_start <= max(self.warmup_steps, self.sparsity_warmup_steps):
+            self.decay_start = None  # Disable decay
+        elif self.decay_start is None or self.decay_start < min_decay_start:
+            self.decay_start = default_decay_start
 
 
 class VSAEIsoTrainer(SAETrainer):
     """
-    Improved trainer for VSAEIso with better architecture and error handling.
+    Actually Fixed trainer for VSAEIso with proper scaling separation.
     
-    Features:
-    - Clean configuration management
-    - Proper loss computation with decoder norm weighting
-    - Robust gradient handling
-    - Better memory efficiency
+    Key improvements:
+    - Correct KL divergence computation (was already correct!)
+    - FIXED: Separate KL annealing from sparsity scaling
+    - Better numerical stability
+    - Enhanced logging and diagnostics
     """
     
     def __init__(
@@ -512,29 +606,46 @@ class VSAEIsoTrainer(SAETrainer):
             training_config.steps,
             training_config.sparsity_warmup_steps
         )
+        # KL annealing function (separate from sparsity!)
+        self.kl_warmup_fn = get_kl_warmup_fn(
+            training_config.steps,
+            training_config.kl_warmup_steps
+        )
     
     def _compute_kl_loss(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
-        """Compute KL divergence loss with decoder norm weighting."""
-        # Base KL divergence
+        """
+        Compute KL divergence loss 
+        
+        For q(z|x) = N(μ, σ²) and p(z) = N(0, I):
+        KL[q || p] = 0.5 * Σ[μ² + σ² - 1 - log(σ²)]
+        """
         if self.ae.var_flag == 1 and log_var is not None:
-            # Full KL: 0.5 * sum(exp(log_var) + mu^2 - 1 - log_var)
-            kl_base = 0.5 * torch.sum(
-                torch.exp(log_var) + mu.pow(2) - 1 - log_var,
+            # FIXED: Conservative clamping range
+            log_var_clamped = torch.clamp(log_var, min=-8.0, max=4.0)
+            mu_clamped = torch.clamp(mu, min=-10.0, max=10.0)
+            
+            # KL divergence (term order doesn't matter due to commutativity)
+            kl_per_sample = 0.5 * torch.sum(
+                mu_clamped.pow(2) + torch.exp(log_var_clamped) - 1 - log_var_clamped,
                 dim=1
-            ).mean()
+            )
         else:
-            # Simplified KL for fixed variance: 0.5 * sum(mu^2)
-            kl_base = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
+            # Fixed variance case: KL = 0.5 * ||μ||²
+            mu_clamped = torch.clamp(mu, min=-10.0, max=10.0)
+            kl_per_sample = 0.5 * torch.sum(mu_clamped.pow(2), dim=1)
         
-        # Weight by decoder norms (April update approach)
-        decoder_norms = torch.norm(self.ae.decoder.weight, p=2, dim=0).mean()
-        decoder_norms = decoder_norms.to(dtype=kl_base.dtype)
+        # Average over batch
+        kl_loss = kl_per_sample.mean()
         
-        return kl_base * decoder_norms
+        # Ensure KL is non-negative (should be true mathematically)
+        kl_loss = torch.clamp(kl_loss, min=0.0)
+        
+        return kl_loss
     
     def loss(self, x: torch.Tensor, step: int, logging: bool = False):
-        """Compute loss with all components."""
-        sparsity_scale = self.sparsity_warmup_fn(step)
+        """Compute loss with proper scaling separation."""
+        sparsity_scale = self.sparsity_warmup_fn(step)  # For any L1 penalties
+        kl_scale = self.kl_warmup_fn(step)  # FIXED: Separate KL annealing
         
         # Store original dtype
         original_dtype = x.dtype
@@ -554,14 +665,22 @@ class VSAEIsoTrainer(SAETrainer):
         kl_loss = self._compute_kl_loss(mu, log_var)
         kl_loss = kl_loss.to(dtype=original_dtype)
         
-        # Total loss
-        total_loss = recon_loss + self.training_config.kl_coeff * sparsity_scale * kl_loss
+        # FIXED: Separate scaling - KL gets kl_scale, sparsity would get sparsity_scale
+        total_loss = recon_loss + self.training_config.kl_coeff * kl_scale * kl_loss
+        
+        # If we had L1 sparsity penalty, it would use sparsity_scale:
+        # l1_loss = torch.mean(torch.abs(z))
+        # total_loss += l1_coeff * sparsity_scale * l1_loss
         
         if not logging:
             return total_loss
         
-        # Return detailed loss information
+        # Return detailed loss information with diagnostics
         LossLog = namedtuple('LossLog', ['x', 'x_hat', 'f', 'losses'])
+        
+        # Get additional diagnostics
+        kl_diagnostics = self.ae.get_kl_diagnostics(x)
+        
         return LossLog(
             x, x_hat, z,
             {
@@ -570,6 +689,9 @@ class VSAEIsoTrainer(SAETrainer):
                 'kl_loss': kl_loss.item(),
                 'loss': total_loss.item(),
                 'sparsity_scale': sparsity_scale,
+                'kl_scale': kl_scale,  # Separate from sparsity scaling
+                # Additional diagnostics
+                **{k: v.item() if torch.is_tensor(v) else v for k, v in kl_diagnostics.items()}
             }
         )
     
@@ -605,12 +727,14 @@ class VSAEIsoTrainer(SAETrainer):
             'dict_size': self.model_config.dict_size,
             'var_flag': self.model_config.var_flag,
             'use_april_update_mode': self.model_config.use_april_update_mode,
+            'log_var_init': self.model_config.log_var_init,
             'dtype': str(self.model_config.dtype),
             'device': str(self.model_config.device),
             # Training config
             'steps': self.training_config.steps,
             'lr': self.training_config.lr,
             'kl_coeff': self.training_config.kl_coeff,
+            'kl_warmup_steps': self.training_config.kl_warmup_steps,
             'warmup_steps': self.training_config.warmup_steps,
             'sparsity_warmup_steps': self.training_config.sparsity_warmup_steps,
             'decay_start': self.training_config.decay_start,

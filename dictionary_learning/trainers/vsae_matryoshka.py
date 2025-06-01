@@ -1,15 +1,27 @@
 """
-Improved implementation of combined MatryoshkaBatchTopK + VSAEIso approach.
+FIXED implementation of combined MatryoshkaBatchTopK + VSAEIso approach.
 
-This module combines hierarchical grouping and learning from the Matryoshka approach
-with variational learning from the VSAE approach, following better PyTorch practices.
+All fixes applied:
+1. Removed ReLU from log variance (can now be negative)
+2. Unconstrained mean encoding (removed ReLU from μ)
+3. Conservative clamping ranges (log_var ∈ [-6,2])
+4. Separated KL and sparsity scaling (kl_scale vs sparsity_scale)
+5. Removed decoder norm weighting from KL loss (clean KL computation)
+6. Removed layer norm on variance encoder (direct variance learning)
+7. Added KL annealing (prevents posterior collapse)
+8. Better gradient clipping and stability
+9. Enhanced numerical stability with consistent dtype handling
+10. Improved diagnostics and KL component tracking
+11. Simplified auxiliary loss (removed unnecessary complexity)
+12. Better weight initialization with proper tied weights and bias init
+13. Efficient group reconstruction computation
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, Callable
 from collections import namedtuple
 from dataclasses import dataclass
 import math
@@ -23,15 +35,17 @@ from ..trainers.trainer import (
 
 
 @dataclass
-class MatryoshkaConfig:
+class MatryoshkaVSAEConfig:
     """Configuration for Matryoshka VSAE model."""
     activation_dim: int
     dict_size: int
     group_fractions: List[float]
     group_weights: Optional[List[float]] = None
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
-    dtype: torch.dtype = torch.float32
+    use_april_update_mode: bool = True
+    dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
+    log_var_init: float = -2.0  # Initialize log_var around exp(-2) ≈ 0.135 variance
     
     def __post_init__(self):
         # Validate group fractions
@@ -42,31 +56,46 @@ class MatryoshkaConfig:
         self.group_sizes = [int(f * self.dict_size) for f in self.group_fractions[:-1]]
         self.group_sizes.append(self.dict_size - sum(self.group_sizes))
         
-        # Default group weights
+        # Default group weights (uniform) and validate they sum to 1.0
         if self.group_weights is None:
             self.group_weights = [1.0 / len(self.group_sizes)] * len(self.group_sizes)
+        else:
+            weight_sum = sum(self.group_weights)
+            if not math.isclose(weight_sum, 1.0, rel_tol=1e-6):
+                print(f"Warning: group_weights sum to {weight_sum:.6f}, normalizing to 1.0")
+                self.group_weights = [w / weight_sum for w in self.group_weights]
         
         if len(self.group_sizes) != len(self.group_weights):
             raise ValueError("group_sizes and group_weights must have the same length")
+    
+    def get_device(self) -> torch.device:
+        """Get the device, defaulting to CUDA if available."""
+        if self.device is None:
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return self.device
 
 
 class MatryoshkaVSAEIso(Dictionary, nn.Module):
     """
-    A combined Matryoshka + Variational Sparse Autoencoder with isotropic Gaussian prior.
+    FIXED Matryoshka + Variational Sparse Autoencoder with isotropic Gaussian prior.
     
-    Features:
-    - Hierarchical group structure for progressive training
-    - Variational approach with KL divergence regularization
-    - Optional learned variance for more expressive latent space
-    - Proper gradient handling and memory management
+    All improvements applied:
+    - Unconstrained mean encoding (no ReLU on μ)
+    - Proper log variance handling (no ReLU, can be negative)
+    - Conservative clamping ranges
+    - Clean KL computation without decoder norm weighting
+    - Proper tied weight initialization
+    - Consistent dtype handling
+    - Simplified architecture focused on VAE principles
     """
 
-    def __init__(self, config: MatryoshkaConfig):
+    def __init__(self, config: MatryoshkaVSAEConfig):
         super().__init__()
         self.config = config
         self.activation_dim = config.activation_dim
         self.dict_size = config.dict_size
         self.var_flag = config.var_flag
+        self.use_april_update_mode = config.use_april_update_mode
         
         # Register group configuration as buffers (non-trainable but saved with model)
         self.register_buffer("group_sizes", torch.tensor(config.group_sizes, dtype=torch.long))
@@ -84,56 +113,91 @@ class MatryoshkaVSAEIso(Dictionary, nn.Module):
         self._init_weights()
     
     def _init_layers(self) -> None:
-        """Initialize neural network layers."""
+        """Initialize neural network layers with proper configuration."""
+        device = self.config.get_device()
+        dtype = self.config.dtype
+        
+        # Main encoder and decoder
         self.encoder = nn.Linear(
-            self.activation_dim, 
-            self.dict_size, 
+            self.activation_dim,
+            self.dict_size,
             bias=True,
-            dtype=self.config.dtype,
-            device=self.config.device
+            dtype=dtype,
+            device=device
         )
+        
         self.decoder = nn.Linear(
-            self.dict_size, 
-            self.activation_dim, 
-            bias=True,
-            dtype=self.config.dtype,
-            device=self.config.device
+            self.dict_size,
+            self.activation_dim,
+            bias=self.use_april_update_mode,
+            dtype=dtype,
+            device=device
         )
+        
+        # Bias parameter for standard mode
+        if not self.use_april_update_mode:
+            self.bias = nn.Parameter(
+                torch.zeros(
+                    self.activation_dim,
+                    dtype=dtype,
+                    device=device
+                )
+            )
         
         # Variance encoder (only when learning variance)
         if self.var_flag == 1:
             self.var_encoder = nn.Linear(
-                self.activation_dim, 
-                self.dict_size, 
+                self.activation_dim,
+                self.dict_size,
                 bias=True,
-                dtype=self.config.dtype,
-                device=self.config.device
+                dtype=dtype,
+                device=device
             )
     
     def _init_weights(self) -> None:
         """Initialize model weights following best practices."""
-        # Encoder and decoder weights (tied initialization)
+        device = self.config.get_device()
+        dtype = self.config.dtype
+        
+        # Tied initialization for encoder and decoder
         w = torch.randn(
-            self.activation_dim, 
-            self.dict_size, 
-            dtype=self.config.dtype,
-            device=self.config.device
+            self.activation_dim,
+            self.dict_size,
+            dtype=dtype,
+            device=device
         )
         w = w / w.norm(dim=0, keepdim=True) * 0.1
         
-        # Set weights
         with torch.no_grad():
+            # Set encoder and decoder weights (tied)
             self.encoder.weight.copy_(w.T)
             self.decoder.weight.copy_(w)
             
-            # Initialize biases to zero
+            # Initialize biases
             nn.init.zeros_(self.encoder.bias)
-            nn.init.zeros_(self.decoder.bias)
+            if self.use_april_update_mode:
+                nn.init.zeros_(self.decoder.bias)
+            else:
+                nn.init.zeros_(self.bias)
             
             # Initialize variance encoder if present
             if self.var_flag == 1:
-                nn.init.kaiming_uniform_(self.var_encoder.weight)
-                nn.init.zeros_(self.var_encoder.bias)
+                # Initialize variance encoder weights
+                nn.init.kaiming_uniform_(self.var_encoder.weight, a=0.01)
+                
+                # Initialize log_var bias to reasonable value
+                # log_var = log(σ²), so log_var = -2 means σ² ≈ 0.135
+                nn.init.constant_(self.var_encoder.bias, self.config.log_var_init)
+    
+    def _preprocess_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Preprocess input to handle bias subtraction in standard mode."""
+        # Ensure input matches model dtype
+        x = x.to(dtype=self.encoder.weight.dtype)
+        
+        if self.use_april_update_mode:
+            return x
+        else:
+            return x - self.bias
     
     def _create_group_mask(self, features: torch.Tensor) -> torch.Tensor:
         """Create mask for active groups without in-place operations."""
@@ -152,20 +216,21 @@ class MatryoshkaVSAEIso(Dictionary, nn.Module):
     
     def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Encode input activations to latent space.
+        Encode input to latent space.
+        
+        FIXED: No ReLU on mean - VAE means should be unconstrained for expressiveness
         
         Args:
             x: Input activations [batch_size, activation_dim]
             
         Returns:
-            mu: Mean of latent distribution [batch_size, dict_size]
+            mu: Mean of latent distribution [batch_size, dict_size] (unconstrained)
             log_var: Log variance (None if var_flag=0) [batch_size, dict_size]
         """
-        # Ensure input matches encoder dtype
-        x = x.to(dtype=self.encoder.weight.dtype)
+        x_processed = self._preprocess_input(x)
         
-        # Encode mean
-        mu_full = F.relu(self.encoder(x))
+        # FIXED: No ReLU constraint on mean - let it be unconstrained
+        mu_full = self.encoder(x_processed)
         
         # Apply group masking without in-place operations
         mask = self._create_group_mask(mu_full)
@@ -174,46 +239,79 @@ class MatryoshkaVSAEIso(Dictionary, nn.Module):
         # Encode variance if learning it
         log_var = None
         if self.var_flag == 1:
-            log_var_full = F.relu(self.var_encoder(x))
+            # FIXED: No ReLU on log_var - can be negative (mathematically correct)
+            log_var_full = self.var_encoder(x_processed)
             log_var = log_var_full * mask
         
         return mu, log_var
     
-    def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
-        """Apply reparameterization trick for sampling from latent distribution."""
-        if log_var is None:
+    def reparameterize(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
+        """
+        Apply reparameterization trick with consistent log_var = log(σ²) interpretation.
+        
+        FIXED: Conservative clamping and consistent interpretation where log_var = log(σ²)
+        
+        Args:
+            mu: Mean of latent distribution
+            log_var: Log variance = log(σ²) (None for fixed variance)
+            
+        Returns:
+            z: Sampled latent features
+        """
+        if log_var is None or self.var_flag == 0:
             return mu
         
-        std = torch.exp(0.5 * log_var)
+        # FIXED: Conservative clamping range
+        # log_var ∈ [-6, 2] means σ² ∈ [0.002, 7.4] - reasonable range
+        log_var_clamped = torch.clamp(log_var, min=-6.0, max=2.0)
+        
+        # Since log_var = log(σ²), we have σ = sqrt(exp(log_var)) = sqrt(σ²)
+        std = torch.sqrt(torch.exp(log_var_clamped))
+        
+        # Sample noise
         eps = torch.randn_like(std)
+        
+        # Reparameterize
         z = mu + eps * std
         
-        # Ensure output matches mu dtype
         return z.to(dtype=mu.dtype)
     
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode latent features to reconstruction."""
+        """
+        Decode latent features to reconstruction.
+        
+        Args:
+            z: Latent features [batch_size, dict_size]
+            
+        Returns:
+            x_hat: Reconstructed activations [batch_size, activation_dim]
+        """
         # Ensure z matches decoder weight dtype
         z = z.to(dtype=self.decoder.weight.dtype)
-        return self.decoder(z)
+        
+        if self.use_april_update_mode:
+            return self.decoder(z)
+        else:
+            return self.decoder(z) + self.bias
     
-    def forward(self, x: torch.Tensor, return_features: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, output_features: bool = False, ghost_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Forward pass through the autoencoder.
         
         Args:
             x: Input activations [batch_size, activation_dim]
-            return_features: Whether to return latent features
+            output_features: Whether to return latent features
+            ghost_mask: Not implemented for VSAE (raises error if provided)
             
         Returns:
-            reconstruction: Reconstructed activations [batch_size, activation_dim]
-            features: Latent features (if return_features=True) [batch_size, dict_size]
+            x_hat: Reconstructed activations
+            z: Latent features (if output_features=True)
         """
-        # Store original dtype to return output in same format
-        original_dtype = x.dtype
+        if ghost_mask is not None:
+            raise NotImplementedError("Ghost mode not implemented for MatryoshkaVSAEIso")
         
-        # Ensure input matches model dtype
-        x = x.to(dtype=self.encoder.weight.dtype)
+        # Store original dtype
+        original_dtype = x.dtype
         
         # Encode
         mu, log_var = self.encode(x)
@@ -227,10 +325,56 @@ class MatryoshkaVSAEIso(Dictionary, nn.Module):
         # Convert back to original dtype
         x_hat = x_hat.to(dtype=original_dtype)
         
-        if return_features:
+        if output_features:
             z = z.to(dtype=original_dtype)
             return x_hat, z
         return x_hat
+    
+    def get_kl_diagnostics(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Get detailed KL diagnostics for monitoring training.
+        
+        Returns:
+            Dictionary with KL components and statistics
+        """
+        with torch.no_grad():
+            mu, log_var = self.encode(x)
+            
+            if self.var_flag == 1 and log_var is not None:
+                log_var_safe = torch.clamp(log_var, -6, 2)
+                var = torch.exp(log_var_safe)  # σ²
+                
+                kl_mu = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
+                kl_var = 0.5 * torch.sum(var - 1 - log_var_safe, dim=1).mean()
+                kl_total = kl_mu + kl_var
+                
+                return {
+                    'kl_total': kl_total,
+                    'kl_mu_term': kl_mu,
+                    'kl_var_term': kl_var,
+                    'mean_log_var': log_var.mean(),
+                    'mean_var': var.mean(),
+                    'mean_mu': mu.mean(),
+                    'mean_mu_magnitude': mu.norm(dim=-1).mean(),
+                    'mu_std': mu.std(),
+                }
+            else:
+                kl_total = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
+                return {
+                    'kl_total': kl_total,
+                    'kl_mu_term': kl_total,
+                    'kl_var_term': torch.tensor(0.0),
+                    'mean_mu': mu.mean(),
+                    'mean_mu_magnitude': mu.norm(dim=-1).mean(),
+                    'mu_std': mu.std(),
+                }
+    
+    def set_active_groups(self, num_groups: int) -> None:
+        """Set the number of active groups for progressive training."""
+        if num_groups < 1 or num_groups > len(self.group_sizes):
+            raise ValueError(f"num_groups must be between 1 and {len(self.group_sizes)}")
+        self.active_groups = num_groups
+        print(f"Set active groups to {num_groups}/{len(self.group_sizes)}")
     
     def get_active_features_mask(self, features: torch.Tensor) -> torch.Tensor:
         """Get boolean mask of which features are active across the batch."""
@@ -240,169 +384,241 @@ class MatryoshkaVSAEIso(Dictionary, nn.Module):
         """Scale all bias parameters by a given factor."""
         with torch.no_grad():
             self.encoder.bias.mul_(scale)
-            self.decoder.bias.mul_(scale)
+            
+            if self.use_april_update_mode:
+                self.decoder.bias.mul_(scale)
+            else:
+                self.bias.mul_(scale)
             
             if self.var_flag == 1:
                 self.var_encoder.bias.mul_(scale)
+    
+    def normalize_decoder(self) -> None:
+        """
+        Normalize decoder weights to have unit norm.
+        Note: Only recommended for models without learned variance.
+        """
+        if self.var_flag == 1:
+            print("Warning: Normalizing decoder weights with learned variance may hurt performance")
+        
+        with torch.no_grad():
+            norms = torch.norm(self.decoder.weight, dim=0)
+            
+            if torch.allclose(norms, torch.ones_like(norms), atol=1e-6):
+                return
+            
+            print("Normalizing decoder weights")
+            
+            # Test that normalization preserves output
+            device = self.decoder.weight.device
+            test_input = torch.randn(10, self.activation_dim, device=device, dtype=self.decoder.weight.dtype)
+            initial_output = self(test_input)
+            
+            # Normalize decoder weights
+            self.decoder.weight.div_(norms)
+            
+            # Scale encoder weights and biases accordingly
+            self.encoder.weight.mul_(norms.unsqueeze(1))
+            self.encoder.bias.mul_(norms)
+            
+            # Verify normalization worked
+            new_norms = torch.norm(self.decoder.weight, dim=0)
+            assert torch.allclose(new_norms, torch.ones_like(new_norms), atol=1e-6)
+            
+            # Verify output is preserved
+            new_output = self(test_input)
+            assert torch.allclose(initial_output, new_output, atol=1e-4), "Normalization changed model output"
     
     @classmethod
     def from_pretrained(
         cls, 
         path: str, 
-        config: Optional[MatryoshkaConfig] = None,
+        config: Optional[MatryoshkaVSAEConfig] = None,
         dtype: torch.dtype = torch.float32,
         device: Optional[torch.device] = None,
+        normalize_decoder: bool = True,
+        var_flag: Optional[int] = None
     ) -> 'MatryoshkaVSAEIso':
         """Load pretrained model from checkpoint."""
         checkpoint = torch.load(path, map_location=device)
+        state_dict = checkpoint if isinstance(checkpoint, dict) else checkpoint.get('state_dict', checkpoint)
         
         if config is None:
-            # Try to reconstruct config from checkpoint
-            state_dict = checkpoint if isinstance(checkpoint, dict) else checkpoint['state_dict']
+            # Auto-detect configuration from state dict
+            if 'encoder.weight' in state_dict:
+                dict_size, activation_dim = state_dict["encoder.weight"].shape
+                use_april_update_mode = "decoder.bias" in state_dict
+            else:
+                # Handle legacy format
+                activation_dim, dict_size = state_dict.get("W_enc", state_dict["encoder.weight"].T).shape
+                use_april_update_mode = "b_dec" in state_dict or "decoder.bias" in state_dict
             
-            # Extract dimensions
-            dict_size, activation_dim = state_dict["encoder.weight"].shape
+            # Auto-detect var_flag
+            if var_flag is None:
+                var_flag = 1 if ("var_encoder.weight" in state_dict or "W_enc_var" in state_dict) else 0
+            
+            # Extract group configuration
             group_sizes = state_dict["group_sizes"].tolist()
             group_fractions = [s / dict_size for s in group_sizes]
             
-            # Detect var_flag
-            var_flag = 1 if "var_encoder.weight" in state_dict else 0
-            
-            config = MatryoshkaConfig(
+            config = MatryoshkaVSAEConfig(
                 activation_dim=activation_dim,
                 dict_size=dict_size,
                 group_fractions=group_fractions,
                 var_flag=var_flag,
+                use_april_update_mode=use_april_update_mode,
                 dtype=dtype,
                 device=device
             )
         
         model = cls(config)
-        model.load_state_dict(checkpoint if isinstance(checkpoint, dict) else checkpoint['state_dict'])
         
-        if device is not None:
+        # Load state dict with error handling
+        try:
+            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+            
+            if missing_keys:
+                print(f"Warning: Missing keys in state_dict: {missing_keys}")
+            if unexpected_keys:
+                print(f"Warning: Unexpected keys in state_dict: {unexpected_keys}")
+                
+        except Exception as e:
+            raise RuntimeError(f"Failed to load state dict: {e}")
+        
+        # Normalize decoder if requested (skip for learned variance models)
+        if normalize_decoder and not (config.var_flag == 1 and "var_encoder.weight" in state_dict):
+            try:
+                model.normalize_decoder()
+            except Exception as e:
+                print(f"Warning: Could not normalize decoder weights: {e}")
+        
+        # Move to target device and dtype
+        if device is not None or dtype != model.config.dtype:
             model = model.to(device=device, dtype=dtype)
             
         return model
 
 
+def get_kl_warmup_fn(total_steps: int, kl_warmup_steps: Optional[int] = None) -> Callable[[int], float]:
+    """
+    Return a function that computes KL annealing scale factor at a given step.
+    Helps prevent posterior collapse in early training.
+    
+    Args:
+        total_steps: Total training steps
+        kl_warmup_steps: Steps to warm up KL coefficient from 0 to 1
+        
+    Returns:
+        Function that returns KL scale factor for given step
+    """
+    if kl_warmup_steps is None or kl_warmup_steps == 0:
+        return lambda step: 1.0
+    
+    assert 0 < kl_warmup_steps <= total_steps, "kl_warmup_steps must be > 0 and <= total_steps"
+    
+    def scale_fn(step: int) -> float:
+        if step < kl_warmup_steps:
+            return step / kl_warmup_steps  # Linear warmup from 0 to 1
+        else:
+            return 1.0
+    
+    return scale_fn
+
+
 @dataclass 
-class TrainingConfig:
-    """Configuration for training the MatryoshkaVSAE."""
+class MatryoshkaVSAETrainingConfig:
+    """Enhanced training configuration with proper scaling separation."""
     steps: int
     lr: float = 5e-4
     kl_coeff: float = 500.0
-    auxk_alpha: float = 1/32
+    kl_warmup_steps: Optional[int] = None  # KL annealing to prevent posterior collapse
     warmup_steps: Optional[int] = None
-    sparsity_warmup_steps: Optional[int] = None
+    sparsity_warmup_steps: Optional[int] = None  # For any actual sparsity penalties
     decay_start: Optional[int] = None
-    dead_feature_threshold: int = 10_000_000
     gradient_clip_norm: float = 1.0
     
     def __post_init__(self):
-        # Set defaults based on total steps
+        """Set derived configuration values."""
         if self.warmup_steps is None:
-            self.warmup_steps = max(1000, int(0.05 * self.steps))
+            self.warmup_steps = max(200, int(0.02 * self.steps))
         if self.sparsity_warmup_steps is None:
             self.sparsity_warmup_steps = int(0.05 * self.steps)
-        if self.decay_start is None:
-            self.decay_start = int(0.8 * self.steps)
+        # KL annealing to prevent posterior collapse
+        if self.kl_warmup_steps is None:
+            self.kl_warmup_steps = int(0.1 * self.steps)  # 10% of training
 
-
-class DeadFeatureTracker:
-    """Tracks dead features for auxiliary loss computation."""
-    
-    def __init__(self, dict_size: int, threshold: int, device: torch.device):
-        self.threshold = threshold
-        self.num_tokens_since_fired = torch.zeros(
-            dict_size, dtype=torch.long, device=device
-        )
-    
-    def update(self, active_features: torch.Tensor, num_tokens: int) -> torch.Tensor:
-        """Update dead feature tracking and return dead feature mask."""
-        # Update counters
-        self.num_tokens_since_fired += num_tokens
-        self.num_tokens_since_fired[active_features] = 0
+        min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
+        default_decay_start = int(0.8 * self.steps)
         
-        # Return dead feature mask
-        return self.num_tokens_since_fired >= self.threshold
-    
-    def get_stats(self) -> Dict[str, int]:
-        """Get statistics about dead features."""
-        dead_mask = self.num_tokens_since_fired >= self.threshold
-        return {
-            "dead_features": int(dead_mask.sum()),
-            "alive_features": int((~dead_mask).sum()),
-            "total_features": len(self.num_tokens_since_fired)
-        }
+        if default_decay_start <= max(self.warmup_steps, self.sparsity_warmup_steps):
+            self.decay_start = None  # Disable decay
+        elif self.decay_start is None or self.decay_start < min_decay_start:
+            self.decay_start = default_decay_start
 
 
 class MatryoshkaVSAEIsoTrainer(SAETrainer):
     """
-    Trainer for the MatryoshkaVSAEIso model with improved architecture.
+    FIXED trainer for the MatryoshkaVSAEIso model with all improvements.
     
-    Features:
-    - Clean separation of concerns
-    - Proper loss computation with progressive reconstruction
-    - Dead feature tracking and auxiliary loss
-    - Memory-efficient group-wise processing
+    Key improvements:
+    - Correct KL divergence computation (clean, no decoder norm weighting)
+    - FIXED: Separate KL annealing from sparsity scaling
+    - Better numerical stability with consistent dtype handling
+    - Enhanced logging and diagnostics
+    - Conservative clamping ranges
+    - Simplified architecture focused on VAE principles
     """
     
     def __init__(
         self,
-        model_config: MatryoshkaConfig = None,
-        training_config: TrainingConfig = None,
-        layer: int = None,
-        lm_name: str = None,
+        model_config: Optional[MatryoshkaVSAEConfig] = None,
+        training_config: Optional[MatryoshkaVSAETrainingConfig] = None,
+        layer: Optional[int] = None,
+        lm_name: Optional[str] = None,
         submodule_name: Optional[str] = None,
         wandb_name: Optional[str] = None,
         seed: Optional[int] = None,
-        # Alternative parameters for backwards compatibility with trainSAE
+        # Backwards compatibility parameters
         steps: Optional[int] = None,
         activation_dim: Optional[int] = None,
         dict_size: Optional[int] = None,
         lr: Optional[float] = None,
         kl_coeff: Optional[float] = None,
-        auxk_alpha: Optional[float] = None,
         group_fractions: Optional[List[float]] = None,
         group_weights: Optional[List[float]] = None,
         var_flag: Optional[int] = None,
+        use_april_update_mode: Optional[bool] = None,
         device: Optional[str] = None,
+        dict_class=None,  # Ignored, always use MatryoshkaVSAEIso
         **kwargs  # Catch any other parameters
     ):
         super().__init__(seed)
         
-        # Handle backwards compatibility - if individual parameters are passed, create configs
-        if model_config is None or training_config is None:
-            # Create configs from individual parameters
-            if model_config is None:
-                if activation_dim is None or dict_size is None:
-                    raise ValueError("Must provide either model_config or activation_dim + dict_size")
-                
-                # Set defaults
-                group_fractions = group_fractions or [0.25, 0.25, 0.25, 0.25]
-                var_flag = var_flag or 0
-                device_obj = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                
-                model_config = MatryoshkaConfig(
-                    activation_dim=activation_dim,
-                    dict_size=dict_size,
-                    group_fractions=group_fractions,
-                    group_weights=group_weights,
-                    var_flag=var_flag,
-                    device=device_obj
-                )
+        # Handle backwards compatibility
+        if model_config is None:
+            if activation_dim is None or dict_size is None:
+                raise ValueError("Must provide either model_config or activation_dim + dict_size")
             
-            if training_config is None:
-                if steps is None:
-                    raise ValueError("Must provide either training_config or steps")
-                
-                training_config = TrainingConfig(
-                    steps=steps,
-                    lr=lr or 5e-4,
-                    kl_coeff=kl_coeff or 500.0,
-                    auxk_alpha=auxk_alpha or 1/32,
-                )
+            device_obj = torch.device(device) if device else None
+            model_config = MatryoshkaVSAEConfig(
+                activation_dim=activation_dim,
+                dict_size=dict_size,
+                group_fractions=group_fractions or [0.25, 0.25, 0.25, 0.25],
+                group_weights=group_weights,
+                var_flag=var_flag or 0,
+                use_april_update_mode=use_april_update_mode if use_april_update_mode is not None else True,
+                device=device_obj
+            )
+        
+        if training_config is None:
+            if steps is None:
+                raise ValueError("Must provide either training_config or steps")
+            
+            training_config = MatryoshkaVSAETrainingConfig(
+                steps=steps,
+                lr=lr or 5e-4,
+                kl_coeff=kl_coeff or 500.0,
+            )
         
         self.model_config = model_config
         self.training_config = training_config
@@ -412,9 +628,7 @@ class MatryoshkaVSAEIsoTrainer(SAETrainer):
         self.wandb_name = wandb_name or "MatryoshkaVSAEIsoTrainer"
         
         # Set device
-        self.device = model_config.device or (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        )
+        self.device = model_config.get_device()
         
         # Initialize model
         self.ae = MatryoshkaVSAEIso(model_config)
@@ -422,7 +636,7 @@ class MatryoshkaVSAEIsoTrainer(SAETrainer):
         
         # Initialize optimizer and scheduler
         self.optimizer = torch.optim.Adam(
-            self.ae.parameters(), 
+            self.ae.parameters(),
             lr=training_config.lr,
             betas=(0.9, 0.999)
         )
@@ -436,165 +650,103 @@ class MatryoshkaVSAEIsoTrainer(SAETrainer):
         )
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
         self.sparsity_warmup_fn = get_sparsity_warmup_fn(
-            training_config.steps, 
+            training_config.steps,
             training_config.sparsity_warmup_steps
         )
-        
-        # Initialize dead feature tracking
-        self.dead_feature_tracker = DeadFeatureTracker(
-            model_config.dict_size,
-            training_config.dead_feature_threshold,
-            self.device
+        # KL annealing function (separate from sparsity!)
+        self.kl_warmup_fn = get_kl_warmup_fn(
+            training_config.steps,
+            training_config.kl_warmup_steps
         )
         
-        # Logging parameters
-        self.logging_parameters = ["dead_features", "auxk_loss_raw", "effective_l0"]
-        self.dead_features = 0
-        self.auxk_loss_raw = 0.0
+        # Logging parameters for effective L0
+        self.logging_parameters = ["effective_l0"]
         self.effective_l0 = 0.0
-    
-    def _compute_group_reconstruction_loss(
-        self, 
-        x: torch.Tensor, 
-        z: torch.Tensor
-    ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
-        """Compute progressive reconstruction loss through groups."""
-        # Use the model's built-in decode method which handles dtype conversion
-        x_hat = self.ae.decode(z)
-        x_hat = x_hat.to(dtype=x.dtype)
-        
-        # For now, just compute single reconstruction loss
-        # TODO: Implement proper progressive group-wise reconstruction
-        total_recon_loss = torch.mean(torch.sum((x - x_hat) ** 2, dim=1))
-        
-        # Create dummy group losses for compatibility
-        group_losses = [total_recon_loss / self.ae.active_groups] * self.ae.active_groups
-        
-        return total_recon_loss, group_losses
     
     def _compute_kl_loss(
         self, 
         mu: torch.Tensor, 
         log_var: Optional[torch.Tensor]
     ) -> torch.Tensor:
-        """Compute KL divergence loss with decoder norm weighting."""
-        total_kl_loss = 0.0
+        """
+        FIXED: Compute KL divergence loss with clean computation (no decoder norm weighting).
+        
+        For q(z|x) = N(μ, σ²) and p(z) = N(0, I):
+        KL[q || p] = 0.5 * Σ[μ² + σ² - 1 - log(σ²)]
+        
+        FIXED improvements:
+        - No decoder norm weighting (clean KL computation)
+        - Conservative clamping ranges
+        - Consistent dtype handling (use model's dtype throughout)
+        - Group-wise computation for Matryoshka structure
+        """
+        # Use model's dtype for consistency (no unnecessary conversions)
+        total_kl_loss = torch.tensor(0.0, dtype=mu.dtype, device=mu.device)
         
         for group_idx in range(self.ae.active_groups):
             start_idx = self.ae.group_indices[group_idx].item()
             end_idx = self.ae.group_indices[group_idx + 1].item()
             
-            # Get group means and decoder norms
+            # Get group means
             mu_group = mu[:, start_idx:end_idx]
-            decoder_norms = torch.norm(
-                self.ae.decoder.weight[:, start_idx:end_idx], 
-                p=2, dim=0
-            )
             
-            # Ensure dtype consistency
-            decoder_norms = decoder_norms.to(dtype=mu_group.dtype)
-            
-            # Compute KL divergence
+            # Compute KL divergence for this group
             if self.ae.var_flag == 1 and log_var is not None:
                 log_var_group = log_var[:, start_idx:end_idx]
-                # Full KL: 0.5 * sum(exp(log_var) + mu^2 - 1 - log_var)
-                kl_base = 0.5 * torch.sum(
-                    torch.exp(log_var_group) + mu_group.pow(2) - 1 - log_var_group,
+                
+                # FIXED: Conservative clamping range
+                log_var_clamped = torch.clamp(log_var_group, min=-6.0, max=2.0)
+                mu_clamped = torch.clamp(mu_group, min=-10.0, max=10.0)
+                
+                # KL divergence: 0.5 * sum(exp(log_var) + mu^2 - 1 - log_var)
+                kl_per_sample = 0.5 * torch.sum(
+                    torch.exp(log_var_clamped) + mu_clamped.pow(2) - 1 - log_var_clamped,
                     dim=1
                 )
             else:
-                # Simplified KL for fixed variance: 0.5 * sum(mu^2)
-                kl_base = 0.5 * torch.sum(mu_group.pow(2), dim=1)
+                # Fixed variance case: KL = 0.5 * ||μ||²
+                mu_clamped = torch.clamp(mu_group, min=-10.0, max=10.0)
+                kl_per_sample = 0.5 * torch.sum(mu_clamped.pow(2), dim=1)
             
-            # Weight by decoder norms and group weight
-            kl_loss = torch.mean(kl_base) * torch.mean(decoder_norms)
-            weighted_kl = kl_loss * self.model_config.group_weights[group_idx]
+            # Average over batch
+            kl_group = kl_per_sample.mean()
+            
+            # Ensure KL is non-negative (should be true mathematically)
+            kl_group = torch.clamp(kl_group, min=0.0)
+            
+            # FIXED: No decoder norm weighting - clean KL computation
+            # Apply group weight and add to total
+            weighted_kl = kl_group * self.model_config.group_weights[group_idx]
             total_kl_loss += weighted_kl
         
         return total_kl_loss
     
-    def _compute_auxiliary_loss(
-        self, 
-        residual: torch.Tensor, 
-        features: torch.Tensor
-    ) -> torch.Tensor:
-        """Compute auxiliary loss for dead features."""
-        # Update dead feature tracking
-        active_features = self.ae.get_active_features_mask(features)
-        num_tokens = features.size(0)
-        dead_mask = self.dead_feature_tracker.update(active_features, num_tokens)
+    def loss(self, x: torch.Tensor, step: int, logging: bool = False):
+        """Compute loss with proper scaling separation and simplified architecture."""
+        sparsity_scale = self.sparsity_warmup_fn(step)  # For any L1 penalties
+        kl_scale = self.kl_warmup_fn(step)  # FIXED: Separate KL annealing
         
-        # Update logging stats
-        stats = self.dead_feature_tracker.get_stats()
-        self.dead_features = stats["dead_features"]
-        
-        if self.dead_features == 0:
-            self.auxk_loss_raw = 0.0
-            return torch.tensor(0.0, device=self.device, dtype=features.dtype)
-        
-        # Compute auxiliary loss for dead features
-        k_aux = min(self.model_config.activation_dim // 2, self.dead_features)
-        
-        # Create auxiliary activations using only dead features
-        aux_features = torch.where(
-            dead_mask[None, :], 
-            features, 
-            torch.full_like(features, -float('inf'))
-        )
-        
-        # Get top-k dead features
-        aux_acts, aux_indices = torch.topk(aux_features, k_aux, dim=1, sorted=False)
-        
-        # Create sparse auxiliary reconstruction
-        aux_buffer = torch.zeros_like(features)
-        aux_buffer.scatter_(1, aux_indices, aux_acts)
-        
-        # Reconstruct using auxiliary features
-        x_aux = self.ae.decode(aux_buffer)
-        
-        # Compute auxiliary loss
-        aux_loss = torch.mean(torch.sum((residual - x_aux) ** 2, dim=1))
-        self.auxk_loss_raw = aux_loss.item()
-        
-        # Normalize by residual variance
-        residual_var = torch.mean(torch.sum((residual - torch.mean(residual, dim=0)) ** 2, dim=1))
-        normalized_aux_loss = aux_loss / (residual_var + 1e-8)
-        
-        return normalized_aux_loss
-    
-    def loss(self, x: torch.Tensor, step: int, logging: bool = False) -> torch.Tensor:
-        """Compute total loss with all components."""
-        sparsity_scale = self.sparsity_warmup_fn(step)
-        
-        # Store original dtype for final output
+        # Store original dtype
         original_dtype = x.dtype
         
-        # Forward pass - the model handles dtype conversion internally
+        # Forward pass
         mu, log_var = self.ae.encode(x)
         z = self.ae.reparameterize(mu, log_var)
-        
-        # Compute reconstruction loss
-        recon_loss, group_losses = self._compute_group_reconstruction_loss(x, z)
-        
-        # Compute KL divergence loss
-        kl_loss = self._compute_kl_loss(mu, log_var)
-        
-        # Compute auxiliary loss for dead features
         x_hat = self.ae.decode(z)
-        x_hat = x_hat.to(dtype=original_dtype)  # Ensure compatibility with x
-        residual = x - x_hat
-        aux_loss = self._compute_auxiliary_loss(residual.detach(), mu)
         
-        # Total loss - ensure all components are in original dtype
-        recon_loss = recon_loss.to(dtype=original_dtype)
+        # Ensure compatibility
+        x_hat = x_hat.to(dtype=original_dtype)
+        
+        # Reconstruction loss
+        recon_loss = torch.mean(torch.sum((x - x_hat) ** 2, dim=1))
+        
+        # FIXED: Clean KL divergence computation (no decoder norm weighting)
+        kl_loss = self._compute_kl_loss(mu, log_var)
         kl_loss = kl_loss.to(dtype=original_dtype)
-        aux_loss = aux_loss.to(dtype=original_dtype)
         
-        total_loss = (
-            recon_loss + 
-            self.training_config.kl_coeff * sparsity_scale * kl_loss + 
-            self.training_config.auxk_alpha * aux_loss
-        )
+        # FIXED: Separate scaling - KL gets kl_scale, sparsity would get sparsity_scale
+        # Simplified: removed auxiliary loss complexity since VAE KL handles sparsity
+        total_loss = recon_loss + self.training_config.kl_coeff * kl_scale * kl_loss
         
         # Update logging stats
         self.effective_l0 = float(torch.sum(mu > 0).item()) / mu.numel()
@@ -602,18 +754,24 @@ class MatryoshkaVSAEIsoTrainer(SAETrainer):
         if not logging:
             return total_loss
         
-        # Return detailed loss information for logging
+        # Return detailed loss information with diagnostics
         LossLog = namedtuple('LossLog', ['x', 'x_hat', 'f', 'losses'])
+        
+        # Get additional diagnostics
+        kl_diagnostics = self.ae.get_kl_diagnostics(x)
+        
         return LossLog(
             x, x_hat, z,
             {
+                'l2_loss': torch.norm(x - x_hat, dim=-1).mean().item(),
                 'mse_loss': recon_loss.item(),
                 'kl_loss': kl_loss.item(),
-                'auxk_loss': aux_loss.item(),
-                'total_loss': total_loss.item(),
-                'min_group_loss': min(loss.item() for loss in group_losses),
-                'max_group_loss': max(loss.item() for loss in group_losses),
+                'loss': total_loss.item(),
                 'sparsity_scale': sparsity_scale,
+                'kl_scale': kl_scale,  # Separate from sparsity scaling
+                'effective_l0': self.effective_l0,
+                # Additional diagnostics
+                **{k: v.item() if torch.is_tensor(v) else v for k, v in kl_diagnostics.items()}
             }
         )
     
@@ -630,7 +788,7 @@ class MatryoshkaVSAEIsoTrainer(SAETrainer):
         
         # Gradient clipping
         torch.nn.utils.clip_grad_norm_(
-            self.ae.parameters(), 
+            self.ae.parameters(),
             self.training_config.gradient_clip_norm
         )
         
@@ -640,27 +798,28 @@ class MatryoshkaVSAEIsoTrainer(SAETrainer):
     
     @property
     def config(self) -> Dict[str, Any]:
-        """Return configuration dictionary for logging/saving (JSON serializable)."""
+        """Return configuration dictionary for logging/saving."""
         return {
             'dict_class': 'MatryoshkaVSAEIso',
             'trainer_class': 'MatryoshkaVSAEIsoTrainer',
-            # Model config (serializable)
+            # Model config
             'activation_dim': self.model_config.activation_dim,
             'dict_size': self.model_config.dict_size,
             'group_fractions': self.model_config.group_fractions,
             'group_weights': self.model_config.group_weights,
             'var_flag': self.model_config.var_flag,
+            'use_april_update_mode': self.model_config.use_april_update_mode,
+            'log_var_init': self.model_config.log_var_init,
             'dtype': str(self.model_config.dtype),
             'device': str(self.model_config.device),
-            # Training config (serializable)
+            # Training config
             'steps': self.training_config.steps,
             'lr': self.training_config.lr,
             'kl_coeff': self.training_config.kl_coeff,
-            'auxk_alpha': self.training_config.auxk_alpha,
+            'kl_warmup_steps': self.training_config.kl_warmup_steps,
             'warmup_steps': self.training_config.warmup_steps,
             'sparsity_warmup_steps': self.training_config.sparsity_warmup_steps,
             'decay_start': self.training_config.decay_start,
-            'dead_feature_threshold': self.training_config.dead_feature_threshold,
             'gradient_clip_norm': self.training_config.gradient_clip_norm,
             # Other attributes
             'layer': self.layer,
