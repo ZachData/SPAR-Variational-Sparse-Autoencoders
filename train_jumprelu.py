@@ -1,8 +1,12 @@
 """
-Training script for VSAEGated with comprehensive configuration management.
+Training script for robust JumpReLU SAE implementation.
 
-This script provides a clean interface for training VSAEGated models
-with different configurations and robust error handling.
+Key features:
+- Clean configuration management
+- Multiple preset configurations
+- Comprehensive evaluation
+- Robust error handling
+- Memory-efficient settings
 """
 
 import torch
@@ -19,33 +23,28 @@ from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.vsae_gated import VSAEGatedTrainer, VSAEGated, VSAEGatedConfig, VSAEGatedTrainingConfig
+from dictionary_learning.trainers.jumprelu import JumpReluTrainer, JumpReluSAE, JumpReluConfig, JumpReluTrainingConfig
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for VSAEGated training experiment."""
+    """Configuration for the entire JumpReLU experiment."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
     
-    # VSAEGated-specific config
-    var_flag: int = 1  # 0: fixed variance, 1: learned variance
-    use_april_update_mode: bool = True
-    log_var_init: float = -2.0
-    init_strategy: str = "tied"  # "tied", "independent", "xavier"
+    # JumpReLU-specific config
+    bandwidth: float = 0.001
+    threshold_init: float = 0.001
+    sparsity_penalty: float = 1.0
+    target_l0: float = 20.0
+    apply_b_dec_to_input: bool = False  # SAE-lens compatibility
     
     # Training configuration
     total_steps: int = 10000
-    lr: float = 5e-4
-    kl_coeff: float = 500.0
-    l1_penalty: float = 0.1
-    aux_weight: float = 0.1
-    kl_warmup_steps: Optional[int] = None
-    use_constrained_optimizer: bool = True
-    temperature_schedule: str = "constant"  # "constant", "linear_decay", "cosine_decay"
+    lr: float = 7e-5
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -61,23 +60,17 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-gated-experiments"
+    wandb_project: str = "jumprelu-experiments"
     
     # System configuration
     device: str = "cuda"
-    dtype: str = "bfloat16"
-    autocast_dtype: str = "bfloat16"
+    dtype: str = "float32"
+    autocast_dtype: str = "float32"
     seed: Optional[int] = 42
     
     # Evaluation configuration
     eval_batch_size: int = 64
     eval_n_batches: int = 10
-    
-    def __post_init__(self):
-        """Set derived configuration values."""
-        # Set default KL warmup steps if not provided
-        if self.kl_warmup_steps is None:
-            self.kl_warmup_steps = int(0.1 * self.total_steps)  # 10% of training
     
     def get_torch_dtype(self) -> torch.dtype:
         """Convert string dtype to torch dtype."""
@@ -103,7 +96,7 @@ class ExperimentConfig:
 
 
 class ExperimentRunner:
-    """Manages VSAEGated training experiments."""
+    """Manages the entire JumpReLU training experiment."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -119,7 +112,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_gated_training.log'),
+                logging.FileHandler(log_dir / 'jumprelu_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -172,38 +165,34 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAEGatedConfig:
+    def create_model_config(self, model: HookedTransformer) -> JumpReluConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return VSAEGatedConfig(
+        return JumpReluConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
-            var_flag=self.config.var_flag,
-            use_april_update_mode=self.config.use_april_update_mode,
+            bandwidth=self.config.bandwidth,
+            threshold_init=self.config.threshold_init,
+            apply_b_dec_to_input=self.config.apply_b_dec_to_input,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device(),
-            log_var_init=self.config.log_var_init,
-            init_strategy=self.config.init_strategy
         )
         
-    def create_training_config(self) -> VSAEGatedTrainingConfig:
+    def create_training_config(self) -> JumpReluTrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAEGatedTrainingConfig(
+        return JumpReluTrainingConfig(
             steps=self.config.total_steps,
             lr=self.config.lr,
-            kl_coeff=self.config.kl_coeff,
-            l1_penalty=self.config.l1_penalty,
-            aux_weight=self.config.aux_weight,
-            kl_warmup_steps=self.config.kl_warmup_steps,
-            use_constrained_optimizer=self.config.use_constrained_optimizer,
-            temperature_schedule=self.config.temperature_schedule,
+            bandwidth=self.config.bandwidth,
+            sparsity_penalty=self.config.sparsity_penalty,
+            target_l0=self.config.target_l0,
         )
         
-    def create_trainer_config(self, model_config: VSAEGatedConfig, training_config: VSAEGatedTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: JumpReluConfig, training_config: JumpReluTrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": VSAEGatedTrainer,
+            "trainer": JumpReluTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
@@ -215,16 +204,11 @@ class ExperimentRunner:
         
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
-        var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
-        temp_suffix = f"_{self.config.temperature_schedule}_temp" if self.config.temperature_schedule != "constant" else ""
-        kl_suffix = f"_kl_warmup{self.config.kl_warmup_steps}" if self.config.kl_warmup_steps else ""
-        
         return (
-            f"VSAEGated_{self.config.model_name}_"
+            f"JumpReLU_{self.config.model_name}_"
             f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
-            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"l1{self.config.l1_penalty}_aux{self.config.aux_weight}"
-            f"{var_suffix}{temp_suffix}{kl_suffix}"
+            f"lr{self.config.lr}_l0{self.config.target_l0}_"
+            f"bw{self.config.bandwidth}_sp{self.config.sparsity_penalty}"
         )
         
     def get_save_directory(self) -> Path:
@@ -259,7 +243,7 @@ class ExperimentRunner:
         
     def run_training(self) -> Dict[str, float]:
         """Run the complete training experiment."""
-        self.logger.info("Starting VSAEGated training experiment")
+        self.logger.info("Starting JumpReLU training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -284,12 +268,11 @@ class ExperimentRunner:
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
-            self.logger.info(f"KL warmup steps: {training_config.kl_warmup_steps}")
-            self.logger.info(f"Using constrained optimizer: {training_config.use_constrained_optimizer}")
-            self.logger.info(f"Temperature schedule: {training_config.temperature_schedule}")
+            self.logger.info(f"Target L0: {training_config.target_l0}")
+            self.logger.info(f"Bandwidth: {training_config.bandwidth}")
             
             # Run training
-            self.logger.info("Starting VSAEGated training...")
+            self.logger.info("Starting JumpReLU training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -305,13 +288,11 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_gated",
+                    "experiment_type": "jumprelu",
                     "dict_size_multiple": self.config.dict_size_multiple,
-                    "var_flag": self.config.var_flag,
-                    "kl_warmup_steps": self.config.kl_warmup_steps,
-                    "l1_penalty": self.config.l1_penalty,
-                    "aux_weight": self.config.aux_weight,
-                    "temperature_schedule": self.config.temperature_schedule,
+                    "target_l0": self.config.target_l0,
+                    "bandwidth": self.config.bandwidth,
+                    "sparsity_penalty": self.config.sparsity_penalty,
                     **asdict(self.config)
                 }
             )
@@ -333,7 +314,7 @@ class ExperimentRunner:
                 torch.cuda.empty_cache()
                 
     def evaluate_model(self, save_dir: Path, buffer: TransformerLensActivationBuffer) -> Dict[str, float]:
-        """Evaluate the trained model with enhanced diagnostics."""
+        """Evaluate the trained model with JumpReLU-specific diagnostics."""
         self.logger.info("Evaluating trained model...")
         
         try:
@@ -341,11 +322,11 @@ class ExperimentRunner:
             from dictionary_learning.utils import load_dictionary
             
             model_path = save_dir / "trainer_0"
-            vsae, config = load_dictionary(str(model_path), device=self.config.device)
+            jumprelu_sae, config = load_dictionary(str(model_path), device=self.config.device)
             
             # Run evaluation
             eval_results = evaluate(
-                dictionary=vsae,
+                dictionary=jumprelu_sae,
                 activations=buffer,
                 batch_size=self.config.eval_batch_size,
                 max_len=self.config.ctx_len,
@@ -353,27 +334,26 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            # Add VSAEGated-specific diagnostics if possible
+            # Add JumpReLU-specific diagnostics if possible
             try:
-                # Get a sample batch for diagnostics
+                # Get a sample batch for feature diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
-                sample_batch = sample_batch.to(self.config.device)
-                
-                # Get KL diagnostics
-                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
-                
-                # Get reconstruction diagnostics
-                recon_diagnostics = vsae.get_reconstruction_diagnostics(sample_batch)
+                feature_diagnostics = jumprelu_sae.get_feature_diagnostics(sample_batch.to(self.config.device))
+                l0_diagnostic = jumprelu_sae.get_l0(sample_batch.to(self.config.device))
                 
                 # Add to eval results
-                for key, value in {**kl_diagnostics, **recon_diagnostics}.items():
+                for key, value in feature_diagnostics.items():
                     eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
                     
+                eval_results["final_l0"] = l0_diagnostic.item()
+                eval_results["final_threshold_mean"] = jumprelu_sae.threshold.mean().item()
+                eval_results["final_threshold_std"] = jumprelu_sae.threshold.std().item()
+                    
             except Exception as e:
-                self.logger.warning(f"Could not compute additional diagnostics: {e}")
+                self.logger.warning(f"Could not compute JumpReLU diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
@@ -411,11 +391,16 @@ def create_quick_test_config() -> ExperimentConfig:
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Test parameters
+        # JumpReLU parameters
+        bandwidth=0.001,
+        threshold_init=0.001,
+        sparsity_penalty=1.0,
+        target_l0=20.0,
+        
+        # Quick test parameters
         total_steps=1000,
         checkpoint_steps=(),
         log_steps=50,
-        kl_warmup_steps=100,  # 10% of training for KL annealing
         
         # Small buffer for testing
         n_ctxs=500,
@@ -432,29 +417,23 @@ def create_quick_test_config() -> ExperimentConfig:
     )
 
 
-def create_full_config() -> ExperimentConfig:
-    """Create a configuration for full training."""
+def create_standard_config() -> ExperimentConfig:
+    """Create a configuration for standard training."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Full training parameters
-        total_steps=25000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2500,  # 10% of training for KL annealing
+        # JumpReLU parameters
+        bandwidth=0.001,
+        threshold_init=0.001,
+        sparsity_penalty=1.0,
+        target_l0=20.0,
         
-        # Model settings
-        var_flag=1,  # Use learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        temperature_schedule="constant",
+        # Standard training parameters
+        total_steps=25000,
+        lr=7e-5,
         
         # Buffer settings
         n_ctxs=8000,
@@ -472,27 +451,33 @@ def create_full_config() -> ExperimentConfig:
         
         # System settings
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
-        autocast_dtype="bfloat16",
+        dtype="float32",
+        autocast_dtype="float32",
         seed=42,
     )
 
 
-def create_fixed_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with fixed variance."""
-    config = create_full_config()
-    config.var_flag = 0  # Fixed variance
-    config.kl_coeff = 100.0  # Lower KL coefficient for fixed variance
-    config.kl_warmup_steps = 1000  # Shorter warmup
+def create_high_sparsity_config() -> ExperimentConfig:
+    """Create a configuration for high sparsity training."""
+    config = create_standard_config()
+    
+    # High sparsity settings
+    config.target_l0 = 10.0  # Lower target L0 for higher sparsity
+    config.sparsity_penalty = 2.0  # Higher penalty
+    config.bandwidth = 0.0005  # Smaller bandwidth for sharper thresholds
+    
     return config
 
 
-def create_temperature_annealing_config() -> ExperimentConfig:
-    """Create a configuration with temperature annealing."""
-    config = create_full_config()
-    config.temperature_schedule = "linear_decay"
-    config.total_steps = 30000  # Longer training for temperature annealing
-    config.kl_warmup_steps = 3000
+def create_low_sparsity_config() -> ExperimentConfig:
+    """Create a configuration for low sparsity training."""
+    config = create_standard_config()
+    
+    # Low sparsity settings
+    config.target_l0 = 40.0  # Higher target L0 for lower sparsity
+    config.sparsity_penalty = 0.5  # Lower penalty
+    config.bandwidth = 0.002  # Larger bandwidth for smoother thresholds
+    
     return config
 
 
@@ -504,26 +489,21 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Training parameters optimized for 10GB GPU
-        total_steps=20000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2000,  # 10% for KL annealing
+        # JumpReLU parameters
+        bandwidth=0.001,
+        threshold_init=0.001,
+        sparsity_penalty=1.0,
+        target_l0=20.0,
         
-        # Model settings
-        var_flag=1,  # Learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
+        # GPU memory optimized parameters
+        total_steps=20000,
+        lr=7e-5,
         
         # GPU memory optimized buffer settings
-        n_ctxs=3000,     # Small enough to fit in 10GB
+        n_ctxs=3000,
         ctx_len=128,
-        refresh_batch_size=16,  # Conservative batch size
-        out_batch_size=256,     # Conservative output size
+        refresh_batch_size=16,
+        out_batch_size=256,
         
         # Checkpointing
         checkpoint_steps=(20000,),
@@ -535,59 +515,38 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         
         # System settings
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
-        autocast_dtype="bfloat16",
+        dtype="float32",
+        autocast_dtype="float32",
         seed=42,
     )
-
-
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
-    config = create_full_config()
-    config.l1_penalty = 0.2  # Higher L1 penalty for more sparsity
-    config.aux_weight = 0.2  # Higher auxiliary weight to help gate network
-    config.kl_coeff = 300.0  # Lower KL coefficient to balance sparsity
-    return config
-
-
-def create_no_auxiliary_config() -> ExperimentConfig:
-    """Create a configuration without auxiliary loss."""
-    config = create_full_config()
-    config.aux_weight = 0.0  # No auxiliary loss
-    config.l1_penalty = 0.05  # Lower L1 penalty to compensate
-    return config
 
 
 def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAEGated Training")
+    parser = argparse.ArgumentParser(description="JumpReLU SAE Training")
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
-            "full", 
-            "fixed_variance",
-            "temperature_annealing",
-            "gpu_10gb",
+            "standard",
             "high_sparsity",
-            "no_auxiliary"
+            "low_sparsity", 
+            "gpu_10gb"
         ], 
         default="quick_test",
         help="Configuration preset for training"
     )
     args = parser.parse_args()
     
-    # Configuration functions
+    # Select configuration
     config_functions = {
         "quick_test": create_quick_test_config,
-        "full": create_full_config,
-        "fixed_variance": create_fixed_variance_config,
-        "temperature_annealing": create_temperature_annealing_config,
-        "gpu_10gb": create_gpu_10gb_config,
+        "standard": create_standard_config,
         "high_sparsity": create_high_sparsity_config,
-        "no_auxiliary": create_no_auxiliary_config,
+        "low_sparsity": create_low_sparsity_config,
+        "gpu_10gb": create_gpu_10gb_config,
     }
     
     config = config_functions[args.config]()
@@ -603,19 +562,11 @@ def main():
             if metric in results:
                 print(f"{metric:<25} | {results[metric]:.4f}")
                 
-        # Show KL diagnostics if available
-        kl_metrics = [k for k in results.keys() if "kl" in k.lower()]
-        if kl_metrics:
-            print("\nKL Diagnostics:")
-            for metric in kl_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
-        
-        # Show gating diagnostics if available
-        gate_metrics = [k for k in results.keys() if "gate" in k.lower() or "sparsity" in k.lower()]
-        if gate_metrics:
-            print("\nGating/Sparsity Diagnostics:")
-            for metric in gate_metrics:
+        # Show JumpReLU-specific diagnostics if available
+        jumprelu_metrics = [k for k in results.keys() if any(x in k.lower() for x in ["l0", "threshold", "feature"])]
+        if jumprelu_metrics:
+            print("\nJumpReLU Diagnostics:")
+            for metric in jumprelu_metrics:
                 if metric in results:
                     print(f"{metric:<25} | {results[metric]:.4f}")
                 
@@ -631,13 +582,11 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_gated.py --config quick_test
-# python train_vsae_gated.py --config full
-# python train_vsae_gated.py --config fixed_variance
-# python train_vsae_gated.py --config temperature_annealing
-# python train_vsae_gated.py --config gpu_10gb
-# python train_vsae_gated.py --config high_sparsity
-# python train_vsae_gated.py --config no_auxiliary
+# python train_jumprelu.py --config quick_test
+# python train_jumprelu.py --config standard
+# python train_jumprelu.py --config high_sparsity
+# python train_jumprelu.py --config low_sparsity
+# python train_jumprelu.py --config gpu_10gb
 
 
 if __name__ == "__main__":

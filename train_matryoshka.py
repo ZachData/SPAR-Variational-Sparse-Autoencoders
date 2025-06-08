@@ -1,8 +1,8 @@
 """
-Training script for VSAEGated with comprehensive configuration management.
+Training script for Matryoshka Batch Top-K SAE.
 
-This script provides a clean interface for training VSAEGated models
-with different configurations and robust error handling.
+This script provides a clean interface for training hierarchical SAEs
+with batch-level top-k selection and dead feature revival mechanisms.
 """
 
 import torch
@@ -11,7 +11,7 @@ import time
 import logging
 from pathlib import Path
 from dataclasses import dataclass, asdict
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import multiprocessing
 
 from transformer_lens import HookedTransformer
@@ -19,33 +19,36 @@ from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.vsae_gated import VSAEGatedTrainer, VSAEGated, VSAEGatedConfig, VSAEGatedTrainingConfig
+from dictionary_learning.trainers.matryoshka_batch_top_k import (
+    MatryoshkaBatchTopKTrainer, 
+    MatryoshkaBatchTopKSAE, 
+    MatryoshkaConfig, 
+    MatryoshkaTrainingConfig
+)
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for VSAEGated training experiment."""
+    """Configuration for Matryoshka Batch Top-K SAE experiment."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
     
-    # VSAEGated-specific config
-    var_flag: int = 1  # 0: fixed variance, 1: learned variance
-    use_april_update_mode: bool = True
-    log_var_init: float = -2.0
-    init_strategy: str = "tied"  # "tied", "independent", "xavier"
+    # Matryoshka-specific configuration
+    k: int = 64  # Number of features active per batch
+    group_fractions: List[float] = None  # Will be set in __post_init__
+    group_weights: Optional[List[float]] = None  # Equal weights by default
+    auxk_alpha: float = 1/32  # Auxiliary loss coefficient
+    threshold_beta: float = 0.999  # EMA coefficient for threshold
+    threshold_start_step: int = 1000  # When to start threshold updates
+    dead_feature_threshold: int = 10_000_000  # Steps before feature considered dead
+    top_k_aux_fraction: float = 0.5  # Fraction of activation_dim for auxiliary k
     
     # Training configuration
-    total_steps: int = 10000
-    lr: float = 5e-4
-    kl_coeff: float = 500.0
-    l1_penalty: float = 0.1
-    aux_weight: float = 0.1
-    kl_warmup_steps: Optional[int] = None
-    use_constrained_optimizer: bool = True
-    temperature_schedule: str = "constant"  # "constant", "linear_decay", "cosine_decay"
+    total_steps: int = 15000
+    lr: Optional[float] = None  # Will be auto-calculated
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -54,14 +57,14 @@ class ExperimentConfig:
     out_batch_size: int = 1024
     
     # Logging and saving
-    checkpoint_steps: tuple = (5000, 10000)
+    checkpoint_steps: tuple = (5000, 10000, 15000)
     log_steps: int = 100
     save_dir: str = "./experiments"
     
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-gated-experiments"
+    wandb_project: str = "matryoshka-batch-topk-experiments"
     
     # System configuration
     device: str = "cuda"
@@ -75,9 +78,9 @@ class ExperimentConfig:
     
     def __post_init__(self):
         """Set derived configuration values."""
-        # Set default KL warmup steps if not provided
-        if self.kl_warmup_steps is None:
-            self.kl_warmup_steps = int(0.1 * self.total_steps)  # 10% of training
+        # Set default group fractions (3 groups with decreasing importance)
+        if self.group_fractions is None:
+            self.group_fractions = [0.5, 0.3, 0.2]  # 50%, 30%, 20%
     
     def get_torch_dtype(self) -> torch.dtype:
         """Convert string dtype to torch dtype."""
@@ -103,7 +106,7 @@ class ExperimentConfig:
 
 
 class ExperimentRunner:
-    """Manages VSAEGated training experiments."""
+    """Manages Matryoshka Batch Top-K SAE training experiments."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -119,7 +122,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_gated_training.log'),
+                logging.FileHandler(log_dir / 'matryoshka_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -172,38 +175,36 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAEGatedConfig:
+    def create_model_config(self, model: HookedTransformer) -> MatryoshkaConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return VSAEGatedConfig(
+        return MatryoshkaConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
-            var_flag=self.config.var_flag,
-            use_april_update_mode=self.config.use_april_update_mode,
+            k=self.config.k,
+            group_fractions=self.config.group_fractions,
+            group_weights=self.config.group_weights,
+            auxk_alpha=self.config.auxk_alpha,
+            threshold_beta=self.config.threshold_beta,
+            threshold_start_step=self.config.threshold_start_step,
+            dead_feature_threshold=self.config.dead_feature_threshold,
+            top_k_aux_fraction=self.config.top_k_aux_fraction,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device(),
-            log_var_init=self.config.log_var_init,
-            init_strategy=self.config.init_strategy
         )
         
-    def create_training_config(self) -> VSAEGatedTrainingConfig:
+    def create_training_config(self) -> MatryoshkaTrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAEGatedTrainingConfig(
+        return MatryoshkaTrainingConfig(
             steps=self.config.total_steps,
             lr=self.config.lr,
-            kl_coeff=self.config.kl_coeff,
-            l1_penalty=self.config.l1_penalty,
-            aux_weight=self.config.aux_weight,
-            kl_warmup_steps=self.config.kl_warmup_steps,
-            use_constrained_optimizer=self.config.use_constrained_optimizer,
-            temperature_schedule=self.config.temperature_schedule,
         )
         
-    def create_trainer_config(self, model_config: VSAEGatedConfig, training_config: VSAEGatedTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: MatryoshkaConfig, training_config: MatryoshkaTrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": VSAEGatedTrainer,
+            "trainer": MatryoshkaBatchTopKTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
@@ -215,16 +216,14 @@ class ExperimentRunner:
         
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
-        var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
-        temp_suffix = f"_{self.config.temperature_schedule}_temp" if self.config.temperature_schedule != "constant" else ""
-        kl_suffix = f"_kl_warmup{self.config.kl_warmup_steps}" if self.config.kl_warmup_steps else ""
+        groups_str = f"g{len(self.config.group_fractions)}"
+        fractions_str = "_".join([f"{f:.1f}" for f in self.config.group_fractions])
         
         return (
-            f"VSAEGated_{self.config.model_name}_"
+            f"MatryoshkaBatchTopK_{self.config.model_name}_"
             f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
-            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"l1{self.config.l1_penalty}_aux{self.config.aux_weight}"
-            f"{var_suffix}{temp_suffix}{kl_suffix}"
+            f"k{self.config.k}_{groups_str}_{fractions_str}_"
+            f"aux{self.config.auxk_alpha:.3f}"
         )
         
     def get_save_directory(self) -> Path:
@@ -245,21 +244,9 @@ class ExperimentRunner:
             
         self.logger.info(f"Saved experiment config to {config_path}")
         
-    def check_existing_checkpoint(self, save_dir: Path) -> bool:
-        """Check if there's an existing checkpoint to continue from."""
-        checkpoint_path = save_dir / "trainer_0" / "checkpoints"
-        exists = checkpoint_path.exists() and any(checkpoint_path.glob("*.pt"))
-        
-        if exists:
-            self.logger.info(f"Found existing checkpoint at {checkpoint_path}")
-        else:
-            self.logger.info("No existing checkpoint found, starting from scratch")
-            
-        return exists
-        
     def run_training(self) -> Dict[str, float]:
         """Run the complete training experiment."""
-        self.logger.info("Starting VSAEGated training experiment")
+        self.logger.info("Starting Matryoshka Batch Top-K SAE training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -278,18 +265,16 @@ class ExperimentRunner:
             save_dir = self.get_save_directory()
             self.save_config(save_dir)
             
-            # Check for existing checkpoints
-            self.check_existing_checkpoint(save_dir)
-            
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
-            self.logger.info(f"KL warmup steps: {training_config.kl_warmup_steps}")
-            self.logger.info(f"Using constrained optimizer: {training_config.use_constrained_optimizer}")
-            self.logger.info(f"Temperature schedule: {training_config.temperature_schedule}")
+            self.logger.info(f"Group sizes: {model_config.group_sizes}")
+            self.logger.info(f"Group fractions: {model_config.group_fractions}")
+            self.logger.info(f"K (batch top-k): {model_config.k}")
+            self.logger.info(f"Auxiliary loss coefficient: {model_config.auxk_alpha}")
             
             # Run training
-            self.logger.info("Starting VSAEGated training...")
+            self.logger.info("Starting training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -305,13 +290,14 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_gated",
+                    "experiment_type": "matryoshka_batch_topk",
                     "dict_size_multiple": self.config.dict_size_multiple,
-                    "var_flag": self.config.var_flag,
-                    "kl_warmup_steps": self.config.kl_warmup_steps,
-                    "l1_penalty": self.config.l1_penalty,
-                    "aux_weight": self.config.aux_weight,
-                    "temperature_schedule": self.config.temperature_schedule,
+                    "k": self.config.k,
+                    "group_fractions": self.config.group_fractions,
+                    "auxk_alpha": self.config.auxk_alpha,
+                    "hierarchical_structure": True,
+                    "batch_level_topk": True,
+                    "dead_feature_revival": True,
                     **asdict(self.config)
                 }
             )
@@ -333,7 +319,7 @@ class ExperimentRunner:
                 torch.cuda.empty_cache()
                 
     def evaluate_model(self, save_dir: Path, buffer: TransformerLensActivationBuffer) -> Dict[str, float]:
-        """Evaluate the trained model with enhanced diagnostics."""
+        """Evaluate the trained model with hierarchical analysis."""
         self.logger.info("Evaluating trained model...")
         
         try:
@@ -341,11 +327,11 @@ class ExperimentRunner:
             from dictionary_learning.utils import load_dictionary
             
             model_path = save_dir / "trainer_0"
-            vsae, config = load_dictionary(str(model_path), device=self.config.device)
+            sae, config = load_dictionary(str(model_path), device=self.config.device)
             
-            # Run evaluation
+            # Run standard evaluation
             eval_results = evaluate(
-                dictionary=vsae,
+                dictionary=sae,
                 activations=buffer,
                 batch_size=self.config.eval_batch_size,
                 max_len=self.config.ctx_len,
@@ -353,27 +339,41 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            # Add VSAEGated-specific diagnostics if possible
+            # Add Matryoshka-specific diagnostics
             try:
-                # Get a sample batch for diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
                 sample_batch = sample_batch.to(self.config.device)
                 
-                # Get KL diagnostics
-                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
-                
-                # Get reconstruction diagnostics
-                recon_diagnostics = vsae.get_reconstruction_diagnostics(sample_batch)
-                
-                # Add to eval results
-                for key, value in {**kl_diagnostics, **recon_diagnostics}.items():
-                    eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
+                # Analyze group-wise activation patterns
+                with torch.no_grad():
+                    f, active_indices, post_relu_acts = sae.encode(
+                        sample_batch, return_active=True, use_threshold=False
+                    )
+                    
+                    # Group-wise statistics
+                    f_chunks = torch.split(f, sae.config.group_sizes, dim=1)
+                    
+                    for i, f_chunk in enumerate(f_chunks):
+                        group_l0 = (f_chunk != 0).float().sum(dim=-1).mean()
+                        group_active_frac = (f_chunk.sum(0) > 0).float().mean()
+                        
+                        eval_results[f"group_{i}_l0"] = group_l0.item()
+                        eval_results[f"group_{i}_active_fraction"] = group_active_frac.item()
+                    
+                    # Dead feature analysis
+                    total_active = (f.sum(0) > 0).float().sum()
+                    eval_results["total_active_features"] = total_active.item()
+                    eval_results["dead_feature_fraction"] = 1.0 - (total_active / sae.dict_size).item()
+                    
+                    # Threshold information
+                    if hasattr(sae, 'threshold') and sae.threshold >= 0:
+                        eval_results["current_threshold"] = sae.threshold.item()
                     
             except Exception as e:
-                self.logger.warning(f"Could not compute additional diagnostics: {e}")
+                self.logger.warning(f"Could not compute Matryoshka-specific diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
@@ -411,11 +411,16 @@ def create_quick_test_config() -> ExperimentConfig:
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
+        # Matryoshka parameters
+        k=32,  # Smaller k for testing
+        group_fractions=[0.6, 0.4],  # 2 groups for simplicity
+        auxk_alpha=1/32,
+        threshold_start_step=500,  # Earlier start for testing
+        
         # Test parameters
         total_steps=1000,
         checkpoint_steps=(),
         log_steps=50,
-        kl_warmup_steps=100,  # 10% of training for KL annealing
         
         # Small buffer for testing
         n_ctxs=500,
@@ -440,23 +445,19 @@ def create_full_config() -> ExperimentConfig:
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
+        # Matryoshka parameters
+        k=64,  # Standard k
+        group_fractions=[0.5, 0.3, 0.2],  # 3 groups
+        auxk_alpha=1/32,
+        threshold_beta=0.999,
+        threshold_start_step=1000,
+        dead_feature_threshold=10_000_000,
+        
         # Full training parameters
         total_steps=25000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2500,  # 10% of training for KL annealing
+        lr=None,  # Auto-calculated
         
-        # Model settings
-        var_flag=1,  # Use learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        temperature_schedule="constant",
-        
-        # Buffer settings
+        # Buffer settings (memory efficient)
         n_ctxs=8000,
         ctx_len=128,
         refresh_batch_size=24,
@@ -478,21 +479,21 @@ def create_full_config() -> ExperimentConfig:
     )
 
 
-def create_fixed_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with fixed variance."""
+def create_high_sparsity_config() -> ExperimentConfig:
+    """Create a configuration for high sparsity experiments."""
     config = create_full_config()
-    config.var_flag = 0  # Fixed variance
-    config.kl_coeff = 100.0  # Lower KL coefficient for fixed variance
-    config.kl_warmup_steps = 1000  # Shorter warmup
+    config.k = 32  # Lower k for higher sparsity
+    config.auxk_alpha = 1/16  # Higher auxiliary loss
+    config.threshold_start_step = 500  # Earlier threshold updates
     return config
 
 
-def create_temperature_annealing_config() -> ExperimentConfig:
-    """Create a configuration with temperature annealing."""
+def create_many_groups_config() -> ExperimentConfig:
+    """Create a configuration with many hierarchical groups."""
     config = create_full_config()
-    config.temperature_schedule = "linear_decay"
-    config.total_steps = 30000  # Longer training for temperature annealing
-    config.kl_warmup_steps = 3000
+    config.group_fractions = [0.4, 0.25, 0.2, 0.1, 0.05]  # 5 groups
+    config.k = 80  # Slightly higher k to accommodate more groups
+    config.group_weights = [0.4, 0.25, 0.2, 0.1, 0.05]  # Weighted by importance
     return config
 
 
@@ -504,20 +505,15 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
+        # Matryoshka parameters
+        k=48,  # Moderate k for memory efficiency
+        group_fractions=[0.6, 0.4],  # 2 groups only
+        auxk_alpha=1/32,
+        threshold_start_step=800,
+        
         # Training parameters optimized for 10GB GPU
         total_steps=20000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2000,  # 10% for KL annealing
-        
-        # Model settings
-        var_flag=1,  # Learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
+        lr=None,  # Auto-calculated
         
         # GPU memory optimized buffer settings
         n_ctxs=3000,     # Small enough to fit in 10GB
@@ -541,20 +537,12 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     )
 
 
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
+def create_balanced_groups_config() -> ExperimentConfig:
+    """Create a configuration with balanced group sizes."""
     config = create_full_config()
-    config.l1_penalty = 0.2  # Higher L1 penalty for more sparsity
-    config.aux_weight = 0.2  # Higher auxiliary weight to help gate network
-    config.kl_coeff = 300.0  # Lower KL coefficient to balance sparsity
-    return config
-
-
-def create_no_auxiliary_config() -> ExperimentConfig:
-    """Create a configuration without auxiliary loss."""
-    config = create_full_config()
-    config.aux_weight = 0.0  # No auxiliary loss
-    config.l1_penalty = 0.05  # Lower L1 penalty to compensate
+    config.group_fractions = [0.33, 0.33, 0.34]  # Nearly equal groups
+    config.group_weights = [1.0, 1.0, 1.0]  # Equal importance
+    config.k = 72  # Adjust k for balanced structure
     return config
 
 
@@ -562,32 +550,29 @@ def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAEGated Training")
+    parser = argparse.ArgumentParser(description="Matryoshka Batch Top-K SAE Training")
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
             "full", 
-            "fixed_variance",
-            "temperature_annealing",
-            "gpu_10gb",
             "high_sparsity",
-            "no_auxiliary"
+            "many_groups",
+            "gpu_10gb",
+            "balanced_groups"
         ], 
         default="quick_test",
         help="Configuration preset for training"
     )
     args = parser.parse_args()
     
-    # Configuration functions
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "fixed_variance": create_fixed_variance_config,
-        "temperature_annealing": create_temperature_annealing_config,
-        "gpu_10gb": create_gpu_10gb_config,
         "high_sparsity": create_high_sparsity_config,
-        "no_auxiliary": create_no_auxiliary_config,
+        "many_groups": create_many_groups_config,
+        "gpu_10gb": create_gpu_10gb_config,
+        "balanced_groups": create_balanced_groups_config,
     }
     
     config = config_functions[args.config]()
@@ -596,34 +581,25 @@ def main():
     
     if results:
         key_metrics = ["frac_variance_explained", "l0", "frac_alive", "cossim"]
-        print(f"{'Metric':<25} | Value")
-        print("-" * 35)
+        print(f"{'Metric':<30} | Value")
+        print("-" * 40)
         
         for metric in key_metrics:
             if metric in results:
-                print(f"{metric:<25} | {results[metric]:.4f}")
-                
-        # Show KL diagnostics if available
-        kl_metrics = [k for k in results.keys() if "kl" in k.lower()]
-        if kl_metrics:
-            print("\nKL Diagnostics:")
-            for metric in kl_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
+                print(f"{metric:<30} | {results[metric]:.4f}")
         
-        # Show gating diagnostics if available
-        gate_metrics = [k for k in results.keys() if "gate" in k.lower() or "sparsity" in k.lower()]
-        if gate_metrics:
-            print("\nGating/Sparsity Diagnostics:")
-            for metric in gate_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
+        # Show group-specific metrics
+        group_metrics = [k for k in results.keys() if k.startswith("group_")]
+        if group_metrics:
+            print("\nGroup-Specific Metrics:")
+            for metric in sorted(group_metrics):
+                print(f"{metric:<30} | {results[metric]:.4f}")
                 
-        additional_metrics = ["loss_original", "loss_reconstructed", "frac_recovered"]
+        additional_metrics = ["loss_original", "loss_reconstructed", "frac_recovered", "dead_feature_fraction"]
         print("\nAdditional Metrics:")
         for metric in additional_metrics:
             if metric in results:
-                print(f"{metric:<25} | {results[metric]:.4f}")
+                print(f"{metric:<30} | {results[metric]:.4f}")
                 
         print(f"\nFull results saved to experiment directory")
     else:
@@ -631,14 +607,12 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_gated.py --config quick_test
-# python train_vsae_gated.py --config full
-# python train_vsae_gated.py --config fixed_variance
-# python train_vsae_gated.py --config temperature_annealing
-# python train_vsae_gated.py --config gpu_10gb
-# python train_vsae_gated.py --config high_sparsity
-# python train_vsae_gated.py --config no_auxiliary
-
+# python train_matryoshka_batch_topk.py --config quick_test
+# python train_matryoshka_batch_topk.py --config full
+# python train_matryoshka_batch_topk.py --config high_sparsity
+# python train_matryoshka_batch_topk.py --config many_groups
+# python train_matryoshka_batch_topk.py --config gpu_10gb
+# python train_matryoshka_batch_topk.py --config balanced_groups
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility

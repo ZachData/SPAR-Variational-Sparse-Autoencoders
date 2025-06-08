@@ -1,8 +1,11 @@
 """
-Training script for VSAEGated with comprehensive configuration management.
+Clean training script for Standard SAE with robust configuration management.
 
-This script provides a clean interface for training VSAEGated models
-with different configurations and robust error handling.
+Usage examples:
+python train_standard_sae.py --config quick_test
+python train_standard_sae.py --config full
+python train_standard_sae.py --config april_update
+python train_standard_sae.py --config with_resampling
 """
 
 import torch
@@ -19,49 +22,47 @@ from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.vsae_gated import VSAEGatedTrainer, VSAEGated, VSAEGatedConfig, VSAEGatedTrainingConfig
+from dictionary_learning.trainers.standard import (
+    StandardTrainer, 
+    StandardTrainerAprilUpdate,
+    StandardSAEConfig, 
+    StandardSAETrainingConfig
+)
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for VSAEGated training experiment."""
+    """Configuration for the entire Standard SAE experiment."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
-    dict_size_multiple: float = 4.0
+    dict_size_multiple: float = 8.0
     
-    # VSAEGated-specific config
-    var_flag: int = 1  # 0: fixed variance, 1: learned variance
-    use_april_update_mode: bool = True
-    log_var_init: float = -2.0
-    init_strategy: str = "tied"  # "tied", "independent", "xavier"
+    # Model-specific config
+    use_april_update_mode: bool = False  # True for April update training
     
     # Training configuration
-    total_steps: int = 10000
-    lr: float = 5e-4
-    kl_coeff: float = 500.0
-    l1_penalty: float = 0.1
-    aux_weight: float = 0.1
-    kl_warmup_steps: Optional[int] = None
-    use_constrained_optimizer: bool = True
-    temperature_schedule: str = "constant"  # "constant", "linear_decay", "cosine_decay"
+    total_steps: int = 25000
+    lr: float = 1e-3
+    l1_penalty: float = 1e-1
+    resample_steps: Optional[int] = None  # Set to enable neuron resampling
     
     # Buffer configuration
-    n_ctxs: int = 3000
+    n_ctxs: int = 8000
     ctx_len: int = 128
     refresh_batch_size: int = 32
     out_batch_size: int = 1024
     
     # Logging and saving
-    checkpoint_steps: tuple = (5000, 10000)
+    checkpoint_steps: tuple = (10000, 20000, 25000)
     log_steps: int = 100
     save_dir: str = "./experiments"
     
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-gated-experiments"
+    wandb_project: str = "standard-sae-experiments"
     
     # System configuration
     device: str = "cuda"
@@ -72,12 +73,6 @@ class ExperimentConfig:
     # Evaluation configuration
     eval_batch_size: int = 64
     eval_n_batches: int = 10
-    
-    def __post_init__(self):
-        """Set derived configuration values."""
-        # Set default KL warmup steps if not provided
-        if self.kl_warmup_steps is None:
-            self.kl_warmup_steps = int(0.1 * self.total_steps)  # 10% of training
     
     def get_torch_dtype(self) -> torch.dtype:
         """Convert string dtype to torch dtype."""
@@ -102,8 +97,8 @@ class ExperimentConfig:
         return torch.device(self.device)
 
 
-class ExperimentRunner:
-    """Manages VSAEGated training experiments."""
+class StandardSAEExperimentRunner:
+    """Manages the entire Standard SAE training experiment."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -119,7 +114,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_gated_training.log'),
+                logging.FileHandler(log_dir / 'standard_sae_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -172,38 +167,31 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAEGatedConfig:
+    def create_model_config(self, model: HookedTransformer) -> StandardSAEConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return VSAEGatedConfig(
+        return StandardSAEConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
-            var_flag=self.config.var_flag,
             use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device(),
-            log_var_init=self.config.log_var_init,
-            init_strategy=self.config.init_strategy
         )
         
-    def create_training_config(self) -> VSAEGatedTrainingConfig:
+    def create_training_config(self) -> StandardSAETrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAEGatedTrainingConfig(
+        return StandardSAETrainingConfig(
             steps=self.config.total_steps,
             lr=self.config.lr,
-            kl_coeff=self.config.kl_coeff,
             l1_penalty=self.config.l1_penalty,
-            aux_weight=self.config.aux_weight,
-            kl_warmup_steps=self.config.kl_warmup_steps,
-            use_constrained_optimizer=self.config.use_constrained_optimizer,
-            temperature_schedule=self.config.temperature_schedule,
+            resample_steps=self.config.resample_steps,
         )
         
-    def create_trainer_config(self, model_config: VSAEGatedConfig, training_config: VSAEGatedTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: StandardSAEConfig, training_config: StandardSAETrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": VSAEGatedTrainer,
+            "trainer": StandardTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
@@ -215,16 +203,14 @@ class ExperimentRunner:
         
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
-        var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
-        temp_suffix = f"_{self.config.temperature_schedule}_temp" if self.config.temperature_schedule != "constant" else ""
-        kl_suffix = f"_kl_warmup{self.config.kl_warmup_steps}" if self.config.kl_warmup_steps else ""
+        update_suffix = "_april" if self.config.use_april_update_mode else "_original"
+        resample_suffix = f"_resample{self.config.resample_steps}" if self.config.resample_steps else "_no_resample"
         
         return (
-            f"VSAEGated_{self.config.model_name}_"
+            f"StandardSAE_{self.config.model_name}_"
             f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
-            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"l1{self.config.l1_penalty}_aux{self.config.aux_weight}"
-            f"{var_suffix}{temp_suffix}{kl_suffix}"
+            f"lr{self.config.lr}_l1{self.config.l1_penalty}"
+            f"{update_suffix}{resample_suffix}"
         )
         
     def get_save_directory(self) -> Path:
@@ -239,27 +225,14 @@ class ExperimentRunner:
         
         import json
         with open(config_path, 'w') as f:
-            # Convert config to dict, handling special types
             config_dict = asdict(self.config)
             json.dump(config_dict, f, indent=2, default=str)
             
         self.logger.info(f"Saved experiment config to {config_path}")
         
-    def check_existing_checkpoint(self, save_dir: Path) -> bool:
-        """Check if there's an existing checkpoint to continue from."""
-        checkpoint_path = save_dir / "trainer_0" / "checkpoints"
-        exists = checkpoint_path.exists() and any(checkpoint_path.glob("*.pt"))
-        
-        if exists:
-            self.logger.info(f"Found existing checkpoint at {checkpoint_path}")
-        else:
-            self.logger.info("No existing checkpoint found, starting from scratch")
-            
-        return exists
-        
     def run_training(self) -> Dict[str, float]:
         """Run the complete training experiment."""
-        self.logger.info("Starting VSAEGated training experiment")
+        self.logger.info("Starting Standard SAE training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -278,18 +251,14 @@ class ExperimentRunner:
             save_dir = self.get_save_directory()
             self.save_config(save_dir)
             
-            # Check for existing checkpoints
-            self.check_existing_checkpoint(save_dir)
-            
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
-            self.logger.info(f"KL warmup steps: {training_config.kl_warmup_steps}")
-            self.logger.info(f"Using constrained optimizer: {training_config.use_constrained_optimizer}")
-            self.logger.info(f"Temperature schedule: {training_config.temperature_schedule}")
+            self.logger.info(f"Using April update: {model_config.use_april_update_mode}")
+            self.logger.info(f"Resampling enabled: {training_config.resample_steps is not None}")
             
             # Run training
-            self.logger.info("Starting VSAEGated training...")
+            self.logger.info("Starting Standard SAE training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -305,13 +274,10 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_gated",
+                    "experiment_type": "standard_sae",
                     "dict_size_multiple": self.config.dict_size_multiple,
-                    "var_flag": self.config.var_flag,
-                    "kl_warmup_steps": self.config.kl_warmup_steps,
-                    "l1_penalty": self.config.l1_penalty,
-                    "aux_weight": self.config.aux_weight,
-                    "temperature_schedule": self.config.temperature_schedule,
+                    "use_april_update_mode": self.config.use_april_update_mode,
+                    "resample_steps": self.config.resample_steps,
                     **asdict(self.config)
                 }
             )
@@ -333,7 +299,7 @@ class ExperimentRunner:
                 torch.cuda.empty_cache()
                 
     def evaluate_model(self, save_dir: Path, buffer: TransformerLensActivationBuffer) -> Dict[str, float]:
-        """Evaluate the trained model with enhanced diagnostics."""
+        """Evaluate the trained model."""
         self.logger.info("Evaluating trained model...")
         
         try:
@@ -341,39 +307,17 @@ class ExperimentRunner:
             from dictionary_learning.utils import load_dictionary
             
             model_path = save_dir / "trainer_0"
-            vsae, config = load_dictionary(str(model_path), device=self.config.device)
+            sae, config = load_dictionary(str(model_path), device=self.config.device)
             
             # Run evaluation
             eval_results = evaluate(
-                dictionary=vsae,
+                dictionary=sae,
                 activations=buffer,
                 batch_size=self.config.eval_batch_size,
                 max_len=self.config.ctx_len,
                 device=self.config.device,
                 n_batches=self.config.eval_n_batches
             )
-            
-            # Add VSAEGated-specific diagnostics if possible
-            try:
-                # Get a sample batch for diagnostics
-                sample_batch = next(iter(buffer))
-                if len(sample_batch) > self.config.eval_batch_size:
-                    sample_batch = sample_batch[:self.config.eval_batch_size]
-                
-                sample_batch = sample_batch.to(self.config.device)
-                
-                # Get KL diagnostics
-                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
-                
-                # Get reconstruction diagnostics
-                recon_diagnostics = vsae.get_reconstruction_diagnostics(sample_batch)
-                
-                # Add to eval results
-                for key, value in {**kl_diagnostics, **recon_diagnostics}.items():
-                    eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
-                    
-            except Exception as e:
-                self.logger.warning(f"Could not compute additional diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
@@ -387,7 +331,6 @@ class ExperimentRunner:
             eval_path = save_dir / "evaluation_results.json"
             import json
             with open(eval_path, 'w') as f:
-                # Convert any tensors to floats for JSON serialization
                 json_results = {}
                 for k, v in eval_results.items():
                     if torch.is_tensor(v):
@@ -411,11 +354,10 @@ def create_quick_test_config() -> ExperimentConfig:
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Test parameters
+        # Quick test parameters
         total_steps=1000,
         checkpoint_steps=(),
         log_steps=50,
-        kl_warmup_steps=100,  # 10% of training for KL annealing
         
         # Small buffer for testing
         n_ctxs=500,
@@ -438,37 +380,26 @@ def create_full_config() -> ExperimentConfig:
         model_name="gelu-1l",
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
-        dict_size_multiple=4.0,
+        dict_size_multiple=8.0,
         
         # Full training parameters
-        total_steps=25000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2500,  # 10% of training for KL annealing
-        
-        # Model settings
-        var_flag=1,  # Use learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        temperature_schedule="constant",
+        total_steps=50000,
+        lr=1e-3,
+        l1_penalty=1e-1,
         
         # Buffer settings
-        n_ctxs=8000,
+        n_ctxs=30000,
         ctx_len=128,
-        refresh_batch_size=24,
-        out_batch_size=768,
+        refresh_batch_size=512,
+        out_batch_size=8192,
         
         # Checkpointing
-        checkpoint_steps=(8000, 16000, 25000),
+        checkpoint_steps=(15000, 30000, 45000, 50000),
         log_steps=100,
         
         # Evaluation
-        eval_batch_size=48,
-        eval_n_batches=8,
+        eval_batch_size=64,
+        eval_n_batches=10,
         
         # System settings
         device="cuda" if torch.cuda.is_available() else "cpu",
@@ -478,58 +409,46 @@ def create_full_config() -> ExperimentConfig:
     )
 
 
-def create_fixed_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with fixed variance."""
+def create_april_update_config() -> ExperimentConfig:
+    """Create a configuration for April update training."""
     config = create_full_config()
-    config.var_flag = 0  # Fixed variance
-    config.kl_coeff = 100.0  # Lower KL coefficient for fixed variance
-    config.kl_warmup_steps = 1000  # Shorter warmup
+    config.use_april_update_mode = True
+    config.wandb_project = "standard-sae-april-update"
     return config
 
 
-def create_temperature_annealing_config() -> ExperimentConfig:
-    """Create a configuration with temperature annealing."""
+def create_with_resampling_config() -> ExperimentConfig:
+    """Create a configuration with neuron resampling enabled."""
     config = create_full_config()
-    config.temperature_schedule = "linear_decay"
-    config.total_steps = 30000  # Longer training for temperature annealing
-    config.kl_warmup_steps = 3000
+    config.resample_steps = 25000  # Resample every 25k steps
+    config.wandb_project = "standard-sae-with-resampling"
     return config
 
 
-def create_gpu_10gb_config() -> ExperimentConfig:
-    """Create a configuration optimized for 10GB GPU memory."""
+def create_memory_efficient_config() -> ExperimentConfig:
+    """Create a memory-efficient configuration for smaller GPUs."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Training parameters optimized for 10GB GPU
-        total_steps=20000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2000,  # 10% for KL annealing
+        # Training parameters
+        total_steps=25000,
+        lr=1e-3,
+        l1_penalty=1e-1,
         
-        # Model settings
-        var_flag=1,  # Learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        
-        # GPU memory optimized buffer settings
-        n_ctxs=3000,     # Small enough to fit in 10GB
+        # Memory-efficient buffer settings
+        n_ctxs=5000,
         ctx_len=128,
-        refresh_batch_size=16,  # Conservative batch size
-        out_batch_size=256,     # Conservative output size
+        refresh_batch_size=32,
+        out_batch_size=512,
         
         # Checkpointing
-        checkpoint_steps=(20000,),
+        checkpoint_steps=(25000,),
         log_steps=100,
         
-        # Evaluation - small and efficient
+        # Evaluation
         eval_batch_size=32,
         eval_n_batches=5,
         
@@ -541,57 +460,36 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     )
 
 
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
-    config = create_full_config()
-    config.l1_penalty = 0.2  # Higher L1 penalty for more sparsity
-    config.aux_weight = 0.2  # Higher auxiliary weight to help gate network
-    config.kl_coeff = 300.0  # Lower KL coefficient to balance sparsity
-    return config
-
-
-def create_no_auxiliary_config() -> ExperimentConfig:
-    """Create a configuration without auxiliary loss."""
-    config = create_full_config()
-    config.aux_weight = 0.0  # No auxiliary loss
-    config.l1_penalty = 0.05  # Lower L1 penalty to compensate
-    return config
-
-
 def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAEGated Training")
+    parser = argparse.ArgumentParser(description="Standard SAE Training")
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
             "full", 
-            "fixed_variance",
-            "temperature_annealing",
-            "gpu_10gb",
-            "high_sparsity",
-            "no_auxiliary"
+            "april_update",
+            "with_resampling",
+            "memory_efficient"
         ], 
         default="quick_test",
         help="Configuration preset for training"
     )
     args = parser.parse_args()
     
-    # Configuration functions
+    # Select configuration
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "fixed_variance": create_fixed_variance_config,
-        "temperature_annealing": create_temperature_annealing_config,
-        "gpu_10gb": create_gpu_10gb_config,
-        "high_sparsity": create_high_sparsity_config,
-        "no_auxiliary": create_no_auxiliary_config,
+        "april_update": create_april_update_config,
+        "with_resampling": create_with_resampling_config,
+        "memory_efficient": create_memory_efficient_config,
     }
     
     config = config_functions[args.config]()
-    runner = ExperimentRunner(config)
+    runner = StandardSAEExperimentRunner(config)
     results = runner.run_training()
     
     if results:
@@ -603,22 +501,6 @@ def main():
             if metric in results:
                 print(f"{metric:<25} | {results[metric]:.4f}")
                 
-        # Show KL diagnostics if available
-        kl_metrics = [k for k in results.keys() if "kl" in k.lower()]
-        if kl_metrics:
-            print("\nKL Diagnostics:")
-            for metric in kl_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
-        
-        # Show gating diagnostics if available
-        gate_metrics = [k for k in results.keys() if "gate" in k.lower() or "sparsity" in k.lower()]
-        if gate_metrics:
-            print("\nGating/Sparsity Diagnostics:")
-            for metric in gate_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
-                
         additional_metrics = ["loss_original", "loss_reconstructed", "frac_recovered"]
         print("\nAdditional Metrics:")
         for metric in additional_metrics:
@@ -628,16 +510,6 @@ def main():
         print(f"\nFull results saved to experiment directory")
     else:
         print("No evaluation results available")
-
-
-# Usage examples:
-# python train_vsae_gated.py --config quick_test
-# python train_vsae_gated.py --config full
-# python train_vsae_gated.py --config fixed_variance
-# python train_vsae_gated.py --config temperature_annealing
-# python train_vsae_gated.py --config gpu_10gb
-# python train_vsae_gated.py --config high_sparsity
-# python train_vsae_gated.py --config no_auxiliary
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 """
-Training script for VSAEGated with comprehensive configuration management.
+Training script for the robust VSAE P-Annealing implementation.
 
-This script provides a clean interface for training VSAEGated models
-with different configurations and robust error handling.
+This script provides clean, robust training for VSAEPAnneal with comprehensive
+configuration management and evaluation.
 """
 
 import torch
@@ -19,33 +19,37 @@ from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.vsae_gated import VSAEGatedTrainer, VSAEGated, VSAEGatedConfig, VSAEGatedTrainingConfig
+from dictionary_learning.trainers.vsae_panneal import VSAEPAnnealTrainer, VSAEPAnneal, VSAEPAnnealConfig, VSAEPAnnealTrainingConfig
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for VSAEGated training experiment."""
+    """Configuration for the P-Annealing VSAE experiment."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
     
-    # VSAEGated-specific config
-    var_flag: int = 1  # 0: fixed variance, 1: learned variance
+    # Model-specific config
+    var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
     log_var_init: float = -2.0
-    init_strategy: str = "tied"  # "tied", "independent", "xavier"
     
     # Training configuration
-    total_steps: int = 10000
+    total_steps: int = 15000
     lr: float = 5e-4
     kl_coeff: float = 500.0
-    l1_penalty: float = 0.1
-    aux_weight: float = 0.1
+    sparsity_coeff: float = 100.0  # Base p-norm penalty coefficient
     kl_warmup_steps: Optional[int] = None
-    use_constrained_optimizer: bool = True
-    temperature_schedule: str = "constant"  # "constant", "linear_decay", "cosine_decay"
+    
+    # P-annealing specific
+    sparsity_function: str = 'Lp'  # 'Lp' or 'Lp^p'
+    p_start: float = 1.0
+    p_end: float = 0.5
+    n_sparsity_updates: int = 10
+    use_adaptive_scaling: bool = False  # Conservative default
+    use_deterministic_penalty: bool = True  # Use mu for stability
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -54,14 +58,14 @@ class ExperimentConfig:
     out_batch_size: int = 1024
     
     # Logging and saving
-    checkpoint_steps: tuple = (5000, 10000)
+    checkpoint_steps: tuple = (5000, 10000, 15000)
     log_steps: int = 100
     save_dir: str = "./experiments"
     
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-gated-experiments"
+    wandb_project: str = "vsae-panneal-experiments"
     
     # System configuration
     device: str = "cuda"
@@ -103,7 +107,7 @@ class ExperimentConfig:
 
 
 class ExperimentRunner:
-    """Manages VSAEGated training experiments."""
+    """Manages the entire P-Annealing VSAE training experiment."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -119,7 +123,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_gated_training.log'),
+                logging.FileHandler(log_dir / 'vsae_panneal_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -172,38 +176,40 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAEGatedConfig:
+    def create_model_config(self, model: HookedTransformer) -> VSAEPAnnealConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return VSAEGatedConfig(
+        return VSAEPAnnealConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
             var_flag=self.config.var_flag,
             use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device(),
-            log_var_init=self.config.log_var_init,
-            init_strategy=self.config.init_strategy
+            log_var_init=self.config.log_var_init
         )
         
-    def create_training_config(self) -> VSAEGatedTrainingConfig:
+    def create_training_config(self) -> VSAEPAnnealTrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAEGatedTrainingConfig(
+        return VSAEPAnnealTrainingConfig(
             steps=self.config.total_steps,
             lr=self.config.lr,
             kl_coeff=self.config.kl_coeff,
-            l1_penalty=self.config.l1_penalty,
-            aux_weight=self.config.aux_weight,
+            sparsity_coeff=self.config.sparsity_coeff,
             kl_warmup_steps=self.config.kl_warmup_steps,
-            use_constrained_optimizer=self.config.use_constrained_optimizer,
-            temperature_schedule=self.config.temperature_schedule,
+            sparsity_function=self.config.sparsity_function,
+            p_start=self.config.p_start,
+            p_end=self.config.p_end,
+            n_sparsity_updates=self.config.n_sparsity_updates,
+            use_adaptive_scaling=self.config.use_adaptive_scaling,
+            use_deterministic_penalty=self.config.use_deterministic_penalty,
         )
         
-    def create_trainer_config(self, model_config: VSAEGatedConfig, training_config: VSAEGatedTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: VSAEPAnnealConfig, training_config: VSAEPAnnealTrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": VSAEGatedTrainer,
+            "trainer": VSAEPAnnealTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
@@ -216,15 +222,14 @@ class ExperimentRunner:
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
         var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
-        temp_suffix = f"_{self.config.temperature_schedule}_temp" if self.config.temperature_schedule != "constant" else ""
-        kl_suffix = f"_kl_warmup{self.config.kl_warmup_steps}" if self.config.kl_warmup_steps else ""
+        adaptive_suffix = "_adaptive" if self.config.use_adaptive_scaling else ""
+        p_suffix = f"_p{self.config.p_start}to{self.config.p_end}"
         
         return (
-            f"VSAEGated_{self.config.model_name}_"
+            f"VSAEPAnneal_{self.config.model_name}_"
             f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
-            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"l1{self.config.l1_penalty}_aux{self.config.aux_weight}"
-            f"{var_suffix}{temp_suffix}{kl_suffix}"
+            f"lr{self.config.lr}_kl{self.config.kl_coeff}_sp{self.config.sparsity_coeff}"
+            f"{var_suffix}{p_suffix}{adaptive_suffix}"
         )
         
     def get_save_directory(self) -> Path:
@@ -258,8 +263,8 @@ class ExperimentRunner:
         return exists
         
     def run_training(self) -> Dict[str, float]:
-        """Run the complete training experiment."""
-        self.logger.info("Starting VSAEGated training experiment")
+        """Run the complete P-Annealing VSAE training experiment."""
+        self.logger.info("Starting VSAE P-Annealing training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -284,12 +289,11 @@ class ExperimentRunner:
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
-            self.logger.info(f"KL warmup steps: {training_config.kl_warmup_steps}")
-            self.logger.info(f"Using constrained optimizer: {training_config.use_constrained_optimizer}")
-            self.logger.info(f"Temperature schedule: {training_config.temperature_schedule}")
+            self.logger.info(f"P-annealing: {training_config.p_start} → {training_config.p_end} over {training_config.n_sparsity_updates} updates")
+            self.logger.info(f"Adaptive scaling: {training_config.use_adaptive_scaling}")
             
             # Run training
-            self.logger.info("Starting VSAEGated training...")
+            self.logger.info("Starting P-Annealing VSAE training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -305,13 +309,14 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_gated",
+                    "experiment_type": "vsae_panneal",
                     "dict_size_multiple": self.config.dict_size_multiple,
                     "var_flag": self.config.var_flag,
-                    "kl_warmup_steps": self.config.kl_warmup_steps,
-                    "l1_penalty": self.config.l1_penalty,
-                    "aux_weight": self.config.aux_weight,
-                    "temperature_schedule": self.config.temperature_schedule,
+                    "p_start": self.config.p_start,
+                    "p_end": self.config.p_end,
+                    "n_sparsity_updates": self.config.n_sparsity_updates,
+                    "use_adaptive_scaling": self.config.use_adaptive_scaling,
+                    "sparsity_function": self.config.sparsity_function,
                     **asdict(self.config)
                 }
             )
@@ -353,27 +358,25 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            # Add VSAEGated-specific diagnostics if possible
+            # Add VSAE-specific diagnostics if possible
             try:
                 # Get a sample batch for diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
-                sample_batch = sample_batch.to(self.config.device)
-                
-                # Get KL diagnostics
-                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
-                
-                # Get reconstruction diagnostics
-                recon_diagnostics = vsae.get_reconstruction_diagnostics(sample_batch)
+                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch.to(self.config.device))
+                sparsity_diagnostics = vsae.get_sparsity_diagnostics(sample_batch.to(self.config.device))
                 
                 # Add to eval results
-                for key, value in {**kl_diagnostics, **recon_diagnostics}.items():
+                for key, value in kl_diagnostics.items():
+                    eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
+                    
+                for key, value in sparsity_diagnostics.items():
                     eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
                     
             except Exception as e:
-                self.logger.warning(f"Could not compute additional diagnostics: {e}")
+                self.logger.warning(f"Could not compute VSAE diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
@@ -415,7 +418,13 @@ def create_quick_test_config() -> ExperimentConfig:
         total_steps=1000,
         checkpoint_steps=(),
         log_steps=50,
-        kl_warmup_steps=100,  # 10% of training for KL annealing
+        kl_warmup_steps=100,
+        
+        # P-annealing test
+        p_start=1.0,
+        p_end=0.7,
+        n_sparsity_updates=5,
+        use_adaptive_scaling=False,
         
         # Small buffer for testing
         n_ctxs=500,
@@ -432,38 +441,41 @@ def create_quick_test_config() -> ExperimentConfig:
     )
 
 
-def create_full_config() -> ExperimentConfig:
-    """Create a configuration for full training."""
+def create_standard_config() -> ExperimentConfig:
+    """Create a standard configuration for P-Annealing VSAE training."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Full training parameters
-        total_steps=25000,
+        # Standard training parameters
+        total_steps=20000,
         lr=5e-4,
         kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2500,  # 10% of training for KL annealing
+        sparsity_coeff=100.0,
+        kl_warmup_steps=2000,
+        
+        # P-annealing parameters
+        p_start=1.0,
+        p_end=0.5,
+        n_sparsity_updates=10,
+        use_adaptive_scaling=False,  # Conservative default
+        sparsity_function='Lp',
         
         # Model settings
-        var_flag=1,  # Use learned variance
+        var_flag=0,  # Start with fixed variance
         use_april_update_mode=True,
         log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        temperature_schedule="constant",
         
         # Buffer settings
-        n_ctxs=8000,
+        n_ctxs=6000,
         ctx_len=128,
         refresh_batch_size=24,
         out_batch_size=768,
         
         # Checkpointing
-        checkpoint_steps=(8000, 16000, 25000),
+        checkpoint_steps=(5000, 10000, 15000, 20000),
         log_steps=100,
         
         # Evaluation
@@ -478,21 +490,51 @@ def create_full_config() -> ExperimentConfig:
     )
 
 
-def create_fixed_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with fixed variance."""
-    config = create_full_config()
-    config.var_flag = 0  # Fixed variance
-    config.kl_coeff = 100.0  # Lower KL coefficient for fixed variance
-    config.kl_warmup_steps = 1000  # Shorter warmup
+def create_learned_variance_config() -> ExperimentConfig:
+    """Create a configuration for training with learned variance."""
+    config = create_standard_config()
+    
+    # Enable learned variance with adjusted settings
+    config.var_flag = 1
+    config.total_steps = 25000
+    config.kl_warmup_steps = 5000  # Longer KL annealing for learned variance
+    config.lr = 3e-4  # Lower LR for stability
+    config.kl_coeff = 300.0  # Lower KL coeff since learned variance provides flexibility
+    config.log_var_init = -2.5  # Start with smaller variance for stability
+    config.checkpoint_steps = (8000, 16000, 25000)
+    
+    # More conservative p-annealing for learned variance
+    config.p_end = 0.6  # Less aggressive annealing
+    config.n_sparsity_updates = 8
+    
     return config
 
 
-def create_temperature_annealing_config() -> ExperimentConfig:
-    """Create a configuration with temperature annealing."""
-    config = create_full_config()
-    config.temperature_schedule = "linear_decay"
-    config.total_steps = 30000  # Longer training for temperature annealing
-    config.kl_warmup_steps = 3000
+def create_adaptive_scaling_config() -> ExperimentConfig:
+    """Create a configuration with adaptive scaling enabled."""
+    config = create_standard_config()
+    
+    # Enable adaptive scaling
+    config.use_adaptive_scaling = True
+    config.total_steps = 25000  # Longer training to see adaptation effects
+    config.n_sparsity_updates = 15  # More updates for better adaptation
+    config.checkpoint_steps = (8000, 16000, 25000)
+    
+    return config
+
+
+def create_aggressive_annealing_config() -> ExperimentConfig:
+    """Create a configuration with more aggressive p-annealing."""
+    config = create_standard_config()
+    
+    # More aggressive annealing
+    config.p_start = 1.0
+    config.p_end = 0.3  # More aggressive
+    config.n_sparsity_updates = 20  # More gradual steps
+    config.sparsity_function = 'Lp^p'  # Try the alternative function
+    config.total_steps = 30000  # Longer training
+    config.checkpoint_steps = (10000, 20000, 30000)
+    
     return config
 
 
@@ -505,28 +547,31 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         dict_size_multiple=4.0,
         
         # Training parameters optimized for 10GB GPU
-        total_steps=20000,
+        total_steps=15000,
         lr=5e-4,
         kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2000,  # 10% for KL annealing
+        sparsity_coeff=100.0,
+        kl_warmup_steps=1500,
+        
+        # P-annealing parameters
+        p_start=1.0,
+        p_end=0.5,
+        n_sparsity_updates=8,
+        use_adaptive_scaling=False,
         
         # Model settings
-        var_flag=1,  # Learned variance
+        var_flag=0,  # Fixed variance for memory efficiency
         use_april_update_mode=True,
         log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
         
         # GPU memory optimized buffer settings
-        n_ctxs=3000,     # Small enough to fit in 10GB
+        n_ctxs=2500,     # Small enough to fit in 10GB
         ctx_len=128,
-        refresh_batch_size=16,  # Conservative batch size
-        out_batch_size=256,     # Conservative output size
+        refresh_batch_size=16,
+        out_batch_size=256,
         
         # Checkpointing
-        checkpoint_steps=(20000,),
+        checkpoint_steps=(15000,),
         log_steps=100,
         
         # Evaluation - small and efficient
@@ -541,53 +586,34 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     )
 
 
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
-    config = create_full_config()
-    config.l1_penalty = 0.2  # Higher L1 penalty for more sparsity
-    config.aux_weight = 0.2  # Higher auxiliary weight to help gate network
-    config.kl_coeff = 300.0  # Lower KL coefficient to balance sparsity
-    return config
-
-
-def create_no_auxiliary_config() -> ExperimentConfig:
-    """Create a configuration without auxiliary loss."""
-    config = create_full_config()
-    config.aux_weight = 0.0  # No auxiliary loss
-    config.l1_penalty = 0.05  # Lower L1 penalty to compensate
-    return config
-
-
 def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAEGated Training")
+    parser = argparse.ArgumentParser(description="VSAE P-Annealing Training")
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
-            "full", 
-            "fixed_variance",
-            "temperature_annealing",
-            "gpu_10gb",
-            "high_sparsity",
-            "no_auxiliary"
+            "standard", 
+            "learned_variance",
+            "adaptive_scaling",
+            "aggressive_annealing",
+            "gpu_10gb"
         ], 
         default="quick_test",
-        help="Configuration preset for training"
+        help="Configuration preset for training runs"
     )
     args = parser.parse_args()
     
     # Configuration functions
     config_functions = {
         "quick_test": create_quick_test_config,
-        "full": create_full_config,
-        "fixed_variance": create_fixed_variance_config,
-        "temperature_annealing": create_temperature_annealing_config,
+        "standard": create_standard_config,
+        "learned_variance": create_learned_variance_config,
+        "adaptive_scaling": create_adaptive_scaling_config,
+        "aggressive_annealing": create_aggressive_annealing_config,
         "gpu_10gb": create_gpu_10gb_config,
-        "high_sparsity": create_high_sparsity_config,
-        "no_auxiliary": create_no_auxiliary_config,
     }
     
     config = config_functions[args.config]()
@@ -610,12 +636,12 @@ def main():
             for metric in kl_metrics:
                 if metric in results:
                     print(f"{metric:<25} | {results[metric]:.4f}")
-        
-        # Show gating diagnostics if available
-        gate_metrics = [k for k in results.keys() if "gate" in k.lower() or "sparsity" in k.lower()]
-        if gate_metrics:
-            print("\nGating/Sparsity Diagnostics:")
-            for metric in gate_metrics:
+                
+        # Show sparsity diagnostics if available
+        sparsity_metrics = [k for k in results.keys() if any(x in k.lower() for x in ["l0", "l1", "l2", "sparsity"])]
+        if sparsity_metrics:
+            print("\nSparsity Diagnostics:")
+            for metric in sparsity_metrics:
                 if metric in results:
                     print(f"{metric:<25} | {results[metric]:.4f}")
                 
@@ -631,13 +657,12 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_gated.py --config quick_test
-# python train_vsae_gated.py --config full
-# python train_vsae_gated.py --config fixed_variance
-# python train_vsae_gated.py --config temperature_annealing
-# python train_vsae_gated.py --config gpu_10gb
-# python train_vsae_gated.py --config high_sparsity
-# python train_vsae_gated.py --config no_auxiliary
+# python train_vsae_panneal.py --config quick_test
+# python train_vsae_panneal.py --config standard
+# python train_vsae_panneal.py --config learned_variance
+# python train_vsae_panneal.py --config adaptive_scaling
+# python train_vsae_panneal.py --config aggressive_annealing
+# python train_vsae_panneal.py --config gpu_10gb
 
 
 if __name__ == "__main__":

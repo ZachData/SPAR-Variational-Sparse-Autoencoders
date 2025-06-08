@@ -441,7 +441,7 @@ class VSAEBatchTopK(Dictionary, nn.Module):
                 k=k,
                 var_flag=var_flag,
                 use_april_update_mode=use_april_update_mode,
-                **{k: v for k, v in kwargs.items() if k in VSAEBatchTopKConfig.__dataclass_fields__}
+                **{key: val for key, val in kwargs.items() if key in VSAEBatchTopKConfig.__dataclass_fields__ and key not in ['activation_dim', 'dict_size', 'k', 'var_flag', 'use_april_update_mode']}
             )
         
         model = cls(config)

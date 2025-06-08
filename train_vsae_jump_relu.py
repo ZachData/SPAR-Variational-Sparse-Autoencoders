@@ -1,8 +1,13 @@
 """
-Training script for VSAEGated with comprehensive configuration management.
+Enhanced training script for VSAEJumpReLU with sweep functionality and optimized configurations.
 
-This script provides a clean interface for training VSAEGated models
-with different configurations and robust error handling.
+Key features:
+- Hyperparameter sweep support using wandb
+- Multiple configuration presets including 10GB GPU optimized settings
+- Command line interface for easy experiment management
+- Enhanced evaluation with detailed diagnostics
+- Memory efficient configurations
+- Robust error handling and logging
 """
 
 import torch
@@ -15,37 +20,46 @@ from typing import Optional, Dict, Any
 import multiprocessing
 
 from transformer_lens import HookedTransformer
+from dictionary_learning.base_sweep import BaseSweepRunner
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.vsae_gated import VSAEGatedTrainer, VSAEGated, VSAEGatedConfig, VSAEGatedTrainingConfig
+
+# Import our improved implementations
+from dictionary_learning.trainers.vsae_jump_relu import (
+    VSAEJumpReLU,
+    VSAEJumpReLUTrainer,
+    VSAEJumpReLUConfig,
+    VSAEJumpReLUTrainingConfig
+)
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for VSAEGated training experiment."""
+    """Configuration for the entire experiment with enhanced support for different scenarios."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
     
-    # VSAEGated-specific config
+    # VSAEJumpReLU specific configuration
     var_flag: int = 1  # 0: fixed variance, 1: learned variance
+    threshold: float = 0.001  # Threshold parameter for JumpReLU
     use_april_update_mode: bool = True
-    log_var_init: float = -2.0
-    init_strategy: str = "tied"  # "tied", "independent", "xavier"
     
     # Training configuration
     total_steps: int = 10000
     lr: float = 5e-4
     kl_coeff: float = 500.0
-    l1_penalty: float = 0.1
-    aux_weight: float = 0.1
-    kl_warmup_steps: Optional[int] = None
-    use_constrained_optimizer: bool = True
-    temperature_schedule: str = "constant"  # "constant", "linear_decay", "cosine_decay"
+    l0_coeff: float = 1.0
+    target_l0: float = 20.0
+    
+    # Schedule configuration
+    warmup_steps: Optional[int] = None
+    sparsity_warmup_steps: Optional[int] = None
+    decay_start: Optional[int] = None
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -61,7 +75,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-gated-experiments"
+    wandb_project: str = "vsae-jumprelu-experiments"
     
     # System configuration
     device: str = "cuda"
@@ -75,9 +89,20 @@ class ExperimentConfig:
     
     def __post_init__(self):
         """Set derived configuration values."""
-        # Set default KL warmup steps if not provided
-        if self.kl_warmup_steps is None:
-            self.kl_warmup_steps = int(0.1 * self.total_steps)  # 10% of training
+        # Set default step values based on total steps
+        if self.warmup_steps is None:
+            self.warmup_steps = max(200, int(0.02 * self.total_steps))
+        if self.sparsity_warmup_steps is None:
+            self.sparsity_warmup_steps = int(0.05 * self.total_steps)
+        
+        # Set decay start with proper constraints
+        min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
+        default_decay_start = int(0.8 * self.total_steps)
+        
+        if default_decay_start <= max(self.warmup_steps, self.sparsity_warmup_steps):
+            self.decay_start = None  # Disable decay
+        elif self.decay_start is None or self.decay_start < min_decay_start:
+            self.decay_start = default_decay_start
     
     def get_torch_dtype(self) -> torch.dtype:
         """Convert string dtype to torch dtype."""
@@ -103,7 +128,7 @@ class ExperimentConfig:
 
 
 class ExperimentRunner:
-    """Manages VSAEGated training experiments."""
+    """Manages the entire training experiment with enhanced evaluation and diagnostics."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -119,7 +144,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_gated_training.log'),
+                logging.FileHandler(log_dir / 'vsae_jumprelu_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -172,59 +197,65 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAEGatedConfig:
+    def create_model_config(self, model: HookedTransformer) -> VSAEJumpReLUConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return VSAEGatedConfig(
+        return VSAEJumpReLUConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
             var_flag=self.config.var_flag,
+            threshold=self.config.threshold,
             use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
-            device=self.config.get_device(),
-            log_var_init=self.config.log_var_init,
-            init_strategy=self.config.init_strategy
+            device=self.config.get_device()
         )
         
-    def create_training_config(self) -> VSAEGatedTrainingConfig:
+    def create_training_config(self) -> VSAEJumpReLUTrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAEGatedTrainingConfig(
+        return VSAEJumpReLUTrainingConfig(
             steps=self.config.total_steps,
             lr=self.config.lr,
             kl_coeff=self.config.kl_coeff,
-            l1_penalty=self.config.l1_penalty,
-            aux_weight=self.config.aux_weight,
-            kl_warmup_steps=self.config.kl_warmup_steps,
-            use_constrained_optimizer=self.config.use_constrained_optimizer,
-            temperature_schedule=self.config.temperature_schedule,
-        )
+            warmup_steps=self.config.warmup_steps,
+            sparsity_warmup_steps=self.config.sparsity_warmup_steps,
+            decay_start=self.config.decay_start,
+        )                                           
         
-    def create_trainer_config(self, model_config: VSAEGatedConfig, training_config: VSAEGatedTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: VSAEJumpReLUConfig, training_config: VSAEJumpReLUTrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": VSAEGatedTrainer,
+            "trainer": VSAEJumpReLUTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
             "lm_name": self.config.model_name,
-            "wandb_name": self.get_experiment_name(),
             "submodule_name": self.config.hook_name,
+            "wandb_name": self.get_experiment_name(),
             "seed": self.config.seed,
         }
         
     def get_experiment_name(self) -> str:
-        """Generate a descriptive experiment name."""
-        var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
-        temp_suffix = f"_{self.config.temperature_schedule}_temp" if self.config.temperature_schedule != "constant" else ""
-        kl_suffix = f"_kl_warmup{self.config.kl_warmup_steps}" if self.config.kl_warmup_steps else ""
+        """
+        Generate a descriptive experiment name safe for filesystems.
+        
+        Format: VSAEJumpReLU_{model}_d{dict}x_lr{lr}_kl{kl}_l0c{l0c}_tl0{tl0}_th{th}_{var}
+        No periods, dashes, or special characters that could cause filesystem issues.
+        """
+        var_suffix = "_learnedvar" if self.config.var_flag == 1 else "_fixedvar"
+        
+        # Make numbers filesystem-safe (no periods)
+        lr_str = f"{self.config.lr:.1e}".replace('-', '').replace('.', '')  # 5e-04 -> 5e04
+        kl_str = f"{int(self.config.kl_coeff)}"
+        l0c_str = f"{int(self.config.l0_coeff * 10)}"  # 1.0 -> 10
+        tl0_str = f"{int(self.config.target_l0)}"
+        th_str = f"{self.config.threshold:.1e}".replace('-', '').replace('.', '')  # 1e-03 -> 1e03
+        dict_str = f"{int(self.config.dict_size_multiple)}"  # 4.0 -> 4
         
         return (
-            f"VSAEGated_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
-            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"l1{self.config.l1_penalty}_aux{self.config.aux_weight}"
-            f"{var_suffix}{temp_suffix}{kl_suffix}"
+            f"VSAEJumpReLU_{self.config.model_name}_"
+            f"d{dict_str}x_lr{lr_str}_kl{kl_str}_"
+            f"l0c{l0c_str}_tl0{tl0_str}_th{th_str}{var_suffix}"
         )
         
     def get_save_directory(self) -> Path:
@@ -259,7 +290,7 @@ class ExperimentRunner:
         
     def run_training(self) -> Dict[str, float]:
         """Run the complete training experiment."""
-        self.logger.info("Starting VSAEGated training experiment")
+        self.logger.info("Starting VSAEJumpReLU training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -284,12 +315,11 @@ class ExperimentRunner:
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
-            self.logger.info(f"KL warmup steps: {training_config.kl_warmup_steps}")
-            self.logger.info(f"Using constrained optimizer: {training_config.use_constrained_optimizer}")
-            self.logger.info(f"Temperature schedule: {training_config.temperature_schedule}")
+            self.logger.info(f"Target L0: {self.config.target_l0}")
+            self.logger.info(f"Threshold: {self.config.threshold}")
             
             # Run training
-            self.logger.info("Starting VSAEGated training...")
+            self.logger.info("Starting training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -305,13 +335,11 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_gated",
+                    "experiment_type": "vsae_jumprelu",
                     "dict_size_multiple": self.config.dict_size_multiple,
                     "var_flag": self.config.var_flag,
-                    "kl_warmup_steps": self.config.kl_warmup_steps,
-                    "l1_penalty": self.config.l1_penalty,
-                    "aux_weight": self.config.aux_weight,
-                    "temperature_schedule": self.config.temperature_schedule,
+                    "threshold": self.config.threshold,
+                    "target_l0": self.config.target_l0,
                     **asdict(self.config)
                 }
             )
@@ -353,24 +381,26 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            # Add VSAEGated-specific diagnostics if possible
+            # Add VSAEJumpReLU-specific diagnostics if possible
             try:
-                # Get a sample batch for diagnostics
+                # Get a sample batch for additional diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
-                sample_batch = sample_batch.to(self.config.device)
-                
-                # Get KL diagnostics
-                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
-                
-                # Get reconstruction diagnostics
-                recon_diagnostics = vsae.get_reconstruction_diagnostics(sample_batch)
-                
-                # Add to eval results
-                for key, value in {**kl_diagnostics, **recon_diagnostics}.items():
-                    eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
+                # Forward pass to get features
+                with torch.no_grad():
+                    sample_batch = sample_batch.to(self.config.device)
+                    _, features = vsae(sample_batch, output_features=True)
+                    
+                    # Compute L0 statistics
+                    l0_per_sample = (features != 0).float().sum(dim=-1)
+                    eval_results.update({
+                        "actual_l0_mean": l0_per_sample.mean().item(),
+                        "actual_l0_std": l0_per_sample.std().item(),
+                        "target_l0": self.config.target_l0,
+                        "l0_target_ratio": l0_per_sample.mean().item() / self.config.target_l0,
+                    })
                     
             except Exception as e:
                 self.logger.warning(f"Could not compute additional diagnostics: {e}")
@@ -403,6 +433,123 @@ class ExperimentRunner:
             return {}
 
 
+class VSAEJumpReLUSweepRunner(BaseSweepRunner):
+    """
+    Hyperparameter sweep runner for VSAEJumpReLU trainer.
+    
+    Optimizes key parameters including KL coefficient, L0 coefficient, target L0,
+    learning rate, threshold, and variance learning.
+    """
+    
+    def __init__(self, wandb_entity: str):
+        """Initialize VSAEJumpReLU sweep runner."""
+        super().__init__(trainer_name="vsae-jumprelu", wandb_entity=wandb_entity)
+    
+    def get_sweep_config(self) -> dict:
+        """
+        Define the wandb sweep configuration for VSAEJumpReLU.
+        """
+        return {
+            'method': 'bayes',
+            'metric': {
+                'goal': 'minimize', 
+                'name': 'mse_loss'
+            },
+            'parameters': {
+                # Learning rate: log-uniform distribution
+                'lr': {
+                    'distribution': 'log_uniform_values',
+                    'min': 1e-5,
+                    'max': 1e-2
+                },
+                # KL coefficient: uniform distribution
+                'kl_coeff': {
+                    'distribution': 'uniform',
+                    'min': 100.0,
+                    'max': 1000.0
+                },
+                # L0 coefficient: log-uniform distribution
+                'l0_coeff': {
+                    'distribution': 'log_uniform_values',
+                    'min': 0.1,
+                    'max': 10.0
+                },
+                # Target L0: discrete choices
+                'target_l0': {
+                    'values': [10.0, 20.0, 30.0, 50.0]
+                },
+                # Threshold: log-uniform distribution
+                'threshold': {
+                    'distribution': 'log_uniform_values',
+                    'min': 1e-4,
+                    'max': 1e-2
+                },
+                # Dictionary size multiplier: discrete choices
+                'dict_size_multiple': {
+                    'values': [4.0, 8.0]
+                },
+                # Variance flag: discrete choice
+                'var_flag': {
+                    'values': [0, 1]
+                }
+            }
+        }
+    
+    def get_run_name(self, sweep_params: dict) -> str:
+        """
+        Generate descriptive run name from sweep parameters.
+        Safe for filesystems - no periods, dashes, or special characters.
+        
+        Format: JumpReLU_lr{lr}_kl{kl}_l0c{l0c}_tl0{tl0}_th{th}_d{dict}x_v{var}
+        Examples:
+        - lr=5e-4 -> lr5e04
+        - l0_coeff=1.5 -> l0c15 (multiply by 10)
+        - threshold=1e-3 -> th1e03
+        """
+        lr_str = f"{sweep_params['lr']:.1e}".replace('-', '').replace('.', '')  # 5e-04 -> 5e04
+        kl_str = f"{int(sweep_params['kl_coeff'])}"
+        l0_str = f"{int(sweep_params['l0_coeff'] * 10)}"  # 1.0 -> 10, 0.5 -> 5
+        target_l0_str = f"{int(sweep_params['target_l0'])}"
+        th_str = f"{sweep_params['threshold']:.1e}".replace('-', '').replace('.', '')  # 1e-03 -> 1e03
+        dict_str = f"{int(sweep_params['dict_size_multiple'])}"  # 4.0 -> 4
+        var_str = f"v{sweep_params['var_flag']}"
+        
+        return f"JumpReLU_lr{lr_str}_kl{kl_str}_l0c{l0_str}_tl0{target_l0_str}_th{th_str}_d{dict_str}x_{var_str}"
+    
+    def create_experiment_config(self, sweep_params: dict) -> ExperimentConfig:
+        """
+        Create an ExperimentConfig from wandb sweep parameters.
+        """
+        # Start with the quick test config
+        config = create_quick_test_config()
+        
+        # Override with sweep parameters
+        config.lr = sweep_params['lr']
+        config.kl_coeff = sweep_params['kl_coeff']
+        config.l0_coeff = sweep_params['l0_coeff']
+        config.target_l0 = sweep_params['target_l0']
+        config.threshold = sweep_params['threshold']
+        config.dict_size_multiple = sweep_params['dict_size_multiple']
+        config.var_flag = sweep_params['var_flag']
+        
+        # Adjust settings for sweep runs
+        config.total_steps = 15000  # Longer to see convergence
+        config.checkpoint_steps = ()
+        config.log_steps = 250
+        
+        # Smaller buffer for memory efficiency
+        config.n_ctxs = 1000
+        config.refresh_batch_size = 16
+        config.out_batch_size = 256
+        
+        # Use fixed project name for sweeps
+        config.wandb_project = "vsae-jumprelu-sweeps"
+        config.save_dir = "./temp_sweep_run"
+        config.use_wandb = False  # Sweep handles wandb
+        
+        return config
+
+
 def create_quick_test_config() -> ExperimentConfig:
     """Create a configuration for quick testing."""
     return ExperimentConfig(
@@ -413,9 +560,14 @@ def create_quick_test_config() -> ExperimentConfig:
         
         # Test parameters
         total_steps=1000,
-        checkpoint_steps=(),
+        checkpoint_steps=list(),
         log_steps=50,
-        kl_warmup_steps=100,  # 10% of training for KL annealing
+        
+        # VSAEJumpReLU specific
+        var_flag=1,
+        threshold=0.001,
+        l0_coeff=1.0,
+        target_l0=20.0,
         
         # Small buffer for testing
         n_ctxs=500,
@@ -433,7 +585,7 @@ def create_quick_test_config() -> ExperimentConfig:
 
 
 def create_full_config() -> ExperimentConfig:
-    """Create a configuration for full training."""
+    """Create a configuration for full training - memory efficient."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
@@ -441,26 +593,22 @@ def create_full_config() -> ExperimentConfig:
         dict_size_multiple=4.0,
         
         # Full training parameters
-        total_steps=25000,
+        total_steps=25000,  # Reduced from 50000
         lr=5e-4,
         kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2500,  # 10% of training for KL annealing
+        l0_coeff=1.0,
+        target_l0=20.0,
         
-        # Model settings
-        var_flag=1,  # Use learned variance
+        # VSAEJumpReLU specific settings
+        var_flag=1,
+        threshold=0.001,
         use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        temperature_schedule="constant",
         
-        # Buffer settings
-        n_ctxs=8000,
+        # MEMORY EFFICIENT buffer settings
+        n_ctxs=8000,   # Reduced from 30000
         ctx_len=128,
-        refresh_batch_size=24,
-        out_batch_size=768,
+        refresh_batch_size=24,  # Smaller batches
+        out_batch_size=768,     # Smaller output batches
         
         # Checkpointing
         checkpoint_steps=(8000, 16000, 25000),
@@ -478,21 +626,26 @@ def create_full_config() -> ExperimentConfig:
     )
 
 
-def create_fixed_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with fixed variance."""
+def create_learned_variance_config() -> ExperimentConfig:
+    """Create a configuration for training with learned variance - memory efficient."""
     config = create_full_config()
-    config.var_flag = 0  # Fixed variance
-    config.kl_coeff = 100.0  # Lower KL coefficient for fixed variance
-    config.kl_warmup_steps = 1000  # Shorter warmup
-    return config
-
-
-def create_temperature_annealing_config() -> ExperimentConfig:
-    """Create a configuration with temperature annealing."""
-    config = create_full_config()
-    config.temperature_schedule = "linear_decay"
-    config.total_steps = 30000  # Longer training for temperature annealing
-    config.kl_warmup_steps = 3000
+    
+    # Adjustments for learned variance
+    config.total_steps = 30000  # Slightly longer for learned variance
+    config.lr = 3e-4  # Slightly lower LR for stability
+    config.kl_coeff = 300.0  # Lower KL coeff for learned variance
+    config.var_flag = 1  # Enable learned variance
+    config.threshold = 0.0005  # Smaller threshold for learned variance
+    
+    # Even more conservative memory settings
+    config.n_ctxs = 5000
+    config.refresh_batch_size = 16
+    config.out_batch_size = 512
+    config.eval_batch_size = 32
+    config.eval_n_batches = 5
+    
+    config.checkpoint_steps = (10000, 20000, 30000)
+    
     return config
 
 
@@ -507,17 +660,14 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         # Training parameters optimized for 10GB GPU
         total_steps=20000,
         lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2000,  # 10% for KL annealing
+        kl_coeff=100.0,
+        l0_coeff=1.0,
+        target_l0=20.0,
         
         # Model settings
-        var_flag=1,  # Learned variance
+        var_flag=0,  # Fixed variance for memory efficiency
+        threshold=0.001,
         use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
         
         # GPU memory optimized buffer settings
         n_ctxs=3000,     # Small enough to fit in 10GB
@@ -541,20 +691,49 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     )
 
 
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
-    config = create_full_config()
-    config.l1_penalty = 0.2  # Higher L1 penalty for more sparsity
-    config.aux_weight = 0.2  # Higher auxiliary weight to help gate network
-    config.kl_coeff = 300.0  # Lower KL coefficient to balance sparsity
+def create_gpu_10gb_learned_var_config() -> ExperimentConfig:
+    """Create a learned variance configuration optimized for 10GB GPU."""
+    config = create_gpu_10gb_config()
+    
+    # Enable learned variance with conservative settings
+    config.var_flag = 1
+    config.total_steps = 15000  # Even shorter for learned variance
+    config.lr = 3e-4  # Lower LR for stability
+    config.kl_coeff = 300.0  # Lower KL coefficient
+    config.threshold = 0.0005  # Smaller threshold
+    config.checkpoint_steps = (15000,)
+    
+    # Even more conservative memory settings
+    config.n_ctxs = 2000
+    config.refresh_batch_size = 12
+    config.out_batch_size = 192
+    config.eval_batch_size = 24
+    config.eval_n_batches = 3
+    
     return config
 
 
-def create_no_auxiliary_config() -> ExperimentConfig:
-    """Create a configuration without auxiliary loss."""
+def create_high_sparsity_config() -> ExperimentConfig:
+    """Create a configuration targeting higher sparsity (lower L0)."""
     config = create_full_config()
-    config.aux_weight = 0.0  # No auxiliary loss
-    config.l1_penalty = 0.05  # Lower L1 penalty to compensate
+    
+    # Adjust for higher sparsity
+    config.target_l0 = 10.0  # Lower target L0
+    config.l0_coeff = 2.0  # Higher L0 penalty
+    config.threshold = 0.0005  # Smaller threshold for more precise sparsity
+    
+    return config
+
+
+def create_low_sparsity_config() -> ExperimentConfig:
+    """Create a configuration targeting lower sparsity (higher L0)."""
+    config = create_full_config()
+    
+    # Adjust for lower sparsity
+    config.target_l0 = 50.0  # Higher target L0
+    config.l0_coeff = 0.5  # Lower L0 penalty
+    config.threshold = 0.002  # Larger threshold
+    
     return config
 
 
@@ -562,32 +741,53 @@ def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAEGated Training")
+    parser = argparse.ArgumentParser(description="VSAEJumpReLU Training and Hyperparameter Sweeps")
+    parser.add_argument(
+        "--sweep", 
+        action="store_true", 
+        help="Run hyperparameter sweep instead of single training"
+    )
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
             "full", 
-            "fixed_variance",
-            "temperature_annealing",
+            "learned_variance",
             "gpu_10gb",
+            "gpu_10gb_learned_var",
             "high_sparsity",
-            "no_auxiliary"
+            "low_sparsity"
         ], 
         default="quick_test",
-        help="Configuration preset for training"
+        help="Configuration preset for single training runs"
+    )
+    parser.add_argument(
+        "--wandb-entity",
+        type=str,
+        default="zachdata",
+        help="WandB entity/username for sweep logging"
     )
     args = parser.parse_args()
     
-    # Configuration functions
+    if args.sweep:
+        # Run hyperparameter sweep
+        print("Starting hyperparameter sweep for VSAEJumpReLU...")
+        print(f"Project: vsae-jumprelu-sweeps")
+        print(f"Entity: {args.wandb_entity}")
+        
+        sweep_runner = VSAEJumpReLUSweepRunner(wandb_entity=args.wandb_entity)
+        sweep_runner.run_sweep()
+        return
+    
+    # Regular single training run
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "fixed_variance": create_fixed_variance_config,
-        "temperature_annealing": create_temperature_annealing_config,
+        "learned_variance": create_learned_variance_config,
         "gpu_10gb": create_gpu_10gb_config,
+        "gpu_10gb_learned_var": create_gpu_10gb_learned_var_config,
         "high_sparsity": create_high_sparsity_config,
-        "no_auxiliary": create_no_auxiliary_config,
+        "low_sparsity": create_low_sparsity_config,
     }
     
     config = config_functions[args.config]()
@@ -603,19 +803,11 @@ def main():
             if metric in results:
                 print(f"{metric:<25} | {results[metric]:.4f}")
                 
-        # Show KL diagnostics if available
-        kl_metrics = [k for k in results.keys() if "kl" in k.lower()]
-        if kl_metrics:
-            print("\nKL Diagnostics:")
-            for metric in kl_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
-        
-        # Show gating diagnostics if available
-        gate_metrics = [k for k in results.keys() if "gate" in k.lower() or "sparsity" in k.lower()]
-        if gate_metrics:
-            print("\nGating/Sparsity Diagnostics:")
-            for metric in gate_metrics:
+        # Show L0-specific diagnostics if available
+        l0_metrics = [k for k in results.keys() if "l0" in k.lower()]
+        if l0_metrics:
+            print("\nL0 Diagnostics:")
+            for metric in l0_metrics:
                 if metric in results:
                     print(f"{metric:<25} | {results[metric]:.4f}")
                 
@@ -631,13 +823,11 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_gated.py --config quick_test
-# python train_vsae_gated.py --config full
-# python train_vsae_gated.py --config fixed_variance
-# python train_vsae_gated.py --config temperature_annealing
-# python train_vsae_gated.py --config gpu_10gb
-# python train_vsae_gated.py --config high_sparsity
-# python train_vsae_gated.py --config no_auxiliary
+# python train-vsae-jump-relu.py --config quick_test
+# python train-vsae-jump-relu.py --config gpu_10gb
+# python train-vsae-jump-relu.py --config learned_variance
+# python train-vsae-jump-relu.py --config high_sparsity
+# python train-vsae-jump-relu.py --sweep --wandb-entity your-username
 
 
 if __name__ == "__main__":

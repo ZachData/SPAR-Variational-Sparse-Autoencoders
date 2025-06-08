@@ -12,6 +12,7 @@ Key improvements:
 - Optimized multivariate Gaussian prior handling
 - Memory efficiency optimizations for large dict_size
 - Robust correlation matrix validation and computation
+- FIXED: bfloat16 support with float32 linear algebra operations
 """
 
 import torch
@@ -97,6 +98,7 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
     - Enhanced multivariate Gaussian prior support
     - Memory optimization for independent case
     - Robust correlation matrix handling
+    - FIXED: bfloat16 support with float32 linear algebra
     """
 
     def __init__(self, config: VSAEMultiConfig):
@@ -197,9 +199,10 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
     def _init_correlation_matrix(self) -> None:
         """Initialize the correlation matrix for the multivariate Gaussian prior."""
         if self.config.corr_matrix is not None:
+            # Convert custom matrix to float32 for computation
             self.corr_matrix = self.config.corr_matrix.to(
                 device=self.config.get_device(),
-                dtype=self.config.dtype
+                dtype=torch.float32  # Always use float32 for linear algebra
             )
         else:
             self.corr_matrix = self._build_correlation_matrix(self.corr_rate)
@@ -213,12 +216,11 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
     def _build_correlation_matrix(self, corr_rate: float) -> torch.Tensor:
         """Build correlation matrix based on the given correlation rate."""
         device = self.config.get_device()
-        dtype = self.config.dtype
         
         # FIXED: Better handling of edge cases and memory efficiency
         if abs(corr_rate) < 1e-6:
             # Independent case - just return identity (more efficient)
-            return torch.eye(self.dict_size, dtype=dtype, device=device)
+            return torch.eye(self.dict_size, dtype=torch.float32, device=device)  # Start in float32
         
         if abs(corr_rate) >= 0.99:
             # Near-singular case - clamp to avoid numerical issues
@@ -231,10 +233,11 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             print(f"Warning: Large dict_size ({self.dict_size}) will use {memory_mb:.1f} MB for correlation matrix")
         
         # Create correlation matrix with specified off-diagonal correlation
+        # FIXED: Create in float32 from the start
         corr_matrix = torch.full(
             (self.dict_size, self.dict_size), 
             corr_rate, 
-            dtype=dtype, 
+            dtype=torch.float32,  # Always start in float32
             device=device
         )
         # Diagonal elements are 1
@@ -248,6 +251,14 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             # Check for reasonable size
             if self.dict_size > 20000:
                 raise ValueError(f"dict_size {self.dict_size} too large for dense correlation matrix. Consider using corr_rate=0.0 for independence.")
+            
+            # FIXED: Ensure we're working in float32
+            if self.corr_matrix.dtype != torch.float32:
+                print(f"Converting correlation matrix from {self.corr_matrix.dtype} to float32 for linear algebra operations")
+                self.corr_matrix = self.corr_matrix.float()
+            
+            # Store original target dtype for later conversion
+            self._target_dtype = self.config.dtype
             
             # Ensure symmetry
             if not torch.allclose(self.corr_matrix, self.corr_matrix.t(), atol=1e-6):
@@ -278,7 +289,7 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                     print(f"Warning: Adding jitter {jitter_amount:.2e} to ensure positive definiteness")
                     self.corr_matrix += torch.eye(
                         self.dict_size, 
-                        dtype=self.corr_matrix.dtype, 
+                        dtype=torch.float32,  # Keep in float32
                         device=self.corr_matrix.device
                     ) * jitter_amount
                     
@@ -292,7 +303,7 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                 # Fallback: add more aggressive jitter
                 jitter = torch.eye(
                     self.dict_size,
-                    dtype=self.corr_matrix.dtype,
+                    dtype=torch.float32,  # Keep in float32
                     device=self.corr_matrix.device
                 ) * 1e-3
                 self.corr_matrix += jitter
@@ -301,18 +312,19 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
     def _precompute_prior_quantities(self) -> None:
         """Precompute precision matrix and log determinant for efficiency."""
         # Check if this is effectively an independent case
-        identity = torch.eye(self.dict_size, device=self.corr_matrix.device, dtype=self.corr_matrix.dtype)
+        identity = torch.eye(self.dict_size, device=self.corr_matrix.device, dtype=torch.float32)
         
         if torch.allclose(self.corr_matrix, identity, atol=1e-6):
             # Independent case - much more efficient
             self.is_independent = True
             self.prior_precision = identity
-            self.prior_log_det = torch.tensor(0.0, device=self.corr_matrix.device, dtype=self.corr_matrix.dtype)
+            self.prior_log_det = torch.tensor(0.0, device=self.corr_matrix.device, dtype=torch.float32)
             print("Using efficient independent prior (correlation matrix is identity)")
             return
         
         self.is_independent = False
         
+        # FIXED: All computations in float32
         try:
             # For small matrices, direct inverse is fine
             if self.dict_size <= 1000:
@@ -327,6 +339,7 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                     self.prior_precision = torch.cholesky_inverse(L)
                     # log det = 2 * sum(log(diag(L)))
                     self.prior_log_det = 2 * torch.sum(torch.log(torch.diagonal(L)))
+                    print("Successfully computed precision matrix using Cholesky decomposition")
                 except Exception as e:
                     print(f"Cholesky failed: {e}, falling back to direct inverse")
                     self.prior_precision = torch.linalg.inv(self.corr_matrix)
@@ -337,13 +350,14 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             # Add more jitter and try again
             jitter = torch.eye(
                 self.dict_size,
-                dtype=self.corr_matrix.dtype,
+                dtype=torch.float32,
                 device=self.corr_matrix.device
             ) * 1e-3
             
             self.corr_matrix += jitter
             self.prior_precision = torch.linalg.inv(self.corr_matrix)
             self.prior_log_det = torch.logdet(self.corr_matrix)
+            print("Successfully computed precision matrix after adding jitter")
     
     def _preprocess_input(self, x: torch.Tensor) -> torch.Tensor:
         """Preprocess input to handle bias subtraction in standard mode."""
@@ -467,60 +481,52 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
         """
         Compute KL divergence between q(z|x) and multivariate Gaussian prior p(z).
         
-        FIXED: Optimized for independent case and better numerical stability
-        
-        Args:
-            mu: Mean of approximate posterior [batch_size, dict_size]
-            log_var: Log variance of approximate posterior [batch_size, dict_size]
-            
-        Returns:
-            kl_loss: KL divergence [scalar]
+        FIXED: Convert to float32 for computation, then back to original dtype
         """
         batch_size = mu.shape[0]
+        original_dtype = mu.dtype
         
-        # Clamp mu to prevent numerical issues
-        mu_clamped = torch.clamp(mu, min=-10.0, max=10.0)
+        # Convert to float32 for numerical stability
+        mu_float = torch.clamp(mu.float(), min=-10.0, max=10.0)
         
         # FIXED: Efficient handling of independent case
         if hasattr(self, 'is_independent') and self.is_independent:
             # Much more efficient computation when prior is independent
             if self.var_flag == 1 and log_var is not None:
-                log_var_clamped = torch.clamp(log_var, min=-6.0, max=2.0)
+                log_var_float = torch.clamp(log_var.float(), min=-6.0, max=2.0)
                 # For independent case: KL = 0.5 * sum(μ² + σ² - 1 - log(σ²))
                 kl_per_sample = 0.5 * torch.sum(
-                    mu_clamped.pow(2) + torch.exp(log_var_clamped) - 1 - log_var_clamped,
+                    mu_float.pow(2) + torch.exp(log_var_float) - 1 - log_var_float,
                     dim=1
                 )
             else:
                 # Fixed variance case: KL = 0.5 * ||μ||²
-                kl_per_sample = 0.5 * torch.sum(mu_clamped.pow(2), dim=1)
+                kl_per_sample = 0.5 * torch.sum(mu_float.pow(2), dim=1)
             
             kl_loss = torch.clamp(kl_per_sample.mean(), min=0.0)
-            return kl_loss
+            return kl_loss.to(dtype=original_dtype)
         
         # General multivariate case
-        # Ensure precision matrix has correct dtype and device
-        precision = self.prior_precision.to(dtype=mu.dtype, device=mu.device)
-        prior_log_det = self.prior_log_det.to(dtype=mu.dtype, device=mu.device)
+        # Ensure precision matrix is in float32 and on correct device
+        precision = self.prior_precision.to(device=mu.device, dtype=torch.float32)
+        prior_log_det = self.prior_log_det.to(device=mu.device, dtype=torch.float32)
         
         if self.var_flag == 1 and log_var is not None:
-            # FIXED: Conservative clamping and better numerical handling
-            log_var_clamped = torch.clamp(log_var, min=-6.0, max=2.0)
-            var = torch.exp(log_var_clamped)  # σ²
+            # FIXED: All computations in float32
+            log_var_float = torch.clamp(log_var.float(), min=-6.0, max=2.0)
+            var_float = torch.exp(log_var_float)
             
             # For multivariate KL: KL[q||p] = 0.5 * [trace(Σp^-1 * Σq) + μ^T * Σp^-1 * μ - k + log(|Σp|/|Σq|)]
             
             # Trace term: trace(Σp^-1 * Σq) - since Σq is diagonal, this is sum over diagonal
-            trace_term = torch.sum(precision.diagonal().unsqueeze(0) * var, dim=1)
+            trace_term = torch.sum(precision.diagonal().unsqueeze(0) * var_float, dim=1)
             
             # Quadratic term: μ^T * Σp^-1 * μ for each sample in batch
-            # More numerically stable computation
-            precision_mu = torch.matmul(mu_clamped, precision)
-            quad_term = torch.sum(mu_clamped * precision_mu, dim=1)
+            precision_mu = torch.matmul(mu_float, precision)
+            quad_term = torch.sum(mu_float * precision_mu, dim=1)
             
             # Log determinant term: log(|Σp|) - log(|Σq|)
-            # |Σq| = prod(σ²) since it's diagonal, so log(|Σq|) = sum(log(σ²)) = sum(log_var)
-            log_det_q = torch.sum(log_var_clamped, dim=1)
+            log_det_q = torch.sum(log_var_float, dim=1)
             log_det_term = prior_log_det - log_det_q
             
             # Combine all terms
@@ -528,17 +534,18 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
             
         else:
             # Fixed variance case: σ² = 1, so Σq = I
-            # KL = 0.5 * [trace(Σp^-1) + μ^T * Σp^-1 * μ - k + log(|Σp|)]
-            
             trace_term = precision.diagonal().sum().expand(batch_size)
-            precision_mu = torch.matmul(mu_clamped, precision)
-            quad_term = torch.sum(mu_clamped * precision_mu, dim=1)
+            precision_mu = torch.matmul(mu_float, precision)
+            quad_term = torch.sum(mu_float * precision_mu, dim=1)
             log_det_term = prior_log_det.expand(batch_size)
             
             kl_per_sample = 0.5 * (trace_term + quad_term - self.dict_size + log_det_term)
         
         # Average over batch and ensure non-negative
         kl_loss = torch.clamp(kl_per_sample.mean(), min=0.0)
+        
+        # Convert back to original dtype
+        kl_loss = kl_loss.to(dtype=original_dtype)
         
         # Sanity check for unreasonable KL values
         if kl_loss > 1000.0:
@@ -550,11 +557,11 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
         """
         Get detailed KL diagnostics for monitoring training.
         
-        Returns:
-            Dictionary with KL components and statistics
+        FIXED: Handle float32 conversion for multivariate computations
         """
         with torch.no_grad():
             mu, log_var = self.encode(x)
+            original_dtype = mu.dtype
             
             # Handle independent case more efficiently
             if hasattr(self, 'is_independent') and self.is_independent:
@@ -567,22 +574,22 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                     kl_total = kl_mu + kl_var
                     
                     return {
-                        'kl_total': kl_total,
-                        'kl_mu_term': kl_mu,
-                        'kl_var_term': kl_var,
+                        'kl_total': kl_total.to(dtype=original_dtype),
+                        'kl_mu_term': kl_mu.to(dtype=original_dtype),
+                        'kl_var_term': kl_var.to(dtype=original_dtype),
                         'mean_log_var': log_var.mean(),
                         'mean_var': var.mean(),
                         'mean_mu': mu.mean(),
                         'mean_mu_magnitude': mu.norm(dim=-1).mean(),
                         'mu_std': mu.std(),
-                        'correlation_effect': torch.tensor(0.0),  # No correlation effect for independent case
+                        'correlation_effect': torch.tensor(0.0),
                         'prior_type': 'independent',
                     }
                 else:
                     kl_total = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
                     return {
-                        'kl_total': kl_total,
-                        'kl_mu_term': kl_total,
+                        'kl_total': kl_total.to(dtype=original_dtype),
+                        'kl_mu_term': kl_total.to(dtype=original_dtype),
                         'kl_var_term': torch.tensor(0.0),
                         'mean_mu': mu.mean(),
                         'mean_mu_magnitude': mu.norm(dim=-1).mean(),
@@ -591,17 +598,19 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                         'prior_type': 'independent',
                     }
             
-            # Multivariate case
+            # Multivariate case - convert to float32 for computation
+            mu_float = mu.float()
+            
             if self.var_flag == 1 and log_var is not None:
-                log_var_safe = torch.clamp(log_var, -6, 2)
-                var = torch.exp(log_var_safe)
+                log_var_float = torch.clamp(log_var.float(), -6, 2)
+                var_float = torch.exp(log_var_float)
                 
                 # For multivariate case, compute individual terms
-                precision = self.prior_precision.to(dtype=mu.dtype, device=mu.device)
+                precision = self.prior_precision.to(dtype=torch.float32, device=mu.device)
                 
-                trace_term = torch.sum(precision.diagonal().unsqueeze(0) * var, dim=1).mean()
-                quad_term = torch.sum(mu * (mu @ precision.T), dim=1).mean()
-                log_det_term = (self.prior_log_det - torch.sum(log_var_safe, dim=1)).mean()
+                trace_term = torch.sum(precision.diagonal().unsqueeze(0) * var_float, dim=1).mean()
+                quad_term = torch.sum(mu_float * (mu_float @ precision.T), dim=1).mean()
+                log_det_term = (self.prior_log_det.float() - torch.sum(log_var_float, dim=1)).mean()
                 
                 kl_total = 0.5 * (trace_term + quad_term - self.dict_size + log_det_term)
                 
@@ -610,25 +619,25 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                 correlation_effect = (trace_term - independent_trace) / independent_trace
                 
                 return {
-                    'kl_total': kl_total,
-                    'kl_trace_term': 0.5 * trace_term,
-                    'kl_quad_term': 0.5 * quad_term,
-                    'kl_const_term': -0.5 * self.dict_size,
-                    'kl_logdet_term': 0.5 * log_det_term,
+                    'kl_total': kl_total.to(dtype=original_dtype),
+                    'kl_trace_term': (0.5 * trace_term).to(dtype=original_dtype),
+                    'kl_quad_term': (0.5 * quad_term).to(dtype=original_dtype),
+                    'kl_const_term': torch.tensor(-0.5 * self.dict_size).to(dtype=original_dtype),
+                    'kl_logdet_term': (0.5 * log_det_term).to(dtype=original_dtype),
                     'mean_log_var': log_var.mean(),
-                    'mean_var': var.mean(),
+                    'mean_var': var_float.mean().to(dtype=original_dtype),
                     'mean_mu': mu.mean(),
                     'mean_mu_magnitude': mu.norm(dim=-1).mean(),
                     'mu_std': mu.std(),
-                    'correlation_effect': correlation_effect,
+                    'correlation_effect': correlation_effect.to(dtype=original_dtype),
                     'prior_type': 'multivariate',
                 }
             else:
-                precision = self.prior_precision.to(dtype=mu.dtype, device=mu.device)
+                precision = self.prior_precision.to(dtype=torch.float32, device=mu.device)
                 
                 trace_term = precision.diagonal().sum()
-                quad_term = torch.sum(mu * (mu @ precision.T), dim=1).mean()
-                log_det_term = self.prior_log_det
+                quad_term = torch.sum(mu_float * (mu_float @ precision.T), dim=1).mean()
+                log_det_term = self.prior_log_det.float()
                 
                 kl_total = 0.5 * (trace_term + quad_term - self.dict_size + log_det_term)
                 
@@ -636,15 +645,15 @@ class VSAEMultiGaussian(Dictionary, nn.Module):
                 correlation_effect = (trace_term - self.dict_size) / self.dict_size
                 
                 return {
-                    'kl_total': kl_total,
-                    'kl_trace_term': 0.5 * trace_term,
-                    'kl_quad_term': 0.5 * quad_term,
-                    'kl_const_term': -0.5 * self.dict_size,
-                    'kl_logdet_term': 0.5 * log_det_term,
+                    'kl_total': kl_total.to(dtype=original_dtype),
+                    'kl_trace_term': (0.5 * trace_term).to(dtype=original_dtype),
+                    'kl_quad_term': (0.5 * quad_term).to(dtype=original_dtype),
+                    'kl_const_term': torch.tensor(-0.5 * self.dict_size).to(dtype=original_dtype),
+                    'kl_logdet_term': (0.5 * log_det_term).to(dtype=original_dtype),
                     'mean_mu': mu.mean(),
                     'mean_mu_magnitude': mu.norm(dim=-1).mean(),
                     'mu_std': mu.std(),
-                    'correlation_effect': correlation_effect,
+                    'correlation_effect': correlation_effect.to(dtype=original_dtype),
                     'prior_type': 'multivariate',
                 }
     
@@ -1008,8 +1017,11 @@ class VSAEMultiGaussianTrainer(SAETrainer):
             training_config.kl_warmup_steps
         )
         
-        # Add logging parameters
+        # Add logging parameters as direct attributes for logging
         self.logging_parameters = ["kl_coeff", "var_flag", "corr_rate"]
+        self.kl_coeff = training_config.kl_coeff
+        self.var_flag = model_config.var_flag
+        self.corr_rate = model_config.corr_rate
     
     def loss(self, x: torch.Tensor, step: int, logging: bool = False):
         """Compute loss with proper scaling separation."""

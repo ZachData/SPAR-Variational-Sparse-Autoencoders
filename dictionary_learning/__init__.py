@@ -1,6 +1,11 @@
 """
 Dictionary Learning implementations for Sparse Autoencoders (SAE) and variants.
 """
+try:
+    from .trainers.vsae_gated import VSAEGated, VSAEGatedTrainer
+except ImportError:
+    VSAEGated = VSAEGatedTrainer = None
+
 
 # Core Dictionary classes
 from .dictionary import Dictionary, AutoEncoder, IdentityDict, GatedAutoEncoder, JumpReluAutoEncoder
@@ -35,6 +40,8 @@ __all__ = [
     "IdentityDict",
     "GatedAutoEncoder",
     "JumpReluAutoEncoder",
+    'VSAEGated',
+    'VSAEGatedTrainer',
     
     # Core functionality
     "BaseActivationBuffer",

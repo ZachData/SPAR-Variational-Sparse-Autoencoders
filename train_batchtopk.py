@@ -1,8 +1,8 @@
 """
-Training script for VSAEGated with comprehensive configuration management.
+Training script for BatchTopK SAE with enhanced robustness.
 
-This script provides a clean interface for training VSAEGated models
-with different configurations and robust error handling.
+This script provides a clean interface for training BatchTopK SAEs
+with proper configuration management, logging, and evaluation.
 """
 
 import torch
@@ -19,33 +19,28 @@ from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.vsae_gated import VSAEGatedTrainer, VSAEGated, VSAEGatedConfig, VSAEGatedTrainingConfig
+from dictionary_learning.trainers.batch_top_k import BatchTopKTrainer, BatchTopKSAE, BatchTopKConfig, BatchTopKTrainingConfig
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for VSAEGated training experiment."""
+    """Configuration for the entire BatchTopK experiment."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
+    k: int = 64  # Number of top-k features
     
-    # VSAEGated-specific config
-    var_flag: int = 1  # 0: fixed variance, 1: learned variance
+    # Model-specific config
     use_april_update_mode: bool = True
-    log_var_init: float = -2.0
-    init_strategy: str = "tied"  # "tied", "independent", "xavier"
     
     # Training configuration
     total_steps: int = 10000
-    lr: float = 5e-4
-    kl_coeff: float = 500.0
-    l1_penalty: float = 0.1
-    aux_weight: float = 0.1
-    kl_warmup_steps: Optional[int] = None
-    use_constrained_optimizer: bool = True
-    temperature_schedule: str = "constant"  # "constant", "linear_decay", "cosine_decay"
+    lr: Optional[float] = None  # Will auto-compute based on dict size
+    auxk_alpha: float = 1/32  # Auxiliary loss coefficient
+    threshold_beta: float = 0.999
+    threshold_start_step: int = 1000
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -61,7 +56,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-gated-experiments"
+    wandb_project: str = "batch-topk-experiments"
     
     # System configuration
     device: str = "cuda"
@@ -72,12 +67,6 @@ class ExperimentConfig:
     # Evaluation configuration
     eval_batch_size: int = 64
     eval_n_batches: int = 10
-    
-    def __post_init__(self):
-        """Set derived configuration values."""
-        # Set default KL warmup steps if not provided
-        if self.kl_warmup_steps is None:
-            self.kl_warmup_steps = int(0.1 * self.total_steps)  # 10% of training
     
     def get_torch_dtype(self) -> torch.dtype:
         """Convert string dtype to torch dtype."""
@@ -103,7 +92,7 @@ class ExperimentConfig:
 
 
 class ExperimentRunner:
-    """Manages VSAEGated training experiments."""
+    """Manages the entire BatchTopK training experiment."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -119,7 +108,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_gated_training.log'),
+                logging.FileHandler(log_dir / 'batch_topk_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -172,38 +161,33 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAEGatedConfig:
+    def create_model_config(self, model: HookedTransformer) -> BatchTopKConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return VSAEGatedConfig(
+        return BatchTopKConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
-            var_flag=self.config.var_flag,
+            k=self.config.k,
             use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device(),
-            log_var_init=self.config.log_var_init,
-            init_strategy=self.config.init_strategy
         )
         
-    def create_training_config(self) -> VSAEGatedTrainingConfig:
+    def create_training_config(self) -> BatchTopKTrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAEGatedTrainingConfig(
+        return BatchTopKTrainingConfig(
             steps=self.config.total_steps,
-            lr=self.config.lr,
-            kl_coeff=self.config.kl_coeff,
-            l1_penalty=self.config.l1_penalty,
-            aux_weight=self.config.aux_weight,
-            kl_warmup_steps=self.config.kl_warmup_steps,
-            use_constrained_optimizer=self.config.use_constrained_optimizer,
-            temperature_schedule=self.config.temperature_schedule,
+            lr=self.config.lr,  # None will trigger auto-scaling
+            auxk_alpha=self.config.auxk_alpha,
+            threshold_beta=self.config.threshold_beta,
+            threshold_start_step=self.config.threshold_start_step,
         )
         
-    def create_trainer_config(self, model_config: VSAEGatedConfig, training_config: VSAEGatedTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: BatchTopKConfig, training_config: BatchTopKTrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": VSAEGatedTrainer,
+            "trainer": BatchTopKTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
@@ -215,16 +199,14 @@ class ExperimentRunner:
         
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
-        var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
-        temp_suffix = f"_{self.config.temperature_schedule}_temp" if self.config.temperature_schedule != "constant" else ""
-        kl_suffix = f"_kl_warmup{self.config.kl_warmup_steps}" if self.config.kl_warmup_steps else ""
+        lr_suffix = f"_lr{self.config.lr}" if self.config.lr else "_lr_auto"
         
         return (
-            f"VSAEGated_{self.config.model_name}_"
+            f"BatchTopK_{self.config.model_name}_"
             f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
-            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"l1{self.config.l1_penalty}_aux{self.config.aux_weight}"
-            f"{var_suffix}{temp_suffix}{kl_suffix}"
+            f"k{self.config.k}_"
+            f"auxk{self.config.auxk_alpha}"
+            f"{lr_suffix}"
         )
         
     def get_save_directory(self) -> Path:
@@ -259,7 +241,7 @@ class ExperimentRunner:
         
     def run_training(self) -> Dict[str, float]:
         """Run the complete training experiment."""
-        self.logger.info("Starting VSAEGated training experiment")
+        self.logger.info("Starting BatchTopK training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -284,12 +266,16 @@ class ExperimentRunner:
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
-            self.logger.info(f"KL warmup steps: {training_config.kl_warmup_steps}")
-            self.logger.info(f"Using constrained optimizer: {training_config.use_constrained_optimizer}")
-            self.logger.info(f"Temperature schedule: {training_config.temperature_schedule}")
+            self.logger.info(f"k (top-k): {model_config.k}")
+            
+            # Compute and log the auto-scaled learning rate if used
+            if training_config.lr is None:
+                scale = model_config.dict_size / (2**14)
+                auto_lr = 2e-4 / (scale**0.5)
+                self.logger.info(f"Auto-scaled learning rate: {auto_lr:.2e}")
             
             # Run training
-            self.logger.info("Starting VSAEGated training...")
+            self.logger.info("Starting training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -305,13 +291,11 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_gated",
+                    "experiment_type": "batch_topk",
                     "dict_size_multiple": self.config.dict_size_multiple,
-                    "var_flag": self.config.var_flag,
-                    "kl_warmup_steps": self.config.kl_warmup_steps,
-                    "l1_penalty": self.config.l1_penalty,
-                    "aux_weight": self.config.aux_weight,
-                    "temperature_schedule": self.config.temperature_schedule,
+                    "k": self.config.k,
+                    "auxk_alpha": self.config.auxk_alpha,
+                    "threshold_beta": self.config.threshold_beta,
                     **asdict(self.config)
                 }
             )
@@ -341,11 +325,11 @@ class ExperimentRunner:
             from dictionary_learning.utils import load_dictionary
             
             model_path = save_dir / "trainer_0"
-            vsae, config = load_dictionary(str(model_path), device=self.config.device)
+            batch_topk_sae, config = load_dictionary(str(model_path), device=self.config.device)
             
             # Run evaluation
             eval_results = evaluate(
-                dictionary=vsae,
+                dictionary=batch_topk_sae,
                 activations=buffer,
                 batch_size=self.config.eval_batch_size,
                 max_len=self.config.ctx_len,
@@ -353,27 +337,21 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            # Add VSAEGated-specific diagnostics if possible
+            # Add BatchTopK-specific diagnostics if possible
             try:
                 # Get a sample batch for diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
-                sample_batch = sample_batch.to(self.config.device)
-                
-                # Get KL diagnostics
-                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
-                
-                # Get reconstruction diagnostics
-                recon_diagnostics = vsae.get_reconstruction_diagnostics(sample_batch)
+                diagnostics = batch_topk_sae.get_diagnostics(sample_batch.to(self.config.device))
                 
                 # Add to eval results
-                for key, value in {**kl_diagnostics, **recon_diagnostics}.items():
+                for key, value in diagnostics.items():
                     eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
                     
             except Exception as e:
-                self.logger.warning(f"Could not compute additional diagnostics: {e}")
+                self.logger.warning(f"Could not compute BatchTopK diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
@@ -410,12 +388,12 @@ def create_quick_test_config() -> ExperimentConfig:
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
+        k=32,  # Smaller k for quick testing
         
         # Test parameters
         total_steps=1000,
-        checkpoint_steps=(),
+        checkpoint_steps=tuple(),
         log_steps=50,
-        kl_warmup_steps=100,  # 10% of training for KL annealing
         
         # Small buffer for testing
         n_ctxs=500,
@@ -439,22 +417,13 @@ def create_full_config() -> ExperimentConfig:
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
+        k=64,  # Standard k value
         
         # Full training parameters
         total_steps=25000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2500,  # 10% of training for KL annealing
-        
-        # Model settings
-        var_flag=1,  # Use learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        temperature_schedule="constant",
+        auxk_alpha=1/32,  # Standard auxiliary loss coefficient
+        threshold_beta=0.999,
+        threshold_start_step=1000,
         
         # Buffer settings
         n_ctxs=8000,
@@ -478,24 +447,6 @@ def create_full_config() -> ExperimentConfig:
     )
 
 
-def create_fixed_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with fixed variance."""
-    config = create_full_config()
-    config.var_flag = 0  # Fixed variance
-    config.kl_coeff = 100.0  # Lower KL coefficient for fixed variance
-    config.kl_warmup_steps = 1000  # Shorter warmup
-    return config
-
-
-def create_temperature_annealing_config() -> ExperimentConfig:
-    """Create a configuration with temperature annealing."""
-    config = create_full_config()
-    config.temperature_schedule = "linear_decay"
-    config.total_steps = 30000  # Longer training for temperature annealing
-    config.kl_warmup_steps = 3000
-    return config
-
-
 def create_gpu_10gb_config() -> ExperimentConfig:
     """Create a configuration optimized for 10GB GPU memory."""
     return ExperimentConfig(
@@ -503,27 +454,19 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
+        k=48,  # Reasonable k for memory constraints
         
         # Training parameters optimized for 10GB GPU
         total_steps=20000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2000,  # 10% for KL annealing
-        
-        # Model settings
-        var_flag=1,  # Learned variance
-        use_april_update_mode=True,
-        log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
+        auxk_alpha=1/32,
+        threshold_beta=0.999,
+        threshold_start_step=1000,
         
         # GPU memory optimized buffer settings
-        n_ctxs=3000,     # Small enough to fit in 10GB
+        n_ctxs=3000,
         ctx_len=128,
-        refresh_batch_size=16,  # Conservative batch size
-        out_batch_size=256,     # Conservative output size
+        refresh_batch_size=16,
+        out_batch_size=256,
         
         # Checkpointing
         checkpoint_steps=(20000,),
@@ -541,20 +484,19 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     )
 
 
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
+def create_high_k_config() -> ExperimentConfig:
+    """Create a configuration with higher k for denser representations."""
     config = create_full_config()
-    config.l1_penalty = 0.2  # Higher L1 penalty for more sparsity
-    config.aux_weight = 0.2  # Higher auxiliary weight to help gate network
-    config.kl_coeff = 300.0  # Lower KL coefficient to balance sparsity
+    config.k = 128  # Higher k value
+    config.dict_size_multiple = 8.0  # Larger dictionary to support higher k
+    config.total_steps = 30000  # More training steps
     return config
 
 
-def create_no_auxiliary_config() -> ExperimentConfig:
-    """Create a configuration without auxiliary loss."""
+def create_low_auxk_config() -> ExperimentConfig:
+    """Create a configuration with lower auxiliary loss coefficient."""
     config = create_full_config()
-    config.aux_weight = 0.0  # No auxiliary loss
-    config.l1_penalty = 0.05  # Lower L1 penalty to compensate
+    config.auxk_alpha = 1/64  # Lower auxiliary loss
     return config
 
 
@@ -562,32 +504,28 @@ def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAEGated Training")
+    parser = argparse.ArgumentParser(description="BatchTopK SAE Training")
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
             "full", 
-            "fixed_variance",
-            "temperature_annealing",
             "gpu_10gb",
-            "high_sparsity",
-            "no_auxiliary"
+            "high_k",
+            "low_auxk"
         ], 
         default="quick_test",
         help="Configuration preset for training"
     )
     args = parser.parse_args()
     
-    # Configuration functions
+    # Configuration selection
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "fixed_variance": create_fixed_variance_config,
-        "temperature_annealing": create_temperature_annealing_config,
         "gpu_10gb": create_gpu_10gb_config,
-        "high_sparsity": create_high_sparsity_config,
-        "no_auxiliary": create_no_auxiliary_config,
+        "high_k": create_high_k_config,
+        "low_auxk": create_low_auxk_config,
     }
     
     config = config_functions[args.config]()
@@ -603,19 +541,11 @@ def main():
             if metric in results:
                 print(f"{metric:<25} | {results[metric]:.4f}")
                 
-        # Show KL diagnostics if available
-        kl_metrics = [k for k in results.keys() if "kl" in k.lower()]
-        if kl_metrics:
-            print("\nKL Diagnostics:")
-            for metric in kl_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
-        
-        # Show gating diagnostics if available
-        gate_metrics = [k for k in results.keys() if "gate" in k.lower() or "sparsity" in k.lower()]
-        if gate_metrics:
-            print("\nGating/Sparsity Diagnostics:")
-            for metric in gate_metrics:
+        # Show BatchTopK-specific diagnostics if available
+        topk_metrics = [k for k in results.keys() if any(x in k.lower() for x in ["l0", "threshold", "active"])]
+        if topk_metrics:
+            print("\nBatchTopK Diagnostics:")
+            for metric in topk_metrics:
                 if metric in results:
                     print(f"{metric:<25} | {results[metric]:.4f}")
                 
@@ -631,14 +561,11 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_gated.py --config quick_test
-# python train_vsae_gated.py --config full
-# python train_vsae_gated.py --config fixed_variance
-# python train_vsae_gated.py --config temperature_annealing
-# python train_vsae_gated.py --config gpu_10gb
-# python train_vsae_gated.py --config high_sparsity
-# python train_vsae_gated.py --config no_auxiliary
-
+# python train_batchtopk.py --config quick_test
+# python train_batchtopk.py --config full
+# python train_batchtopk.py --config gpu_10gb
+# python train_batchtopk.py --config high_k
+# python train_batchtopk.py --config low_auxk
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility

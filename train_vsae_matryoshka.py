@@ -1,8 +1,12 @@
 """
-Training script for VSAEGated with comprehensive configuration management.
+Enhanced training script for MatryoshkaVSAE with all improvements from train_isovsae_1lgelu.py.
 
-This script provides a clean interface for training VSAEGated models
-with different configurations and robust error handling.
+Key improvements:
+- Multiple configuration presets including 10GB GPU optimized
+- Hyperparameter sweep functionality 
+- Better memory management and error handling
+- Enhanced evaluation and logging
+- More robust configuration management
 """
 
 import torch
@@ -15,37 +19,42 @@ from typing import Optional, Dict, Any
 import multiprocessing
 
 from transformer_lens import HookedTransformer
+from dictionary_learning.base_sweep import BaseSweepRunner
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.vsae_gated import VSAEGatedTrainer, VSAEGated, VSAEGatedConfig, VSAEGatedTrainingConfig
+
+# Import our improved implementations
+from dictionary_learning.trainers.vsae_matryoshka import (
+    MatryoshkaVSAEIso, 
+    MatryoshkaVSAEIsoTrainer,
+    MatryoshkaVSAEConfig,
+    MatryoshkaVSAETrainingConfig
+)
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for VSAEGated training experiment."""
+    """Enhanced configuration for the entire experiment with all options from train_isovsae_1lgelu.py."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
     hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
     
-    # VSAEGated-specific config
-    var_flag: int = 1  # 0: fixed variance, 1: learned variance
+    # Matryoshka-specific configuration
+    group_fractions: tuple = (0.25, 0.25, 0.25, 0.25)
+    group_weights: tuple = (0.4, 0.3, 0.2, 0.1)
+    var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
-    log_var_init: float = -2.0
-    init_strategy: str = "tied"  # "tied", "independent", "xavier"
+    log_var_init: float = -2.0  # Initialize log_var around exp(-2) ≈ 0.135 variance
     
     # Training configuration
     total_steps: int = 10000
     lr: float = 5e-4
     kl_coeff: float = 500.0
-    l1_penalty: float = 0.1
-    aux_weight: float = 0.1
-    kl_warmup_steps: Optional[int] = None
-    use_constrained_optimizer: bool = True
-    temperature_schedule: str = "constant"  # "constant", "linear_decay", "cosine_decay"
+    kl_warmup_steps: Optional[int] = None  # KL annealing steps
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -61,7 +70,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-gated-experiments"
+    wandb_project: str = "matryoshka-vsae-experiments"
     
     # System configuration
     device: str = "cuda"
@@ -103,7 +112,7 @@ class ExperimentConfig:
 
 
 class ExperimentRunner:
-    """Manages VSAEGated training experiments."""
+    """Manages the entire training experiment with proper setup and cleanup."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -119,7 +128,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_gated_training.log'),
+                logging.FileHandler(log_dir / 'matryoshka_vsae_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -172,38 +181,33 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> VSAEGatedConfig:
+    def create_model_config(self, model: HookedTransformer) -> MatryoshkaVSAEConfig:
         """Create model configuration from experiment config."""
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return VSAEGatedConfig(
+        return MatryoshkaVSAEConfig(
             activation_dim=model.cfg.d_mlp,
             dict_size=dict_size,
+            group_fractions=list(self.config.group_fractions),
+            group_weights=list(self.config.group_weights),
             var_flag=self.config.var_flag,
-            use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
-            device=self.config.get_device(),
-            log_var_init=self.config.log_var_init,
-            init_strategy=self.config.init_strategy
+            device=self.config.get_device()
         )
         
-    def create_training_config(self) -> VSAEGatedTrainingConfig:
+    def create_training_config(self) -> MatryoshkaVSAETrainingConfig:
         """Create training configuration from experiment config."""
-        return VSAEGatedTrainingConfig(
+        return MatryoshkaVSAETrainingConfig(
             steps=self.config.total_steps,
             lr=self.config.lr,
             kl_coeff=self.config.kl_coeff,
-            l1_penalty=self.config.l1_penalty,
-            aux_weight=self.config.aux_weight,
             kl_warmup_steps=self.config.kl_warmup_steps,
-            use_constrained_optimizer=self.config.use_constrained_optimizer,
-            temperature_schedule=self.config.temperature_schedule,
         )
         
-    def create_trainer_config(self, model_config: VSAEGatedConfig, training_config: VSAEGatedTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: MatryoshkaVSAEConfig, training_config: MatryoshkaVSAETrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": VSAEGatedTrainer,
+            "trainer": MatryoshkaVSAEIsoTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
@@ -216,15 +220,13 @@ class ExperimentRunner:
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
         var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
-        temp_suffix = f"_{self.config.temperature_schedule}_temp" if self.config.temperature_schedule != "constant" else ""
         kl_suffix = f"_kl_warmup{self.config.kl_warmup_steps}" if self.config.kl_warmup_steps else ""
         
         return (
-            f"VSAEGated_{self.config.model_name}_"
+            f"MatryoshkaVSAE_{self.config.model_name}_"
             f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
-            f"lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"l1{self.config.l1_penalty}_aux{self.config.aux_weight}"
-            f"{var_suffix}{temp_suffix}{kl_suffix}"
+            f"lr{self.config.lr}_kl{self.config.kl_coeff}"
+            f"{var_suffix}{kl_suffix}"
         )
         
     def get_save_directory(self) -> Path:
@@ -259,7 +261,7 @@ class ExperimentRunner:
         
     def run_training(self) -> Dict[str, float]:
         """Run the complete training experiment."""
-        self.logger.info("Starting VSAEGated training experiment")
+        self.logger.info("Starting MatryoshkaVSAE training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -285,11 +287,9 @@ class ExperimentRunner:
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
             self.logger.info(f"KL warmup steps: {training_config.kl_warmup_steps}")
-            self.logger.info(f"Using constrained optimizer: {training_config.use_constrained_optimizer}")
-            self.logger.info(f"Temperature schedule: {training_config.temperature_schedule}")
             
             # Run training
-            self.logger.info("Starting VSAEGated training...")
+            self.logger.info("Starting training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -305,13 +305,12 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_gated",
+                    "experiment_type": "matryoshka_vsae",
                     "dict_size_multiple": self.config.dict_size_multiple,
+                    "group_fractions": self.config.group_fractions,
+                    "group_weights": self.config.group_weights,
                     "var_flag": self.config.var_flag,
                     "kl_warmup_steps": self.config.kl_warmup_steps,
-                    "l1_penalty": self.config.l1_penalty,
-                    "aux_weight": self.config.aux_weight,
-                    "temperature_schedule": self.config.temperature_schedule,
                     **asdict(self.config)
                 }
             )
@@ -353,27 +352,23 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            # Add VSAEGated-specific diagnostics if possible
+            # Add Matryoshka-specific diagnostics if possible
             try:
-                # Get a sample batch for diagnostics
+                # Get a sample batch for KL diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
-                sample_batch = sample_batch.to(self.config.device)
-                
-                # Get KL diagnostics
-                kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
-                
-                # Get reconstruction diagnostics
-                recon_diagnostics = vsae.get_reconstruction_diagnostics(sample_batch)
-                
-                # Add to eval results
-                for key, value in {**kl_diagnostics, **recon_diagnostics}.items():
-                    eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
+                # Get group-specific metrics if available
+                if hasattr(vsae, 'get_group_diagnostics'):
+                    group_diagnostics = vsae.get_group_diagnostics(sample_batch.to(self.config.device))
                     
+                    # Add to eval results
+                    for key, value in group_diagnostics.items():
+                        eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
+                        
             except Exception as e:
-                self.logger.warning(f"Could not compute additional diagnostics: {e}")
+                self.logger.warning(f"Could not compute group diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
@@ -403,19 +398,137 @@ class ExperimentRunner:
             return {}
 
 
+class MatryoshkaVSAESweepRunner(BaseSweepRunner):
+    """
+    Hyperparameter sweep runner for MatryoshkaVSAE trainer.
+    
+    Enhanced to include Matryoshka-specific parameters in the search space.
+    """
+    
+    def __init__(self, wandb_entity: str):
+        """Initialize MatryoshkaVSAE sweep runner."""
+        super().__init__(trainer_name="matryoshka-vsae", wandb_entity=wandb_entity)
+    
+    def get_sweep_config(self) -> dict:
+        """
+        Define the wandb sweep configuration for MatryoshkaVSAE.
+        
+        Enhanced to include Matryoshka-specific parameters like group weighting strategies.
+        """
+        return {
+            'method': 'bayes',
+            'metric': {
+                'goal': 'minimize', 
+                'name': 'mse_loss'
+            },
+            'parameters': {
+                # Learning rate: log-uniform distribution
+                'lr': {
+                    'distribution': 'log_uniform_values',
+                    'min': 1e-5,
+                    'max': 1e-2
+                },
+                # KL coefficient: uniform distribution
+                'kl_coeff': {
+                    'distribution': 'uniform',
+                    'min': 100.0,
+                    'max': 1000.0
+                },
+                # KL warmup fraction: what fraction of training to use for KL annealing
+                'kl_warmup_fraction': {
+                    'distribution': 'uniform',
+                    'min': 0.05,  # 5% of training
+                    'max': 0.3    # 30% of training
+                },
+                # Dictionary size multiplier: discrete choices
+                'dict_size_multiple': {
+                    'values': [4.0, 8.0]
+                },
+                # Variance flag: discrete choice
+                'var_flag': {
+                    'values': [0, 1]
+                },
+                # Group weights strategy: discrete choice
+                'group_weights_strategy': {
+                    'values': ['uniform', 'decreasing', 'increasing']
+                }
+            }
+        }
+    
+    def get_run_name(self, sweep_params: dict) -> str:
+        """
+        Generate descriptive run name from sweep parameters.
+        """
+        lr_str = f"{sweep_params['lr']:.1e}".replace('-0', '-')
+        kl_str = f"{int(sweep_params['kl_coeff'])}"
+        dict_str = f"{sweep_params['dict_size_multiple']:.0f}x"
+        var_str = f"var{sweep_params['var_flag']}"
+        kl_warmup_str = f"klw{sweep_params['kl_warmup_fraction']:.2f}"
+        weights_str = sweep_params['group_weights_strategy'][:3]  # First 3 chars
+        
+        return f"Matryoshka_lr{lr_str}_kl{kl_str}_d{dict_str}_{var_str}_{kl_warmup_str}_{weights_str}"
+    
+    def create_experiment_config(self, sweep_params: dict) -> ExperimentConfig:
+        """
+        Create an ExperimentConfig from wandb sweep parameters.
+        """
+        # Start with the quick test config
+        config = create_quick_test_config()
+        
+        # Override with sweep parameters
+        config.lr = sweep_params['lr']
+        config.kl_coeff = sweep_params['kl_coeff']
+        config.dict_size_multiple = sweep_params['dict_size_multiple']
+        config.var_flag = sweep_params['var_flag']
+        
+        # Set KL warmup steps based on fraction
+        config.kl_warmup_steps = int(sweep_params['kl_warmup_fraction'] * config.total_steps)
+        
+        # Set group weights based on strategy
+        strategy = sweep_params['group_weights_strategy']
+        if strategy == 'uniform':
+            config.group_weights = (0.25, 0.25, 0.25, 0.25)
+        elif strategy == 'decreasing':
+            config.group_weights = (0.4, 0.3, 0.2, 0.1)
+        elif strategy == 'increasing':
+            config.group_weights = (0.1, 0.2, 0.3, 0.4)
+        
+        # Adjust settings for sweep runs
+        config.total_steps = 15000  # Longer to see effects
+        config.checkpoint_steps = ()
+        config.log_steps = 250
+        
+        # Smaller buffer for memory efficiency
+        config.n_ctxs = 1000
+        config.refresh_batch_size = 16
+        config.out_batch_size = 256
+        
+        # Use fixed project name for sweeps
+        config.wandb_project = "matryoshka-vsae-sweeps"
+        config.save_dir = "./temp_sweep_run"
+        config.use_wandb = False  # Sweep handles wandb
+        
+        return config
+
+
 def create_quick_test_config() -> ExperimentConfig:
-    """Create a configuration for quick testing."""
+    """Create a configuration for quick testing with KL annealing."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Test parameters
+        # Test parameters with KL annealing
         total_steps=1000,
-        checkpoint_steps=(),
+        checkpoint_steps=list(),
         log_steps=50,
         kl_warmup_steps=100,  # 10% of training for KL annealing
+        
+        # Matryoshka settings
+        group_fractions=(0.25, 0.25, 0.25, 0.25),
+        group_weights=(0.4, 0.3, 0.2, 0.1),
+        var_flag=0,
         
         # Small buffer for testing
         n_ctxs=500,
@@ -433,34 +546,31 @@ def create_quick_test_config() -> ExperimentConfig:
 
 
 def create_full_config() -> ExperimentConfig:
-    """Create a configuration for full training."""
+    """Create a configuration for full training with proper KL annealing - memory efficient."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
         
-        # Full training parameters
-        total_steps=25000,
+        # Full training parameters with KL annealing
+        total_steps=25000,  # Reduced from 50000
         lr=5e-4,
         kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
         kl_warmup_steps=2500,  # 10% of training for KL annealing
         
-        # Model settings
-        var_flag=1,  # Use learned variance
+        # Matryoshka settings
+        group_fractions=(0.25, 0.25, 0.25, 0.25),
+        group_weights=(0.4, 0.3, 0.2, 0.1),
+        var_flag=0,  # Start with fixed variance
         use_april_update_mode=True,
         log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
-        temperature_schedule="constant",
         
-        # Buffer settings
-        n_ctxs=8000,
+        # MEMORY EFFICIENT buffer settings
+        n_ctxs=8000,   # Reduced from 30000
         ctx_len=128,
-        refresh_batch_size=24,
-        out_batch_size=768,
+        refresh_batch_size=24,  # Smaller batches
+        out_batch_size=768,     # Smaller output batches
         
         # Checkpointing
         checkpoint_steps=(8000, 16000, 25000),
@@ -478,26 +588,35 @@ def create_full_config() -> ExperimentConfig:
     )
 
 
-def create_fixed_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with fixed variance."""
+def create_learned_variance_config() -> ExperimentConfig:
+    """Create a configuration for training with learned variance - memory efficient version."""
     config = create_full_config()
-    config.var_flag = 0  # Fixed variance
-    config.kl_coeff = 100.0  # Lower KL coefficient for fixed variance
-    config.kl_warmup_steps = 1000  # Shorter warmup
-    return config
-
-
-def create_temperature_annealing_config() -> ExperimentConfig:
-    """Create a configuration with temperature annealing."""
-    config = create_full_config()
-    config.temperature_schedule = "linear_decay"
-    config.total_steps = 30000  # Longer training for temperature annealing
-    config.kl_warmup_steps = 3000
+    
+    # Enable learned variance with conservative settings
+    config.var_flag = 1
+    config.total_steps = 30000  # Reduced from 75000
+    config.lr = 3e-4  # Slightly lower LR for learned variance stability
+    config.kl_coeff = 300.0  # Lower KL coeff since learned variance provides more flexibility
+    config.kl_warmup_steps = 6000  # 20% of training for KL annealing
+    config.log_var_init = -2.5  # Start with smaller variance for stability
+    
+    # MEMORY EFFICIENT buffer settings
+    config.n_ctxs = 5000  # Much smaller than 30000
+    config.refresh_batch_size = 16  # Smaller batches
+    config.out_batch_size = 512  # Smaller output batches
+    
+    # Checkpointing
+    config.checkpoint_steps = (10000, 20000, 30000)
+    
+    # Evaluation - smaller to save memory
+    config.eval_batch_size = 32  # Reduced from 64
+    config.eval_n_batches = 5   # Reduced from 10
+    
     return config
 
 
 def create_gpu_10gb_config() -> ExperimentConfig:
-    """Create a configuration optimized for 10GB GPU memory."""
+    """Create a configuration optimized for 10GB GPU memory - extra light version."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
@@ -505,33 +624,31 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         dict_size_multiple=4.0,
         
         # Training parameters optimized for 10GB GPU
-        total_steps=20000,
-        lr=5e-4,
-        kl_coeff=500.0,
-        l1_penalty=0.1,
-        aux_weight=0.1,
-        kl_warmup_steps=2000,  # 10% for KL annealing
+        total_steps=60000,  # Reduced from 20000
+        lr=7e-4,
+        kl_coeff=40.0,  # Slightly reduced
+        kl_warmup_steps=1500,  # 10% for KL annealing
         
-        # Model settings
-        var_flag=1,  # Learned variance
+        # Matryoshka settings
+        group_fractions=(0.25, 0.25, 0.25, 0.25),
+        group_weights=(0.4, 0.3, 0.2, 0.1),
+        var_flag=0,  # Fixed variance for memory efficiency
         use_april_update_mode=True,
         log_var_init=-2.0,
-        init_strategy="tied",
-        use_constrained_optimizer=True,
         
-        # GPU memory optimized buffer settings
-        n_ctxs=3000,     # Small enough to fit in 10GB
+        # Very conservative GPU memory settings
+        n_ctxs=2000,     # Reduced from 3000
         ctx_len=128,
-        refresh_batch_size=16,  # Conservative batch size
-        out_batch_size=256,     # Conservative output size
+        refresh_batch_size=12,  # Reduced from 16
+        out_batch_size=192,     # Reduced from 256
         
-        # Checkpointing
-        checkpoint_steps=(20000,),
-        log_steps=100,
+        # More frequent checkpointing to clear memory
+        checkpoint_steps=(60000,),
+        log_steps=150,  # Less frequent logging
         
-        # Evaluation - small and efficient
-        eval_batch_size=32,
-        eval_n_batches=5,
+        # Minimal evaluation to save memory
+        eval_batch_size=24,  # Reduced from 32
+        eval_n_batches=3,    # Reduced from 5
         
         # System settings
         device="cuda" if torch.cuda.is_available() else "cpu",
@@ -541,20 +658,47 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     )
 
 
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
-    config = create_full_config()
-    config.l1_penalty = 0.2  # Higher L1 penalty for more sparsity
-    config.aux_weight = 0.2  # Higher auxiliary weight to help gate network
-    config.kl_coeff = 300.0  # Lower KL coefficient to balance sparsity
+def create_gpu_10gb_learned_var_config() -> ExperimentConfig:
+    """Create a learned variance configuration optimized for 10GB GPU."""
+    config = create_gpu_10gb_config()
+    
+    # Enable learned variance with conservative settings
+    config.var_flag = 1
+    config.total_steps = 15000  # Even shorter for learned variance
+    config.kl_warmup_steps = 3000  # 20% for learned variance
+    config.lr = 3e-4  # Lower LR for stability
+    config.kl_coeff = 300.0  # Lower KL coefficient
+    config.log_var_init = -3.0  # Start with very small variance
+    config.checkpoint_steps = (15000,)
+    
+    # Even more conservative memory settings
+    config.n_ctxs = 2000
+    config.refresh_batch_size = 12
+    config.out_batch_size = 192
+    config.eval_batch_size = 24
+    config.eval_n_batches = 3
+    
     return config
 
 
-def create_no_auxiliary_config() -> ExperimentConfig:
-    """Create a configuration without auxiliary loss."""
+def create_minimal_kl_annealing_config() -> ExperimentConfig:
+    """Create a configuration with minimal KL annealing for comparison."""
     config = create_full_config()
-    config.aux_weight = 0.0  # No auxiliary loss
-    config.l1_penalty = 0.05  # Lower L1 penalty to compensate
+    config.kl_warmup_steps = 1000  # Very short KL annealing
+    return config
+
+
+def create_uniform_groups_config() -> ExperimentConfig:
+    """Create a configuration with uniform group weights."""
+    config = create_full_config()
+    config.group_weights = (0.25, 0.25, 0.25, 0.25)  # Uniform weights
+    return config
+
+
+def create_increasing_groups_config() -> ExperimentConfig:
+    """Create a configuration with increasing group weights (reverse of default)."""
+    config = create_full_config()
+    config.group_weights = (0.1, 0.2, 0.3, 0.4)  # Increasing weights
     return config
 
 
@@ -562,32 +706,55 @@ def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAEGated Training")
+    parser = argparse.ArgumentParser(description="MatryoshkaVSAE Training and Hyperparameter Sweeps")
+    parser.add_argument(
+        "--sweep", 
+        action="store_true", 
+        help="Run hyperparameter sweep instead of single training"
+    )
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
             "full", 
-            "fixed_variance",
-            "temperature_annealing",
+            "learned_variance",
             "gpu_10gb",
-            "high_sparsity",
-            "no_auxiliary"
+            "gpu_10gb_learned_var",
+            "minimal_kl_annealing",
+            "uniform_groups",
+            "increasing_groups"
         ], 
         default="quick_test",
-        help="Configuration preset for training"
+        help="Configuration preset for single training runs"
+    )
+    parser.add_argument(
+        "--wandb-entity",
+        type=str,
+        default="zachdata",
+        help="WandB entity/username for sweep logging"
     )
     args = parser.parse_args()
     
-    # Configuration functions
+    if args.sweep:
+        # Run hyperparameter sweep
+        print("Starting hyperparameter sweep for MatryoshkaVSAE...")
+        print(f"Project: matryoshka-vsae-sweeps")
+        print(f"Entity: {args.wandb_entity}")
+        
+        sweep_runner = MatryoshkaVSAESweepRunner(wandb_entity=args.wandb_entity)
+        sweep_runner.run_sweep()
+        return
+    
+    # Regular single training run
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "fixed_variance": create_fixed_variance_config,
-        "temperature_annealing": create_temperature_annealing_config,
+        "learned_variance": create_learned_variance_config,
         "gpu_10gb": create_gpu_10gb_config,
-        "high_sparsity": create_high_sparsity_config,
-        "no_auxiliary": create_no_auxiliary_config,
+        "gpu_10gb_learned_var": create_gpu_10gb_learned_var_config,
+        "minimal_kl_annealing": create_minimal_kl_annealing_config,
+        "uniform_groups": create_uniform_groups_config,
+        "increasing_groups": create_increasing_groups_config,
     }
     
     config = config_functions[args.config]()
@@ -603,19 +770,11 @@ def main():
             if metric in results:
                 print(f"{metric:<25} | {results[metric]:.4f}")
                 
-        # Show KL diagnostics if available
-        kl_metrics = [k for k in results.keys() if "kl" in k.lower()]
-        if kl_metrics:
-            print("\nKL Diagnostics:")
-            for metric in kl_metrics:
-                if metric in results:
-                    print(f"{metric:<25} | {results[metric]:.4f}")
-        
-        # Show gating diagnostics if available
-        gate_metrics = [k for k in results.keys() if "gate" in k.lower() or "sparsity" in k.lower()]
-        if gate_metrics:
-            print("\nGating/Sparsity Diagnostics:")
-            for metric in gate_metrics:
+        # Show group-specific diagnostics if available
+        group_metrics = [k for k in results.keys() if "group" in k.lower()]
+        if group_metrics:
+            print("\nGroup Diagnostics:")
+            for metric in group_metrics:
                 if metric in results:
                     print(f"{metric:<25} | {results[metric]:.4f}")
                 
@@ -631,14 +790,32 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_gated.py --config quick_test
-# python train_vsae_gated.py --config full
-# python train_vsae_gated.py --config fixed_variance
-# python train_vsae_gated.py --config temperature_annealing
-# python train_vsae_gated.py --config gpu_10gb
-# python train_vsae_gated.py --config high_sparsity
-# python train_vsae_gated.py --config no_auxiliary
+# python train-matryoshka-vsae.py --config quick_test
+# python train-matryoshka-vsae.py --config learned_variance
+# python train-matryoshka-vsae.py --config gpu_10gb
+# python train-matryoshka-vsae.py --config uniform_groups    # Different group weighting
+# python train-matryoshka-vsae.py --sweep --wandb-entity your-username
 
+'''
+# Quick test (should work fine)
+python train-matryoshka-vsae.py --config quick_test
+
+# Optimized for 10GB GPU - fixed variance
+python train-matryoshka-vsae.py --config gpu_10gb
+
+# Optimized for 10GB GPU - learned variance  
+python train-matryoshka-vsae.py --config gpu_10gb_learned_var
+
+# Original full config (now memory efficient)
+python train-matryoshka-vsae.py --config full
+
+# Different group weight strategies
+python train-matryoshka-vsae.py --config uniform_groups
+python train-matryoshka-vsae.py --config increasing_groups
+
+# Hyperparameter sweep
+python train-matryoshka-vsae.py --sweep --wandb-entity zachdata
+'''
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility
