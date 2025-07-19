@@ -8,6 +8,7 @@ Key improvements:
 - Comprehensive diagnostics
 - Cleaner separation of concerns
 - Numerical stability improvements
+- FIXED: Logging parameters properly initialized as instance variables
 """
 
 import torch
@@ -184,6 +185,11 @@ class PAnnealTrainer(SAETrainer):
         # Initialize P-annealing parameters
         self._setup_p_annealing()
         
+        # FIXED: Initialize logging variables as instance attributes
+        self.annealing_active = False
+        self.lp_loss = torch.tensor(0.0, device=self.device)
+        self.scaled_lp_loss = torch.tensor(0.0, device=self.device)
+        
         # Initialize optimizer and scheduler
         self.optimizer = ConstrainedAdam(
             self.ae.parameters(),
@@ -214,7 +220,7 @@ class PAnnealTrainer(SAETrainer):
         else:
             self.steps_since_active = None
         
-        # Setup logging
+        # FIXED: Setup logging with properly initialized parameters
         self.logging_parameters = [
             'p', 'next_p', 'lp_loss', 'scaled_lp_loss', 'sparsity_coeff',
             'p_step_count', 'annealing_active'
@@ -468,9 +474,10 @@ class PAnnealTrainer(SAETrainer):
         lp_loss = self.lp_norm(f, self.p)
         scaled_lp_loss = lp_loss * self.sparsity_coeff * sparsity_scale
         
-        # Store for logging
-        self.lp_loss = lp_loss
-        self.scaled_lp_loss = scaled_lp_loss
+        # FIXED: Update instance variables for logging
+        self.lp_loss = lp_loss.detach()
+        self.scaled_lp_loss = scaled_lp_loss.detach()
+        self.annealing_active = step >= self.model_config.anneal_start
         
         # Update sparsity queue for adaptive coefficient
         self._update_sparsity_queue(f)
@@ -504,7 +511,7 @@ class PAnnealTrainer(SAETrainer):
                 'next_p': self.next_p,
                 'sparsity_coeff': self.sparsity_coeff,
                 'p_step_count': self.p_step_count,
-                'annealing_active': step >= self.model_config.anneal_start,
+                'annealing_active': self.annealing_active,
                 'sparsity_scale': sparsity_scale,
                 'queue_length': len(self.sparsity_queue),
             }

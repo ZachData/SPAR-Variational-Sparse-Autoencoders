@@ -28,7 +28,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.hook_resid_post" # was blocks.0.mlp.hook_post
     dict_size_multiple: float = 4.0
     
     # Gated Annealing specific config
@@ -142,7 +142,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. d_model: {model.cfg.d_model}, d_mlp: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -156,12 +156,18 @@ class ExperimentRunner:
             return_tokens=True
         )
         
+        # FIXED: Use d_model for residual stream hooks, d_mlp for MLP hooks
+        if "resid" in self.config.hook_name or "attn" in self.config.hook_name:
+            d_submodule = model.cfg.d_model
+        else:
+            d_submodule = model.cfg.d_model
+        
         # Create activation buffer
         buffer = TransformerLensActivationBuffer(
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=d_submodule,
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -173,10 +179,16 @@ class ExperimentRunner:
         
     def create_model_config(self, model: HookedTransformer) -> GatedAnnealConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
+        # FIXED: Use d_model for residual stream hooks, d_mlp for MLP hooks
+        if "resid" in self.config.hook_name or "attn" in self.config.hook_name:
+            activation_dim = model.cfg.d_model
+        else:
+            activation_dim = model.cfg.d_model
+            
+        dict_size = int(self.config.dict_size_multiple * activation_dim)
         
         return GatedAnnealConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=activation_dim,
             dict_size=dict_size,
             sparsity_function=self.config.sparsity_function,
             initial_sparsity_penalty=self.config.initial_sparsity_penalty,
@@ -216,9 +228,12 @@ class ExperimentRunner:
         p_range = f"p{self.config.p_start:.1f}to{self.config.p_end:.1f}"
         anneal_range = f"anneal{self.config.anneal_start}to{self.config.anneal_end}"
         
+        # FIXED: Use actual activation dimension instead of hardcoded 512
+        activation_dim = self.config.dict_size_multiple * 512 if "resid" in self.config.hook_name else self.config.dict_size_multiple * 2048
+        
         return (
             f"GatedAnneal_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
+            f"d{int(activation_dim)}_"
             f"lr{self.config.lr}_{p_range}_{anneal_range}_"
             f"{self.config.sparsity_function}"
         )
@@ -265,6 +280,7 @@ class ExperimentRunner:
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
+            self.logger.info(f"Activation dimension: {model_config.activation_dim}")
             self.logger.info(f"P-annealing: {model_config.p_start} → {model_config.p_end} over {model_config.n_sparsity_updates} steps")
             self.logger.info(f"Annealing schedule: steps {model_config.anneal_start} to {model_config.anneal_end}")
             
@@ -384,7 +400,7 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # Test parameters
@@ -415,39 +431,39 @@ def create_full_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # Full training parameters
-        total_steps=50000,
-        lr=3e-4,
+        total_steps=20000,
+        lr=4e-5,
         
         # P-annealing schedule
-        anneal_start=15000,  # Start annealing after initial training
+        anneal_start=9000,  # Start annealing after initial training
         p_start=1.0,         # L1 penalty
-        p_end=0.0,           # Approaching L0
-        n_sparsity_updates=20,  # More granular annealing
+        p_end=0.9,           # Approaching L0
+        n_sparsity_updates=30,  # More granular annealing
         
         # Resampling
         resample_steps=5000,
-        
-        # Buffer settings
-        n_ctxs=8000,
+
+        # GPU memory optimized buffer settings
+        n_ctxs=2500,
         ctx_len=128,
-        refresh_batch_size=24,
-        out_batch_size=768,
+        refresh_batch_size=12,
+        out_batch_size=192,
         
         # Checkpointing
-        checkpoint_steps=(15000, 30000, 50000),
-        log_steps=100,
+        checkpoint_steps=(20000,),
+        log_steps=1000,
         
-        # Evaluation
-        eval_batch_size=48,
-        eval_n_batches=8,
+        # Evaluation - faster and more memory efficient
+        eval_batch_size=24,  # Smaller eval batches
+        eval_n_batches=6,    # Fewer eval batches
         
-        # System settings
+        # System settings for performance
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
+        dtype="bfloat16",    # Memory efficient
         autocast_dtype="bfloat16",
         seed=42,
     )

@@ -32,7 +32,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.hook_resid_post"
     dict_size_multiple: float = 4.0
     k: int = 32  # Top-K sparsity level
     
@@ -134,7 +134,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. d_model: {model.cfg.d_model}") # was model.cfg.d_mlp
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -153,7 +153,7 @@ class ExperimentRunner:
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=model.cfg.d_model,
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -165,10 +165,10 @@ class ExperimentRunner:
         
     def create_model_config(self, model: HookedTransformer) -> TopKConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
+        dict_size = int(self.config.dict_size_multiple * model.cfg.d_model)
         
         return TopKConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=model.cfg.d_model,
             dict_size=dict_size,
             k=self.config.k,
             dtype=self.config.get_torch_dtype(),
@@ -215,7 +215,7 @@ class ExperimentRunner:
         
         return (
             f"TopK_SAE_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
+            f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_model=512 for gelu-1l
             f"k{self.config.k}_auxk{self.config.auxk_alpha}"
             f"{lr_str}"
         )
@@ -335,17 +335,75 @@ class ExperimentRunner:
                 torch.cuda.empty_cache()
                 
     def evaluate_model(self, save_dir: Path, buffer: TransformerLensActivationBuffer) -> Dict[str, float]:
-        """Evaluate the trained Top-K SAE model."""
+        """Evaluate the trained Top-K SAE model with enhanced error handling."""
         self.logger.info("Evaluating trained Top-K SAE model...")
         
         try:
-            # Load the trained model
-            from dictionary_learning.utils import load_dictionary
-            
+            # Check if the model files exist
             model_path = save_dir / "trainer_0"
-            topk_sae, config = load_dictionary(str(model_path), device=self.config.device)
+            ae_path = model_path / "ae.pt"
+            config_path = model_path / "config.json"
             
+            if not ae_path.exists():
+                self.logger.error(f"Model file not found: {ae_path}")
+                return {}
+                
+            if not config_path.exists():
+                self.logger.error(f"Config file not found: {config_path}")
+                return {}
+                
+            self.logger.info(f"Loading model from: {model_path}")
+            
+            # Try to load the model with enhanced error handling
+            try:
+                from dictionary_learning.utils import load_dictionary
+                topk_sae, config = load_dictionary(str(model_path), device=self.config.device)
+                self.logger.info(f"Successfully loaded model of type: {type(topk_sae)}")
+                
+            except Exception as load_error:
+                self.logger.error(f"Failed to load model with load_dictionary: {load_error}")
+                self.logger.info("Attempting direct loading...")
+                
+                # Try direct loading as fallback
+                try:
+                    from dictionary_learning.trainers.top_k import AutoEncoderTopK, TopKConfig
+                    import json
+                    
+                    # Load config manually
+                    with open(config_path, 'r') as f:
+                        saved_config = json.load(f)
+                        
+                    trainer_config = saved_config["trainer"]
+                    self.logger.info(f"Trainer config keys: {list(trainer_config.keys())}")
+                    
+                    # Create TopKConfig
+                    model_config = TopKConfig(
+                        activation_dim=trainer_config["activation_dim"],
+                        dict_size=trainer_config["dict_size"],
+                        k=trainer_config["k"],
+                        device=self.config.get_device()
+                    )
+                    
+                    # Load model directly
+                    topk_sae = AutoEncoderTopK.from_pretrained(
+                        str(ae_path),
+                        config=model_config,
+                        device=self.config.device
+                    )
+                    
+                    self.logger.info(f"Successfully loaded model directly: {type(topk_sae)}")
+                    
+                except Exception as direct_error:
+                    self.logger.error(f"Direct loading also failed: {direct_error}")
+                    return {}
+            
+            # Verify the model is properly loaded
+            if topk_sae is None:
+                self.logger.error("Model loading returned None")
+                return {}
+                
             # Run evaluation
+            self.logger.info("Starting model evaluation...")
             eval_results = evaluate(
                 dictionary=topk_sae,
                 activations=buffer,
@@ -354,6 +412,8 @@ class ExperimentRunner:
                 device=self.config.device,
                 n_batches=self.config.eval_n_batches
             )
+            
+            self.logger.info(f"Evaluation completed successfully. Results: {len(eval_results)} metrics")
             
             # Add Top-K specific diagnostics
             try:
@@ -394,10 +454,13 @@ class ExperimentRunner:
                         json_results[k] = float(v) if isinstance(v, (int, float)) else str(v)
                 json.dump(json_results, f, indent=2)
                 
+            self.logger.info(f"Saved evaluation results to {eval_path}")
             return eval_results
             
         except Exception as e:
-            self.logger.error(f"Evaluation failed: {e}")
+            self.logger.error(f"Evaluation failed with error: {e}")
+            import traceback
+            self.logger.error(f"Full traceback: {traceback.format_exc()}")
             return {}
 
 
@@ -406,7 +469,7 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         k=32,
         
@@ -437,7 +500,7 @@ def create_full_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         k=32,
         
@@ -487,13 +550,13 @@ def create_low_k_config() -> ExperimentConfig:
 
 
 def create_gpu_10gb_config() -> ExperimentConfig:
-    """Create a configuration optimized for 10GB GPU memory."""
+    """Create a configuration optimized for 10GB GPU memory - VERY conservative to avoid slowdowns."""
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post", # was blocks.0.mlp.hook_post (mlp)
         dict_size_multiple=4.0,
-        k=32,
+        k=512,
         
         # Training parameters optimized for 10GB GPU
         total_steps=20000,
@@ -502,19 +565,19 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         threshold_beta=0.999,
         threshold_start_step=1000,
         
-        # GPU memory optimized buffer settings
-        n_ctxs=3000,
-        ctx_len=128,
-        refresh_batch_size=16,
-        out_batch_size=256,
+        # MUCH more conservative buffer settings to prevent memory accumulation
+        n_ctxs=1500,           # Reduced from 3000 - smaller activation buffer
+        ctx_len=96,            # Reduced from 128 - shorter sequences
+        refresh_batch_size=8,  # Reduced from 16 - smaller refresh batches
+        out_batch_size=128,    # Reduced from 256 - smaller output batches
         
-        # Checkpointing
+        # More frequent checkpointing for memory cleanup
         checkpoint_steps=(20000,),
-        log_steps=100,
+        log_steps=1000,  # Less frequent logging to reduce overhead
         
-        # Evaluation - small and efficient
-        eval_batch_size=32,
-        eval_n_batches=5,
+        # Even smaller evaluation to minimize memory spikes
+        eval_batch_size=16,    # Reduced from 32
+        eval_n_batches=3,      # Reduced from 5
         
         # System settings
         device="cuda" if torch.cuda.is_available() else "cpu",

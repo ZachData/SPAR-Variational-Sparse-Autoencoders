@@ -4,7 +4,7 @@ Clean training script for Standard SAE with robust configuration management.
 Usage examples:
 python train_standard_sae.py --config quick_test
 python train_standard_sae.py --config full
-python train_standard_sae.py --config april_update
+python train_standard_sae.py --config memory_efficient
 python train_standard_sae.py --config with_resampling
 """
 
@@ -36,7 +36,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.hook_resid_post"
     dict_size_multiple: float = 8.0
     
     # Model-specific config
@@ -138,7 +138,7 @@ class StandardSAEExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -157,7 +157,7 @@ class StandardSAEExperimentRunner:
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=model.cfg.d_model,
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -169,10 +169,10 @@ class StandardSAEExperimentRunner:
         
     def create_model_config(self, model: HookedTransformer) -> StandardSAEConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
+        dict_size = int(self.config.dict_size_multiple * model.cfg.d_model)
         
         return StandardSAEConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=model.cfg.d_model,
             dict_size=dict_size,
             use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
@@ -208,7 +208,7 @@ class StandardSAEExperimentRunner:
         
         return (
             f"StandardSAE_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
+            f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_mlp=2048 for gelu-1l
             f"lr{self.config.lr}_l1{self.config.l1_penalty}"
             f"{update_suffix}{resample_suffix}"
         )
@@ -351,7 +351,7 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # Quick test parameters
@@ -379,12 +379,12 @@ def create_full_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=8.0,
         
         # Full training parameters
-        total_steps=50000,
-        lr=1e-3,
+        total_steps=20000,
+        lr=1e-4,
         l1_penalty=1e-1,
         
         # Buffer settings
@@ -394,11 +394,11 @@ def create_full_config() -> ExperimentConfig:
         out_batch_size=8192,
         
         # Checkpointing
-        checkpoint_steps=(15000, 30000, 45000, 50000),
-        log_steps=100,
+        checkpoint_steps=(20000,),
+        log_steps=1000,
         
         # Evaluation
-        eval_batch_size=64,
+        eval_batch_size=32,
         eval_n_batches=10,
         
         # System settings
@@ -430,34 +430,36 @@ def create_memory_efficient_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post", # was blocks.0.mlp.hook_post
         dict_size_multiple=4.0,
+        use_april_update_mode = True,
         
         # Training parameters
-        total_steps=25000,
-        lr=1e-3,
-        l1_penalty=1e-1,
+        total_steps=20000,
+        lr=1e-4,
+        l1_penalty=10e-1,
         
-        # Memory-efficient buffer settings
-        n_ctxs=5000,
+        # GPU memory optimized buffer settings
+        n_ctxs=2500,
         ctx_len=128,
-        refresh_batch_size=32,
-        out_batch_size=512,
+        refresh_batch_size=12,
+        out_batch_size=192,
         
         # Checkpointing
-        checkpoint_steps=(25000,),
-        log_steps=100,
+        checkpoint_steps=(20000,),
+        log_steps=1000,
         
-        # Evaluation
-        eval_batch_size=32,
-        eval_n_batches=5,
+        # Evaluation - faster and more memory efficient
+        eval_batch_size=24,  # Smaller eval batches
+        eval_n_batches=6,    # Fewer eval batches
         
-        # System settings
+        # System settings for performance
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
+        dtype="bfloat16",    # Memory efficient
         autocast_dtype="bfloat16",
         seed=42,
     )
+
 
 
 def main():

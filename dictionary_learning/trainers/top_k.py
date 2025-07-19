@@ -439,10 +439,7 @@ class TopKTrainer(SAETrainer):
         )
         
         # Logging parameters
-        self.logging_parameters = [
-            "effective_l0", "dead_features", "pre_norm_auxk_loss", 
-            "threshold", "lr_current"
-        ]
+        self.logging_parameters = ["effective_l0", "dead_features", "pre_norm_auxk_loss"]
         self.effective_l0 = -1
         self.dead_features = -1
         self.pre_norm_auxk_loss = -1

@@ -413,7 +413,6 @@ class MatryoshkaBatchTopKSAE(Dictionary, nn.Module):
         
         return model
 
-
 @dataclass
 class MatryoshkaTrainingConfig:
     """Training configuration for Matryoshka Batch Top-K SAE."""
@@ -426,7 +425,10 @@ class MatryoshkaTrainingConfig:
     def __post_init__(self):
         """Set derived configuration values."""
         if self.warmup_steps is None:
-            self.warmup_steps = max(1000, int(0.02 * self.steps))
+            # Fixed: Ensure warmup_steps is always less than total steps
+            # Use 2% of steps, but at least 100 and at most steps-1
+            default_warmup = max(100, int(0.02 * self.steps))
+            self.warmup_steps = min(default_warmup, max(1, self.steps - 1))
         
         min_decay_start = self.warmup_steps + 1
         default_decay_start = int(0.8 * self.steps)

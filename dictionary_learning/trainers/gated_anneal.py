@@ -1,5 +1,5 @@
 """
-Enhanced Gated SAE with P-Annealing implementation - Robust version
+Enhanced Gated SAE with P-Annealing implementation - Robust version with bias handling fix
 """
 
 import torch
@@ -63,14 +63,19 @@ class GatedAnnealTrainingConfig:
             target_sparsity_warmup = max(500, int(0.05 * self.steps))
             self.sparsity_warmup_steps = min(target_sparsity_warmup, self.steps - 1)
 
-        # Set decay start if not provided
-        min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
-        default_decay_start = int(0.8 * self.steps)
-        
-        if default_decay_start <= max(self.warmup_steps, self.sparsity_warmup_steps):
-            self.decay_start = None  # Disable decay
-        elif self.decay_start is None or self.decay_start < min_decay_start:
-            self.decay_start = default_decay_start
+        # Handle mutual exclusivity: decay_start and resample_steps cannot both be set
+        if self.resample_steps is not None:
+            # If resample_steps is set, disable decay_start
+            self.decay_start = None
+        elif self.decay_start is None:
+            # Only set decay_start if resample_steps is not set
+            min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
+            default_decay_start = int(0.8 * self.steps)
+            
+            if default_decay_start <= max(self.warmup_steps, self.sparsity_warmup_steps):
+                self.decay_start = None  # Disable decay
+            else:
+                self.decay_start = default_decay_start
 
 
 class EnhancedGatedAutoEncoder(GatedAutoEncoder):
@@ -145,6 +150,7 @@ class GatedAnnealTrainer(SAETrainer):
     - Enhanced numerical stability
     - Better error handling
     - Comprehensive logging
+    - Fixed bias handling for GatedAutoEncoder
     """
     
     def __init__(
@@ -326,8 +332,11 @@ class GatedAnnealTrainer(SAETrainer):
             lp_loss_next = self.lp_norm(f_gate, self.next_p)
             self.sparsity_queue.append([self.lp_loss.item(), lp_loss_next.item()])
         
-        # Check if it's time to update
-        if step in self.sparsity_update_steps and step >= self.sparsity_update_steps[self.p_step_count]:
+        # Check if it's time to update (with bounds checking)
+        if (self.p_step_count < len(self.sparsity_update_steps) and 
+            step in self.sparsity_update_steps and 
+            step >= self.sparsity_update_steps[self.p_step_count]):
+            
             # Adapt sparsity penalty
             if len(self.sparsity_queue) > 0 and self.next_p is not None:
                 queue_array = torch.tensor(list(self.sparsity_queue))
@@ -341,10 +350,11 @@ class GatedAnnealTrainer(SAETrainer):
                     ratio = torch.clamp(torch.tensor(ratio), min=0.1, max=10.0).item()
                     self.sparsity_coeff *= ratio
             
-            # Update p
-            self.p = self.p_values[self.p_step_count].item()
+            # Update p (with bounds checking)
+            if self.p_step_count < len(self.p_values):
+                self.p = self.p_values[self.p_step_count].item()
             
-            # Set next p
+            # Set next p (with bounds checking)
             if self.p_step_count < len(self.p_values) - 1:
                 self.next_p = self.p_values[self.p_step_count + 1].item()
             else:
@@ -360,7 +370,7 @@ class GatedAnnealTrainer(SAETrainer):
             self.steps_since_active[~deads] = 0
     
     def resample_neurons(self, deads: torch.Tensor, activations: torch.Tensor) -> None:
-        """Resample dead neurons with improved stability."""
+        """Resample dead neurons with improved stability and bias handling."""
         if deads.sum() == 0:
             return
             
@@ -379,19 +389,30 @@ class GatedAnnealTrainer(SAETrainer):
             indices = torch.multinomial(losses, num_samples=n_resample, replacement=False)
             sampled_vecs = activations[indices]
             
-            # Reset encoder/decoder weights
-            alive_norm = self.ae.encoder.weight[~deads].norm(dim=-1).mean()
-            self.ae.encoder.weight[deads][:n_resample] = sampled_vecs * alive_norm * 0.2
-            self.ae.decoder.weight[:, deads][:, :n_resample] = (
-                sampled_vecs / sampled_vecs.norm(dim=-1, keepdim=True)
-            ).T
-            self.ae.encoder.bias[deads][:n_resample] = 0.0
+            # FIXED: Get the indices of dead neurons (not boolean mask)
+            dead_indices = deads.nonzero().flatten()[:n_resample]
             
-            # Reset optimizer state
-            self._reset_optimizer_state(deads, n_resample)
+            # FIXED: Ensure dtype consistency with model weights
+            model_dtype = self.ae.encoder.weight.dtype
+            device = self.ae.encoder.weight.device
+            
+            # Reset encoder/decoder weights using indices with proper dtype
+            alive_norm = self.ae.encoder.weight[~deads].norm(dim=-1).mean()
+            new_encoder_weights = (sampled_vecs * alive_norm * 0.2).to(dtype=model_dtype, device=device)
+            new_decoder_weights = (sampled_vecs / sampled_vecs.norm(dim=-1, keepdim=True)).T.to(dtype=model_dtype, device=device)
+            
+            self.ae.encoder.weight[dead_indices] = new_encoder_weights
+            self.ae.decoder.weight[:, dead_indices] = new_decoder_weights
+            
+            # FIXED: Reset encoder bias only if it exists (GatedAutoEncoder has bias=False)
+            if self.ae.encoder.bias is not None:
+                self.ae.encoder.bias[dead_indices] = 0.0
+            
+            # Reset optimizer state with indices
+            self._reset_optimizer_state(dead_indices)
     
-    def _reset_optimizer_state(self, deads: torch.Tensor, n_resample: int) -> None:
-        """Reset Adam optimizer state for resampled neurons."""
+    def _reset_optimizer_state(self, dead_indices: torch.Tensor) -> None:
+        """Reset Adam optimizer state for resampled neurons with proper indexing."""
         state_dict = self.optimizer.state_dict()['state']
         
         # Find the parameter indices (this is fragile and might need adjustment)
@@ -400,20 +421,21 @@ class GatedAnnealTrainer(SAETrainer):
         # Reset encoder weight
         encoder_weight_idx = param_indices.get(id(self.ae.encoder.weight))
         if encoder_weight_idx is not None and encoder_weight_idx in state_dict:
-            state_dict[encoder_weight_idx]['exp_avg'][deads[:n_resample]] = 0.0
-            state_dict[encoder_weight_idx]['exp_avg_sq'][deads[:n_resample]] = 0.0
+            state_dict[encoder_weight_idx]['exp_avg'][dead_indices] = 0.0
+            state_dict[encoder_weight_idx]['exp_avg_sq'][dead_indices] = 0.0
         
-        # Reset encoder bias
-        encoder_bias_idx = param_indices.get(id(self.ae.encoder.bias))
-        if encoder_bias_idx is not None and encoder_bias_idx in state_dict:
-            state_dict[encoder_bias_idx]['exp_avg'][deads[:n_resample]] = 0.0
-            state_dict[encoder_bias_idx]['exp_avg_sq'][deads[:n_resample]] = 0.0
+        # FIXED: Reset encoder bias only if it exists (GatedAutoEncoder has bias=False)
+        if self.ae.encoder.bias is not None:
+            encoder_bias_idx = param_indices.get(id(self.ae.encoder.bias))
+            if encoder_bias_idx is not None and encoder_bias_idx in state_dict:
+                state_dict[encoder_bias_idx]['exp_avg'][dead_indices] = 0.0
+                state_dict[encoder_bias_idx]['exp_avg_sq'][dead_indices] = 0.0
         
         # Reset decoder weight
         decoder_weight_idx = param_indices.get(id(self.ae.decoder.weight))
         if decoder_weight_idx is not None and decoder_weight_idx in state_dict:
-            state_dict[decoder_weight_idx]['exp_avg'][:, deads[:n_resample]] = 0.0
-            state_dict[decoder_weight_idx]['exp_avg_sq'][:, deads[:n_resample]] = 0.0
+            state_dict[decoder_weight_idx]['exp_avg'][:, dead_indices] = 0.0
+            state_dict[decoder_weight_idx]['exp_avg_sq'][:, dead_indices] = 0.0
     
     def loss(self, x: torch.Tensor, step: int, logging: bool = False):
         """Compute loss with enhanced error handling."""

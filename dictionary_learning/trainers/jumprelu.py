@@ -409,21 +409,35 @@ class JumpReluTrainingConfig:
     dead_feature_threshold: int = 10_000_000
     
     def __post_init__(self):
-        """Set derived configuration values."""
+        """Set derived configuration values with proper bounds checking."""
+        # Ensure warmup steps are always less than total steps
         if self.warmup_steps is None:
-            self.warmup_steps = max(1000, int(0.05 * self.steps))
+            # Use minimum of calculated value and steps-1 to ensure warmup_steps < steps
+            calculated_warmup = max(200, int(0.05 * self.steps))  # Reduced from 1000
+            self.warmup_steps = min(calculated_warmup, self.steps - 1)
+            
         if self.sparsity_warmup_steps is None:
-            self.sparsity_warmup_steps = max(2000, int(0.1 * self.steps))
+            # Use minimum of calculated value and steps-1 to ensure sparsity_warmup_steps < steps
+            calculated_sparsity_warmup = max(400, int(0.1 * self.steps))  # Reduced from 2000
+            self.sparsity_warmup_steps = min(calculated_sparsity_warmup, self.steps - 1)
+        
+        # Ensure all warmup steps are within bounds
+        self.warmup_steps = max(0, min(self.warmup_steps, self.steps - 1))
+        self.sparsity_warmup_steps = max(0, min(self.sparsity_warmup_steps, self.steps - 1))
         
         # Set decay start conservatively
         min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
         default_decay_start = int(0.8 * self.steps)
         
         if self.decay_start is None or self.decay_start < min_decay_start:
-            if default_decay_start > min_decay_start:
+            if default_decay_start > min_decay_start and default_decay_start < self.steps:
                 self.decay_start = default_decay_start
             else:
                 self.decay_start = None  # Disable decay
+        
+        # Final bounds check for decay_start
+        if self.decay_start is not None:
+            self.decay_start = min(self.decay_start, self.steps - 1)
 
 
 class JumpReluTrainer(SAETrainer):

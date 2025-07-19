@@ -32,7 +32,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.hook_resid_post" # was blocks.0.mlp.hook_post
     dict_size_multiple: float = 4.0
     
     # JumpReLU-specific config
@@ -136,7 +136,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -155,7 +155,7 @@ class ExperimentRunner:
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=model.cfg.d_model,
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -167,10 +167,10 @@ class ExperimentRunner:
         
     def create_model_config(self, model: HookedTransformer) -> JumpReluConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
+        dict_size = int(self.config.dict_size_multiple * model.cfg.d_model)
         
         return JumpReluConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=model.cfg.d_model,
             dict_size=dict_size,
             bandwidth=self.config.bandwidth,
             threshold_init=self.config.threshold_init,
@@ -206,7 +206,7 @@ class ExperimentRunner:
         """Generate a descriptive experiment name."""
         return (
             f"JumpReLU_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
+            f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_mlp=2048 for gelu-1l
             f"lr{self.config.lr}_l0{self.config.target_l0}_"
             f"bw{self.config.bandwidth}_sp{self.config.sparsity_penalty}"
         )
@@ -388,7 +388,7 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # JumpReLU parameters
@@ -422,7 +422,7 @@ def create_standard_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # JumpReLU parameters
@@ -486,37 +486,37 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # JumpReLU parameters
         bandwidth=0.001,
         threshold_init=0.001,
         sparsity_penalty=1.0,
-        target_l0=20.0,
+        target_l0=256.0,
         
         # GPU memory optimized parameters
         total_steps=20000,
-        lr=7e-5,
+        lr=5e-4,
         
         # GPU memory optimized buffer settings
-        n_ctxs=3000,
+        n_ctxs=2500,           
         ctx_len=128,
-        refresh_batch_size=16,
-        out_batch_size=256,
+        refresh_batch_size=12, 
+        out_batch_size=192,    
         
         # Checkpointing
         checkpoint_steps=(20000,),
-        log_steps=100,
+        log_steps=1000,
         
-        # Evaluation - small and efficient
-        eval_batch_size=32,
-        eval_n_batches=5,
+        # Evaluation - faster and more memory efficient
+        eval_batch_size=24,  # Smaller eval batches
+        eval_n_batches=6,    # Fewer eval batches
         
-        # System settings
+        # System settings for performance
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="float32",
-        autocast_dtype="float32",
+        dtype="bfloat16",    # Memory efficient
+        autocast_dtype="bfloat16",
         seed=42,
     )
 

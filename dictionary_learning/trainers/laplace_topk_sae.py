@@ -1,35 +1,37 @@
 """
-COMPLETELY FIXED implementation of hybrid Variational Sparse Autoencoder with Top-K activation mechanism.
+Block Diagonal Laplacian Top-K Sparse Autoencoder (BDL-SAE-TopK) - NO VAE Components
 
-This module combines the variational approach from VSAEIso with the structured sparsity of TopK,
-with MAJOR ARCHITECTURAL FIXES applied:
+This module implements a standard (non-variational) sparse autoencoder that combines:
+1. Standard autoencoder architecture (NO reparameterization, NO KL loss)
+2. Top-K structured sparsity mechanism  
+3. Block diagonal Laplacian regularization for structured smoothness
 
-CRITICAL FIXES APPLIED:
-1. ✅ REMOVED ReLU FROM LATENT SPACE: Latent variables remain unconstrained throughout VAE computation
-2. ✅ TOP-K ON ABSOLUTE VALUES: Selection based on |z| but preserves original sign for gradients  
-3. ✅ CLEAN VAE + SPARSITY SEPARATION: Clear separation between VAE latent space and sparse selection
-4. ✅ PROPER KL COMPUTATION: KL computed on actual latent variables being used, not just encoder means
-5. ✅ FIXED AUXILIARY LOSS: Uses sparse features and full latent space appropriately
-6. ✅ REMOVED CONFLICTING MECHANISMS: No more threshold filtering competing with Top-K
-7. ✅ CONSISTENT REPARAMETERIZATION: Always use reparameterization during training
-8. ✅ BETTER GRADIENT FLOW: No ReLU interference with reparameterization gradients
-9. ✅ ENHANCED DIAGNOSTICS: Detailed monitoring of both VAE and sparsity components
-10. ✅ ROBUST MODEL LOADING: Better error handling and auto-detection
+The key difference from the VAE version is simplicity:
+- NO variance encoder
+- NO reparameterization trick  
+- NO KL divergence loss
+- JUST: reconstruction + Top-K sparsity + Laplacian smoothness
 
-KEY ARCHITECTURAL INSIGHT:
-The original implementation tried to apply ReLU before Top-K, which broke VAE properties.
-The fixed version applies Top-K selection on absolute values |z| but uses original signed 
-values z for reconstruction, preserving both VAE gradients and structured sparsity.
+This allows isolating the effect of Laplacian regularization without VAE complexity.
 
-FLOW: x → encoder → μ,σ² → reparameterize → z → Top-K(|z|) → sparse_z → decode → x̂
-                                                ↳ KL(z)     ↳ L2(x,x̂)
+Mathematical Framework:
+- Standard encoding: z = encoder(x) (deterministic)
+- Top-K sparsity: Select k largest |z| values while preserving signs
+- Laplacian regularization: R(z) = Σᵢ zᵢᵀ Lᵢ zᵢ
+- Total loss: MSE + λ₁·R(z) + λ₂·AuxLoss (NO KL term)
+
+Ablation Study Position:
+- Pure TopK SAE: ✓ (baseline)
+- VSAE TopK: ✓ (adds VAE)
+- Laplacian TopK VAE: ✓ (adds VAE + Laplacian)  
+- Laplacian TopK SAE: ← THIS (adds just Laplacian)
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
-from typing import Optional, List, Tuple, Dict, Any, Callable
+from typing import Optional, List, Tuple, Dict, Any, Callable, Union
 from collections import namedtuple
 from dataclasses import dataclass
 
@@ -42,6 +44,9 @@ from ..trainers.trainer import (
     remove_gradient_parallel_to_decoder_directions
 )
 from ..config import DEBUG
+
+# Import the BlockDiagonalLaplacian from our VAE version
+from .laplace_topk import BlockDiagonalLaplacian
 
 
 @torch.no_grad()
@@ -73,43 +78,23 @@ def geometric_median(points: torch.Tensor, max_iter: int = 100, tol: float = 1e-
     return guess
 
 
-def get_kl_warmup_fn(total_steps: int, kl_warmup_steps: Optional[int] = None) -> Callable[[int], float]:
-    """
-    Return a function that computes KL annealing scale factor at a given step.
-    Helps prevent posterior collapse in early training.
-    
-    Args:
-        total_steps: Total training steps
-        kl_warmup_steps: Steps to warm up KL coefficient from 0 to 1
-        
-    Returns:
-        Function that returns KL scale factor for given step
-    """
-    if kl_warmup_steps is None or kl_warmup_steps == 0:
-        return lambda step: 1.0
-    
-    assert 0 < kl_warmup_steps <= total_steps, "kl_warmup_steps must be > 0 and <= total_steps"
-    
-    def scale_fn(step: int) -> float:
-        if step < kl_warmup_steps:
-            return step / kl_warmup_steps  # Linear warmup from 0 to 1
-        else:
-            return 1.0
-    
-    return scale_fn
-
-
 @dataclass
-class VSAETopKConfig:
-    """Configuration for VSAETopK model."""
+class LaplacianTopKSAEConfig:
+    """Configuration for Block Diagonal Laplacian TopK SAE (NO VAE components)."""
     activation_dim: int
     dict_size: int
     k: int
-    var_flag: int = 0  # 0: fixed variance, 1: learned variance
+    
+    # Block diagonal Laplacian parameters
+    block_sizes: Optional[List[int]] = None  # Auto-computed if None
+    laplacian_type: str = "chain"  # 'chain', 'complete', 'ring'
+    
+    # Standard autoencoder parameters (NO VAE)
     use_april_update_mode: bool = True
+    
+    # System parameters
     dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
-    log_var_init: float = -2.0  # Initialize log_var around exp(-2) ≈ 0.135 variance
     
     def get_device(self) -> torch.device:
         """Get the device, defaulting to CUDA if available."""
@@ -118,41 +103,54 @@ class VSAETopKConfig:
         return self.device
 
 
-class VSAETopK(Dictionary, nn.Module):
+class LaplacianTopKSAE(Dictionary, nn.Module):
     """
-    COMPLETELY FIXED hybrid dictionary that combines the variational approach from VSAEIso 
-    with the structured Top-K sparsity mechanism.
+    Block Diagonal Laplacian Top-K Sparse Autoencoder (NO VAE).
     
-    Key improvements:
-    - Unconstrained VAE latent space throughout computation
-    - Top-K selection on absolute values |z| preserves original sign and gradients
-    - Clean separation between VAE properties and sparsity constraints
-    - Proper KL computation on actual latent variables being used
-    - Enhanced numerical stability and dtype handling
-    - Better weight initialization and bias management
+    Combines standard autoencoders with Top-K sparsity and block diagonal
+    Laplacian regularization for structured, interpretable representations.
+    
+    Architecture (SIMPLIFIED compared to VAE version):
+    1. Standard encoder: x → z (deterministic, no sampling)
+    2. Top-K selection: sparse_z = TopK(|z|) but preserve signs  
+    3. Laplacian regularization: R(z) = Σᵢ zᵢᵀLᵢzᵢ (applied to full z)
+    4. Standard decoder: sparse_z → x̂
+    
+    NO VAE COMPONENTS:
+    - No variance encoder
+    - No reparameterization trick
+    - No KL divergence loss
     """
 
-    def __init__(self, config: VSAETopKConfig):
+    def __init__(self, config: LaplacianTopKSAEConfig):
         super().__init__()
         self.config = config
         self.activation_dim = config.activation_dim
         self.dict_size = config.dict_size
-        self.var_flag = config.var_flag
         self.use_april_update_mode = config.use_april_update_mode
         
         # Register k as a buffer so it's saved with the model
         self.register_buffer("k", torch.tensor(config.k, dtype=torch.int))
+        
+        # Initialize block diagonal Laplacian
+        self.laplacian = BlockDiagonalLaplacian(
+            dict_size=config.dict_size,
+            block_sizes=config.block_sizes,
+            laplacian_type=config.laplacian_type,
+            device=config.get_device(),
+            dtype=config.dtype
+        )
         
         # Initialize layers
         self._init_layers()
         self._init_weights()
     
     def _init_layers(self) -> None:
-        """Initialize neural network layers with proper configuration."""
+        """Initialize neural network layers (SIMPLIFIED - no variance encoder)."""
         device = self.config.get_device()
         dtype = self.config.dtype
         
-        # Main encoder and decoder
+        # Main encoder and decoder (NO variance encoder)
         self.encoder = nn.Linear(
             self.activation_dim, 
             self.dict_size, 
@@ -176,16 +174,6 @@ class VSAETopK(Dictionary, nn.Module):
                     dtype=dtype,
                     device=device
                 )
-            )
-            
-        # Variance encoder (only when learning variance)
-        if self.var_flag == 1:
-            self.var_encoder = nn.Linear(
-                self.activation_dim, 
-                self.dict_size, 
-                bias=True,
-                dtype=dtype,
-                device=device
             )
     
     def _init_weights(self) -> None:
@@ -213,15 +201,6 @@ class VSAETopK(Dictionary, nn.Module):
                 nn.init.zeros_(self.decoder.bias)
             else:
                 nn.init.zeros_(self.bias)
-                
-            # Initialize variance encoder if present
-            if self.var_flag == 1:
-                # Initialize variance encoder weights
-                nn.init.kaiming_uniform_(self.var_encoder.weight, a=0.01)
-                
-                # Initialize log_var bias to reasonable value
-                # log_var = log(σ²), so log_var = -2 means σ² ≈ 0.135
-                nn.init.constant_(self.var_encoder.bias, self.config.log_var_init)
 
     def _preprocess_input(self, x: torch.Tensor) -> torch.Tensor:
         """Preprocess input to handle bias subtraction in standard mode."""
@@ -236,86 +215,37 @@ class VSAETopK(Dictionary, nn.Module):
     def encode(
         self, 
         x: torch.Tensor, 
-        return_topk: bool = False,
-        training: bool = True
+        return_topk: bool = False
     ) -> Tuple[torch.Tensor, ...]:
         """
-        COMPLETELY FIXED encode method following proper VAE + Top-K principles.
-        
-        Key improvements:
-        - Clean separation between VAE latent space and sparse selection
-        - Top-K applied on absolute values to preserve gradient flow
-        - No ReLU interference with reparameterization
-        - Consistent latent space interpretation
+        SIMPLIFIED encode: Standard AE + Top-K (NO VAE components).
         
         Args:
             x: Input activation tensor
             return_topk: Whether to return top-k indices and values
-            training: Whether in training mode (affects sampling)
             
         Returns:
-            sparse_features, latent_z, mu, log_var, [top_indices, selected_vals]
+            sparse_features, latent_z, [top_indices, selected_vals]
         """
         x_processed = self._preprocess_input(x)
         
-        # Step 1: Encode to latent distribution parameters (unconstrained)
-        mu = self.encoder(x_processed)  # FIXED: Unconstrained mean (no ReLU)
-        mu = F.relu(mu)
-        
-        log_var = None
-        if self.var_flag == 1:
-            log_var = self.var_encoder(x_processed)  # FIXED: Direct log variance encoding
-        
-        # Step 2: Sample from latent distribution (reparameterization trick)
-        if training and self.var_flag == 1 and log_var is not None:
-            z = self.reparameterize(mu, log_var)  # Sampled latents (unconstrained)
-        else:
-            z = mu  # Deterministic latents
+        # Step 1: Standard deterministic encoding (NO sampling)
+        z = self.encoder(x_processed)  # Just deterministic features
             
-        # Step 3: Apply Top-K sparsity on absolute values (preserves gradients)
-        # KEY INSIGHT: select based on magnitude, but keep original values
+        # Step 2: Apply Top-K sparsity on absolute values (preserves gradients)
         z_abs = torch.abs(z)  # Use absolute values for selection
         top_vals_abs, top_indices = z_abs.topk(self.k.item(), sorted=False, dim=-1)
         
-        # Step 4: Create sparse feature vector using original latent values
+        # Step 3: Create sparse feature vector using original latent values
         sparse_features = torch.zeros_like(z)
-        # CRITICAL: Gather the original values (not absolute values) for the selected indices
+        # Gather the original values (not absolute values) for the selected indices
         selected_vals = torch.gather(z, dim=-1, index=top_indices)
         sparse_features = sparse_features.scatter_(dim=-1, index=top_indices, src=selected_vals)
         
         if return_topk:
-            return sparse_features, z, mu, log_var, top_indices, selected_vals
+            return sparse_features, z, top_indices, selected_vals
         else:
-            return sparse_features, z, mu, log_var
-
-    def reparameterize(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
-        """
-        FIXED reparameterization trick with consistent log_var = log(σ²) interpretation.
-        
-        Args:
-            mu: Mean of latent distribution (unconstrained)
-            log_var: Log variance = log(σ²) (None for fixed variance)
-            
-        Returns:
-            z: Sampled latent features (unconstrained)
-        """
-        if log_var is None or self.var_flag == 0:
-            return mu
-        
-        # FIXED: Conservative clamping range
-        # log_var ∈ [-6, 2] means σ² ∈ [0.002, 7.4] - reasonable range
-        log_var_clamped = torch.clamp(log_var, min=-6.0, max=2.0)
-        
-        # Since log_var = log(σ²), we have σ = sqrt(exp(log_var)) = sqrt(σ²)
-        std = torch.sqrt(torch.exp(log_var_clamped))
-        
-        # Sample noise
-        eps = torch.randn_like(std)
-        
-        # Reparameterize
-        z = mu + eps * std
-        
-        return z.to(dtype=mu.dtype)
+            return sparse_features, z
 
     def decode(self, f: torch.Tensor) -> torch.Tensor:
         """
@@ -335,14 +265,13 @@ class VSAETopK(Dictionary, nn.Module):
         else:
             return self.decoder(f) + self.bias
 
-    def forward(self, x: torch.Tensor, output_features: bool = False, training: bool = True):
+    def forward(self, x: torch.Tensor, output_features: bool = False):
         """
-        FIXED forward pass with cleaner VAE + Top-K architecture.
+        SIMPLIFIED forward pass: Standard AE + Top-K + Laplacian.
         
         Args:
             x: Input tensor
             output_features: Whether to return features as well
-            training: Whether in training mode (affects sampling behavior)
             
         Returns:
             Reconstructed tensor and optionally features
@@ -350,8 +279,8 @@ class VSAETopK(Dictionary, nn.Module):
         # Store original dtype to return output in same format
         original_dtype = x.dtype
         
-        # Encode: get sparse features from Top-K selection on VAE latents
-        sparse_features, latent_z, mu, log_var = self.encode(x, training=training)
+        # Encode: get sparse features from Top-K selection
+        sparse_features, latent_z = self.encode(x)
         
         # Decode using sparse features
         x_hat = self.decode(sparse_features)
@@ -365,99 +294,91 @@ class VSAETopK(Dictionary, nn.Module):
             sparse_features = sparse_features.to(dtype=original_dtype)
             return x_hat, sparse_features
 
-    def get_kl_diagnostics(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def compute_laplacian_regularization(self, z: torch.Tensor) -> torch.Tensor:
         """
-        Get detailed KL diagnostics for monitoring training.
+        Compute block diagonal Laplacian regularization on latent features.
         
-        Returns:
-            Dictionary with KL components and statistics
-        """
-        with torch.no_grad():
-            _, latent_z, mu, log_var = self.encode(x, training=False)
+        This encourages smoothness within feature blocks while maintaining
+        independence between blocks.
+        
+        Args:
+            z: Latent features [batch_size, dict_size]
             
-            if self.var_flag == 1 and log_var is not None:
-                log_var_safe = torch.clamp(log_var, -6, 2)
-                var = torch.exp(log_var_safe)  # σ²
-                
-                kl_mu = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
-                kl_var = 0.5 * torch.sum(var - 1 - log_var_safe, dim=1).mean()
-                kl_total = kl_mu + kl_var
-                
-                return {
-                    'kl_total': kl_total,
-                    'kl_mu_term': kl_mu,
-                    'kl_var_term': kl_var,
-                    'mean_log_var': log_var.mean(),
-                    'mean_var': var.mean(),
-                    'mean_mu': mu.mean(),
-                    'mean_mu_magnitude': mu.norm(dim=-1).mean(),
-                    'mu_std': mu.std(),
-                    'latent_z_mean': latent_z.mean(),
-                    'latent_z_std': latent_z.std(),
-                }
-            else:
-                kl_total = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
-                return {
-                    'kl_total': kl_total,
-                    'kl_mu_term': kl_total,
-                    'kl_var_term': torch.tensor(0.0),
-                    'mean_mu': mu.mean(),
-                    'mean_mu_magnitude': mu.norm(dim=-1).mean(),
-                    'mu_std': mu.std(),
-                    'latent_z_mean': latent_z.mean(),
-                    'latent_z_std': latent_z.std(),
-                }
-
-    def analyze_sparse_pattern(self, x: torch.Tensor) -> Dict[str, Any]:
+        Returns:
+            Laplacian regularization loss
         """
-        Analyze the sparse activation pattern for debugging and understanding.
+        return self.laplacian.compute_regularization(z)
+
+    def get_laplacian_diagnostics(self, x: torch.Tensor) -> Dict[str, Any]:
+        """Get detailed Laplacian regularization diagnostics."""
+        with torch.no_grad():
+            sparse_features, latent_z = self.encode(x)
+            
+            # Compute regularization on full latent space
+            laplacian_reg = self.compute_laplacian_regularization(latent_z)
+            
+            # Block-wise analysis
+            block_info = self.laplacian.get_block_info()
+            block_stats = {}
+            
+            for i, (start, size) in enumerate(zip(self.laplacian.block_starts, self.laplacian.block_sizes)):
+                if size > 1:  # Skip single-feature blocks
+                    z_block = latent_z[:, start:start + size]
+                    block_stats[f'block_{i}_mean'] = z_block.mean().item()
+                    block_stats[f'block_{i}_std'] = z_block.std().item()
+                    block_stats[f'block_{i}_sparsity'] = (z_block != 0).float().mean().item()
+            
+            return {
+                'laplacian_reg': laplacian_reg.item(),
+                'block_info': block_info,
+                **block_stats
+            }
+
+    def analyze_block_structure(self, x: torch.Tensor) -> Dict[str, Any]:
+        """
+        Analyze how features are organized within blocks.
         
-        Returns detailed information about how Top-K selection works on this input.
+        Returns detailed information about block-wise activation patterns.
         """
         with torch.no_grad():
-            sparse_features, latent_z, mu, log_var, top_indices, selected_vals = self.encode(
-                x, return_topk=True, training=False
+            sparse_features, latent_z, top_indices, selected_vals = self.encode(
+                x, return_topk=True
             )
             
-            # Compute various statistics
-            z_abs = torch.abs(latent_z)
-            sparsity_ratio = (sparse_features != 0).float().mean()
-            
             analysis = {
-                # Basic statistics
-                'batch_size': x.shape[0],
+                'total_features': self.dict_size,
                 'k_value': self.k.item(),
-                'actual_sparsity_ratio': sparsity_ratio.item(),
-                'theoretical_sparsity_ratio': self.k.item() / self.dict_size,
-                
-                # Latent space statistics
-                'latent_z_mean': latent_z.mean().item(),
-                'latent_z_std': latent_z.std().item(),
-                'latent_z_abs_mean': z_abs.mean().item(),
-                'mu_mean': mu.mean().item(),
-                'mu_std': mu.std().item(),
-                
-                # Selection statistics
-                'selected_vals_mean': selected_vals.mean().item(),
-                'selected_vals_std': selected_vals.std().item(),
-                'selected_vals_min': selected_vals.min().item(),
-                'selected_vals_max': selected_vals.max().item(),
-                'negative_selected_ratio': (selected_vals < 0).float().mean().item(),
-                
-                # Top-K threshold (minimum absolute value selected)
-                'topk_threshold': z_abs.topk(self.k.item(), dim=-1)[0][:, -1].mean().item(),
-                
-                # Feature activation patterns
-                'active_features_per_sample': (sparse_features != 0).sum(dim=-1).float().mean().item(),
-                'features_used_in_batch': (sparse_features.sum(dim=0) != 0).sum().item(),
+                'n_blocks': self.laplacian.n_blocks,
+                'block_sizes': self.laplacian.block_sizes,
+                'laplacian_type': self.laplacian.laplacian_type
             }
             
-            if self.var_flag == 1 and log_var is not None:
-                analysis.update({
-                    'log_var_mean': log_var.mean().item(),
-                    'log_var_std': log_var.std().item(),
-                    'variance_mean': torch.exp(log_var).mean().item(),
-                })
+            # Analyze Top-K selection within each block
+            block_selection_stats = {}
+            for i, (start, size) in enumerate(zip(self.laplacian.block_starts, self.laplacian.block_sizes)):
+                # Count how many features from this block were selected
+                block_mask = (top_indices >= start) & (top_indices < start + size)
+                selected_from_block = block_mask.sum(dim=1).float()  # [batch_size]
+                
+                block_selection_stats[f'block_{i}'] = {
+                    'size': size,
+                    'start_idx': start,
+                    'avg_selected': selected_from_block.mean().item(),
+                    'max_selected': selected_from_block.max().item(),
+                    'selection_rate': (selected_from_block.mean() / size).item()
+                }
+            
+            analysis['block_selection_stats'] = block_selection_stats
+            
+            # Overall statistics
+            z_abs = torch.abs(latent_z)
+            analysis.update({
+                'sparsity_ratio': (sparse_features != 0).float().mean().item(),
+                'latent_z_mean': latent_z.mean().item(),
+                'latent_z_std': latent_z.std().item(),
+                'topk_threshold': z_abs.topk(self.k.item(), dim=-1)[0][:, -1].mean().item(),
+                'laplacian_reg': self.compute_laplacian_regularization(latent_z).item()
+            })
             
             return analysis
 
@@ -469,18 +390,9 @@ class VSAETopK(Dictionary, nn.Module):
                 self.decoder.bias.mul_(scale)
             else:
                 self.bias.mul_(scale)
-                
-            if self.var_flag == 1:
-                self.var_encoder.bias.mul_(scale)
 
     def normalize_decoder(self) -> None:
-        """
-        Normalize decoder weights to have unit norm.
-        Note: Only recommended for models without learned variance.
-        """
-        if self.var_flag == 1:
-            print("Warning: Normalizing decoder weights with learned variance may hurt performance")
-        
+        """Normalize decoder weights to have unit norm."""
         with torch.no_grad():
             norms = torch.norm(self.decoder.weight, dim=0)
             
@@ -513,14 +425,13 @@ class VSAETopK(Dictionary, nn.Module):
     def from_pretrained(
         cls, 
         path: str, 
-        config: Optional[VSAETopKConfig] = None,
+        config: Optional[LaplacianTopKSAEConfig] = None,
         dtype: torch.dtype = torch.float32,
         device: Optional[torch.device] = None,
-        normalize_decoder: bool = True,
-        var_flag: Optional[int] = None
-    ) -> 'VSAETopK':
+        normalize_decoder: bool = True
+    ) -> 'LaplacianTopKSAE':
         """
-        FIXED model loading with robust error handling and auto-detection.
+        Load model with robust error handling and auto-detection.
         
         Args:
             path: Path to the saved model
@@ -528,7 +439,6 @@ class VSAETopK(Dictionary, nn.Module):
             dtype: Data type to convert model to
             device: Device to load model to
             normalize_decoder: Whether to normalize decoder weights
-            var_flag: Override var_flag detection
             
         Returns:
             Loaded autoencoder
@@ -546,18 +456,13 @@ class VSAETopK(Dictionary, nn.Module):
                 activation_dim, dict_size = state_dict.get("W_enc", state_dict["encoder.weight"].T).shape
                 use_april_update_mode = "b_dec" in state_dict or "decoder.bias" in state_dict
             
-            # Auto-detect var_flag
-            if var_flag is None:
-                var_flag = 1 if ("var_encoder.weight" in state_dict or "W_enc_var" in state_dict) else 0
-            
             # Get k value from state_dict or use default
             k = state_dict["k"].item() if "k" in state_dict else max(1, dict_size // 10)
             
-            config = VSAETopKConfig(
+            config = LaplacianTopKSAEConfig(
                 activation_dim=activation_dim,
                 dict_size=dict_size,
                 k=k,
-                var_flag=var_flag,
                 use_april_update_mode=use_april_update_mode,
                 dtype=dtype,
                 device=device
@@ -577,12 +482,6 @@ class VSAETopK(Dictionary, nn.Module):
             
             if missing_keys:
                 print(f"Warning: Missing keys in state_dict: {missing_keys}")
-                # Initialize missing variance encoder if needed
-                if var_flag == 1 and any("var_encoder" in key for key in missing_keys):
-                    print("Initializing missing variance encoder parameters")
-                    with torch.no_grad():
-                        nn.init.kaiming_uniform_(model.var_encoder.weight, a=0.01)
-                        nn.init.constant_(model.var_encoder.bias, config.log_var_init)
             
             if unexpected_keys:
                 print(f"Warning: Unexpected keys in state_dict: {unexpected_keys}")
@@ -590,8 +489,8 @@ class VSAETopK(Dictionary, nn.Module):
         except Exception as e:
             raise RuntimeError(f"Failed to load state dict: {e}")
         
-        # Normalize decoder if requested (skip for learned variance models)
-        if normalize_decoder and not (config.var_flag == 1 and "var_encoder.weight" in state_dict):
+        # Normalize decoder if requested
+        if normalize_decoder:
             try:
                 model.normalize_decoder()
             except Exception as e:
@@ -604,7 +503,7 @@ class VSAETopK(Dictionary, nn.Module):
         return model
     
     @staticmethod
-    def _convert_legacy_state_dict(state_dict: Dict[str, torch.Tensor], config: VSAETopKConfig) -> Dict[str, torch.Tensor]:
+    def _convert_legacy_state_dict(state_dict: Dict[str, torch.Tensor], config: LaplacianTopKSAEConfig) -> Dict[str, torch.Tensor]:
         """Convert legacy parameter names to current format."""
         converted = {}
         
@@ -618,11 +517,6 @@ class VSAETopK(Dictionary, nn.Module):
         else:
             converted["bias"] = state_dict["b_dec"]
         
-        # Convert variance encoder if present
-        if config.var_flag == 1 and "W_enc_var" in state_dict:
-            converted["var_encoder.weight"] = state_dict["W_enc_var"].T
-            converted["var_encoder.bias"] = state_dict["b_enc_var"]
-        
         # Convert other buffers
         if "k" in state_dict:
             converted["k"] = state_dict["k"]
@@ -631,15 +525,15 @@ class VSAETopK(Dictionary, nn.Module):
 
 
 @dataclass 
-class VSAETopKTrainingConfig:
-    """FIXED training configuration with proper scaling separation and cleaner architecture."""
+class LaplacianTopKSAETrainingConfig:
+    """Training configuration for Block Diagonal Laplacian TopK SAE (NO VAE)."""
     steps: int
     lr: float = 5e-4
-    kl_coeff: float = 500.0
-    kl_warmup_steps: Optional[int] = None  # KL annealing to prevent posterior collapse
+    laplacian_coeff: float = 1.0  # Block diagonal Laplacian regularization coefficient
+    laplacian_warmup_steps: Optional[int] = None  # Warmup for Laplacian regularization
     auxk_alpha: float = 1/32  # Auxiliary loss coefficient for dead feature resurrection
     warmup_steps: Optional[int] = None
-    sparsity_warmup_steps: Optional[int] = None  # For any actual sparsity penalties (unused in this model)
+    sparsity_warmup_steps: Optional[int] = None
     decay_start: Optional[int] = None
     dead_feature_threshold: int = 10_000_000  # Steps before considering a feature "dead"
     gradient_clip_norm: float = 1.0
@@ -650,9 +544,9 @@ class VSAETopKTrainingConfig:
             self.warmup_steps = max(200, int(0.02 * self.steps))
         if self.sparsity_warmup_steps is None:
             self.sparsity_warmup_steps = int(0.05 * self.steps)
-        # KL annealing to prevent posterior collapse
-        if self.kl_warmup_steps is None:
-            self.kl_warmup_steps = int(0.1 * self.steps)  # 10% of training
+        # Laplacian warmup
+        if self.laplacian_warmup_steps is None:
+            self.laplacian_warmup_steps = int(0.15 * self.steps)  # 15% of training
 
         min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
         default_decay_start = int(0.8 * self.steps)
@@ -691,23 +585,24 @@ class DeadFeatureTracker:
         }
 
 
-class VSAETopKTrainer(SAETrainer):
+class LaplacianTopKSAETrainer(SAETrainer):
     """
-    COMPLETELY FIXED trainer for the hybrid VSAETopK model with all improvements applied.
+    Trainer for Block Diagonal Laplacian Top-K Sparse Autoencoder (NO VAE).
     
-    Key fixes:
-    - Separate KL and sparsity annealing schedules
-    - Clean KL divergence computation on actual latent variables
-    - Proper reparameterization trick handling
-    - Enhanced numerical stability and dtype handling
-    - Better gradient clipping and optimization
-    - Detailed KL and sparsity diagnostics and monitoring
+    SIMPLIFIED compared to VAE version - optimizes only:
+    1. Reconstruction loss (MSE)
+    2. Block diagonal Laplacian regularization 
+    3. Auxiliary loss for dead feature resurrection
+    
+    NO VAE COMPONENTS:
+    - No KL divergence loss
+    - No variance-related parameters or annealing
     """
     
     def __init__(
         self,
-        model_config: Optional[VSAETopKConfig] = None,
-        training_config: Optional[VSAETopKTrainingConfig] = None,
+        model_config: Optional[LaplacianTopKSAEConfig] = None,
+        training_config: Optional[LaplacianTopKSAETrainingConfig] = None,
         layer: Optional[int] = None,
         lm_name: Optional[str] = None,
         submodule_name: Optional[str] = None,
@@ -719,12 +614,13 @@ class VSAETopKTrainer(SAETrainer):
         dict_size: Optional[int] = None,
         k: Optional[int] = None,
         lr: Optional[float] = None,
-        kl_coeff: Optional[float] = None,
+        laplacian_coeff: Optional[float] = None,
         auxk_alpha: Optional[float] = None,
-        var_flag: Optional[int] = None,
         use_april_update_mode: Optional[bool] = None,
         device: Optional[str] = None,
-        **kwargs  # Catch any other parameters (including removed threshold params)
+        block_sizes: Optional[List[int]] = None,
+        laplacian_type: Optional[str] = None,
+        **kwargs  # Catch any other parameters
     ):
         super().__init__(seed)
         
@@ -734,11 +630,12 @@ class VSAETopKTrainer(SAETrainer):
                 raise ValueError("Must provide either model_config or activation_dim + dict_size + k")
             
             device_obj = torch.device(device) if device else None
-            model_config = VSAETopKConfig(
+            model_config = LaplacianTopKSAEConfig(
                 activation_dim=activation_dim,
                 dict_size=dict_size,
                 k=k,
-                var_flag=var_flag or 0,
+                block_sizes=block_sizes,
+                laplacian_type=laplacian_type or "chain",
                 use_april_update_mode=use_april_update_mode if use_april_update_mode is not None else True,
                 device=device_obj
             )
@@ -747,10 +644,10 @@ class VSAETopKTrainer(SAETrainer):
             if steps is None:
                 raise ValueError("Must provide either training_config or steps")
             
-            training_config = VSAETopKTrainingConfig(
+            training_config = LaplacianTopKSAETrainingConfig(
                 steps=steps,
                 lr=lr or 5e-4,
-                kl_coeff=kl_coeff or 500.0,
+                laplacian_coeff=laplacian_coeff or 1.0,
                 auxk_alpha=auxk_alpha or 1/32,
             )
         
@@ -759,13 +656,13 @@ class VSAETopKTrainer(SAETrainer):
         self.layer = layer
         self.lm_name = lm_name
         self.submodule_name = submodule_name
-        self.wandb_name = wandb_name or "VSAETopKTrainer"
+        self.wandb_name = wandb_name or "LaplacianTopKSAETrainer"
         
         # Set device
         self.device = model_config.get_device()
         
         # Initialize model
-        self.ae = VSAETopK(model_config)
+        self.ae = LaplacianTopKSAE(model_config)
         self.ae.to(self.device)
         
         # Top-K specific tracking
@@ -778,11 +675,12 @@ class VSAETopKTrainer(SAETrainer):
             self.device
         )
         
-        # Logging parameters
-        self.logging_parameters = ["effective_l0", "dead_features", "pre_norm_auxk_loss"]
+        # Logging parameters (SIMPLIFIED - no KL terms)
+        self.logging_parameters = ["effective_l0", "dead_features", "pre_norm_auxk_loss", "laplacian_reg"]
         self.effective_l0 = -1
         self.dead_features = -1
         self.pre_norm_auxk_loss = -1
+        self.laplacian_reg = -1
 
         # Initialize optimizer and scheduler
         self.optimizer = torch.optim.Adam(
@@ -803,60 +701,18 @@ class VSAETopKTrainer(SAETrainer):
             training_config.steps, 
             training_config.sparsity_warmup_steps
         )
-        # FIXED: Separate KL annealing function
-        self.kl_warmup_fn = get_kl_warmup_fn(
+        # Laplacian annealing function (reuse existing implementation)
+        from .laplace_topk import get_kl_warmup_fn
+        self.laplacian_warmup_fn = get_kl_warmup_fn(
             training_config.steps,
-            training_config.kl_warmup_steps
+            training_config.laplacian_warmup_steps
         )
-
-    def _compute_kl_loss(self, latent_z: torch.Tensor, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
-        """
-        FIXED KL divergence computation using actual latent variables.
-        
-        Computes KL[q(z|x) || p(z)] where q(z|x) = N(μ, σ²) and p(z) = N(0, I)
-        
-        Args:
-            latent_z: The actual latent variables being used (from reparameterization)
-            mu: Mean parameters from encoder
-            log_var: Log variance parameters (None for fixed variance)
-            
-        Returns:
-            KL divergence loss
-        """
-        if self.ae.var_flag == 1 and log_var is not None:
-            # Full KL divergence for learned variance
-            log_var_clamped = torch.clamp(log_var, min=-6.0, max=2.0)
-            mu_clamped = torch.clamp(mu, min=-10.0, max=10.0)
-            
-            # KL[q(z|x) || p(z)] = 0.5 * Σ[μ² + σ² - 1 - log(σ²)]
-            kl_per_sample = 0.5 * torch.sum(
-                mu_clamped.pow(2) + torch.exp(log_var_clamped) - 1 - log_var_clamped,
-                dim=1
-            )
-        else:
-            # Fixed variance case: KL = 0.5 * ||latent_z||² 
-            # Use actual latent variables for more accurate gradients
-            latent_z_clamped = torch.clamp(latent_z, min=-10.0, max=10.0)
-            kl_per_sample = 0.5 * torch.sum(latent_z_clamped.pow(2), dim=1)
-        
-        # Average over batch
-        kl_loss = kl_per_sample.mean()
-        
-        # Ensure KL is non-negative
-        kl_loss = torch.clamp(kl_loss, min=0.0)
-        
-        return kl_loss
 
     def get_auxiliary_loss(self, residual_BD: torch.Tensor, sparse_features_BF: torch.Tensor, latent_z_BF: torch.Tensor):
         """
-        FIXED auxiliary loss computation using actual sparse features.
-        
-        Args:
-            residual_BD: Reconstruction residual (x - x_hat)
-            sparse_features_BF: The sparse features being used for reconstruction
-            latent_z_BF: The full latent variables (before Top-K selection)
+        Auxiliary loss computation using actual sparse features.
         """
-        # Update dead feature tracking based on sparse features (what's actually being used)
+        # Update dead feature tracking based on sparse features
         active_features = (sparse_features_BF.sum(0) > 0)
         num_tokens = sparse_features_BF.size(0)
         dead_features = self.dead_feature_tracker.update(active_features, num_tokens)
@@ -866,8 +722,7 @@ class VSAETopKTrainer(SAETrainer):
         if self.dead_features > 0:
             k_aux = min(self.top_k_aux, self.dead_features)
 
-            # Select auxiliary features from the FULL latent space, not just positive values
-            # This allows dead features to potentially be resurrected with negative values
+            # Select auxiliary features from the FULL latent space
             auxk_latents = torch.where(dead_features[None], torch.abs(latent_z_BF), -torch.inf)
 
             # Top-k dead latents by absolute value
@@ -880,7 +735,7 @@ class VSAETopKTrainer(SAETrainer):
             auxk_buffer_BF = torch.zeros_like(latent_z_BF)
             auxk_acts_BF = auxk_buffer_BF.scatter_(dim=-1, index=auxk_indices, src=auxk_original_vals)
 
-            # Decode auxiliary features directly (without bias to match gradient computation)
+            # Decode auxiliary features
             x_reconstruct_aux = self.ae.decoder(auxk_acts_BF)
             l2_loss_aux = (
                 (residual_BD.float() - x_reconstruct_aux.float()).pow(2).sum(dim=-1).mean()
@@ -900,21 +755,17 @@ class VSAETopKTrainer(SAETrainer):
         
     def loss(self, x: torch.Tensor, step: int, logging: bool = False):
         """
-        COMPLETELY FIXED loss computation with proper VAE + Top-K architecture.
-        
-        Key improvements:
-        - Uses actual latent variables for KL computation
-        - Clean separation of VAE and sparsity components
-        - Proper auxiliary loss on sparse features
-        - Enhanced diagnostics for both VAE and sparsity components
+        SIMPLIFIED loss computation (NO KL loss):
         
         The loss includes:
         1. Reconstruction error (MSE) 
-        2. KL divergence on actual latent variables (with separate annealing)
+        2. Block diagonal Laplacian regularization (with annealing)
         3. Auxiliary loss for reviving dead sparse features
+        
+        NO VAE COMPONENTS - much simpler than VAE version!
         """
         sparsity_scale = self.sparsity_warmup_fn(step)  # For any L1 penalties (unused here)
-        kl_scale = self.kl_warmup_fn(step)  # Separate KL annealing
+        laplacian_scale = self.laplacian_warmup_fn(step)  # Laplacian annealing
         
         # Store original dtype for final output
         original_dtype = x.dtype
@@ -922,9 +773,9 @@ class VSAETopKTrainer(SAETrainer):
         # Ensure input matches model dtype
         x = x.to(dtype=self.ae.encoder.weight.dtype)
 
-        # FIXED: Use the new cleaner encode method
-        sparse_features, latent_z, mu, log_var, top_indices, selected_vals = self.ae.encode(
-            x, return_topk=True, training=self.ae.training
+        # SIMPLIFIED encode (no VAE complexity)
+        sparse_features, latent_z, top_indices, selected_vals = self.ae.encode(
+            x, return_topk=True
         )
 
         # Decode using sparse features and calculate reconstruction error
@@ -936,14 +787,15 @@ class VSAETopKTrainer(SAETrainer):
         # Update the effective L0 (should be exactly K)
         self.effective_l0 = self.ae.k.item()
         
-        # FIXED: KL divergence loss using actual latent variables
-        kl_loss = self._compute_kl_loss(latent_z, mu, log_var)
-        kl_loss = kl_loss.to(dtype=original_dtype)
+        # Block diagonal Laplacian regularization
+        laplacian_reg = self.ae.compute_laplacian_regularization(latent_z)
+        laplacian_reg = laplacian_reg.to(dtype=original_dtype)
+        self.laplacian_reg = laplacian_reg.item()
         
-        # FIXED: Auxiliary loss using sparse features and full latent space
+        # Auxiliary loss using sparse features and full latent space
         auxk_loss = self.get_auxiliary_loss(residual.detach(), sparse_features, latent_z) if self.training_config.auxk_alpha > 0 else 0
         
-        # Total loss with proper scaling
+        # Total loss with proper scaling (SIMPLIFIED - no KL term)
         recon_loss = recon_loss.to(dtype=original_dtype)
         if isinstance(auxk_loss, torch.Tensor):
             auxk_loss = auxk_loss.to(dtype=original_dtype)
@@ -952,8 +804,9 @@ class VSAETopKTrainer(SAETrainer):
         
         total_loss = (
             recon_loss + 
-            self.training_config.kl_coeff * kl_scale * kl_loss +  # Separate KL scaling
+            self.training_config.laplacian_coeff * laplacian_scale * laplacian_reg +  # Laplacian regularization
             self.training_config.auxk_alpha * auxk_loss
+            # NO KL TERM - this is the key simplification!
         )
 
         if not logging:
@@ -964,30 +817,30 @@ class VSAETopKTrainer(SAETrainer):
             sparse_features = sparse_features.to(dtype=original_dtype)
             
             # Get additional diagnostics
-            kl_diagnostics = self.ae.get_kl_diagnostics(x.to(dtype=original_dtype))
+            laplacian_diagnostics = self.ae.get_laplacian_diagnostics(x.to(dtype=original_dtype))
             
             return namedtuple('LossLog', ['x', 'x_hat', 'f', 'losses'])(
                 x.to(dtype=original_dtype), x_hat, sparse_features,
                 {
                     'l2_loss': l2_loss.item(),
                     'mse_loss': recon_loss.item(),
-                    'kl_loss': kl_loss.item(),
+                    'laplacian_reg': laplacian_reg.item(),
                     'auxk_loss': auxk_loss.item() if isinstance(auxk_loss, torch.Tensor) else auxk_loss,
                     'loss': total_loss.item(),
                     'sparsity_scale': sparsity_scale,
-                    'kl_scale': kl_scale,  # Separate from sparsity scaling
+                    'laplacian_scale': laplacian_scale,
                     'effective_l0': self.effective_l0,
-                    # Additional VAE + Top-K diagnostics
+                    # Additional diagnostics (SIMPLIFIED - no KL)
                     'sparse_feature_norm': sparse_features.norm(dim=-1).mean().item(),
                     'latent_z_norm': latent_z.norm(dim=-1).mean().item(),
                     'selected_vals_mean': selected_vals.mean().item(),
                     'selected_vals_std': selected_vals.std().item(),
-                    **{k: v.item() if torch.is_tensor(v) else v for k, v in kl_diagnostics.items()}
+                    **{k: v if not torch.is_tensor(v) else v.item() for k, v in laplacian_diagnostics.items() if k != 'block_info'}
                 }
             )
         
     def update(self, step: int, activations: torch.Tensor):
-        """FIXED training update with improved stability and cleaner architecture."""
+        """Training update with improved stability and cleaner architecture."""
         activations = activations.to(self.device)
         
         # Initialize decoder bias with geometric median on first step
@@ -1024,22 +877,22 @@ class VSAETopKTrainer(SAETrainer):
     def config(self) -> Dict[str, Any]:
         """Return configuration dictionary for logging/saving (JSON serializable)."""
         return {
-            'dict_class': 'VSAETopK',
-            'trainer_class': 'VSAETopKTrainer',
+            'dict_class': 'LaplacianTopKSAE',
+            'trainer_class': 'LaplacianTopKSAETrainer',
             # Model config
             'activation_dim': self.model_config.activation_dim,
             'dict_size': self.model_config.dict_size,
             'k': self.model_config.k,
-            'var_flag': self.model_config.var_flag,
+            'block_sizes': self.model_config.block_sizes,
+            'laplacian_type': self.model_config.laplacian_type,
             'use_april_update_mode': self.model_config.use_april_update_mode,
-            'log_var_init': self.model_config.log_var_init,
             'dtype': str(self.model_config.dtype),
             'device': str(self.model_config.device),
-            # Training config
+            # Training config (SIMPLIFIED - no KL terms)
             'steps': self.training_config.steps,
             'lr': self.training_config.lr,
-            'kl_coeff': self.training_config.kl_coeff,
-            'kl_warmup_steps': self.training_config.kl_warmup_steps,
+            'laplacian_coeff': self.training_config.laplacian_coeff,
+            'laplacian_warmup_steps': self.training_config.laplacian_warmup_steps,
             'auxk_alpha': self.training_config.auxk_alpha,
             'warmup_steps': self.training_config.warmup_steps,
             'sparsity_warmup_steps': self.training_config.sparsity_warmup_steps,
@@ -1053,14 +906,19 @@ class VSAETopKTrainer(SAETrainer):
             'submodule_name': self.submodule_name,
             'seed': self.seed,
             # Architecture notes
-            'architecture_version': 'fixed_vae_topk_v2',
-            'fixes_applied': [
-                'unconstrained_latent_space',
-                'topk_on_absolute_values', 
-                'proper_kl_computation',
-                'clean_vae_sparsity_separation',
-                'fixed_auxiliary_loss',
-                'removed_threshold_mechanism',
-                'enhanced_gradient_flow'
+            'architecture_version': 'block_diagonal_laplacian_topk_sae_v1',
+            'features': [
+                'block_diagonal_laplacian_regularization',
+                'topk_sparsity',
+                'standard_autoencoder',  # NO VAE
+                'structured_sparsity_within_blocks',
+                'hierarchical_feature_organization',
+                'laplacian_annealing'
+            ],
+            'simplifications': [
+                'no_vae_components',
+                'no_kl_divergence',
+                'no_reparameterization',
+                'no_variance_encoder'
             ]
         }

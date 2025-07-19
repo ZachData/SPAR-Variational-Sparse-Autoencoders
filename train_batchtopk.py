@@ -28,7 +28,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.mlp.hook_post" # was blocks.0.mlp.hook_post
     dict_size_multiple: float = 4.0
     k: int = 64  # Number of top-k features
     
@@ -203,7 +203,7 @@ class ExperimentRunner:
         
         return (
             f"BatchTopK_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
+            f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_mlp=2048 for gelu-1l
             f"k{self.config.k}_"
             f"auxk{self.config.auxk_alpha}"
             f"{lr_suffix}"
@@ -454,7 +454,7 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         layer=0,
         hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
-        k=48,  # Reasonable k for memory constraints
+        k=256,  # Reasonable k for memory constraints
         
         # Training parameters optimized for 10GB GPU
         total_steps=20000,
@@ -463,14 +463,14 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         threshold_start_step=1000,
         
         # GPU memory optimized buffer settings
-        n_ctxs=3000,
+        n_ctxs=2500,           
         ctx_len=128,
-        refresh_batch_size=16,
-        out_batch_size=256,
+        refresh_batch_size=12, 
+        out_batch_size=192,    
         
         # Checkpointing
         checkpoint_steps=(20000,),
-        log_steps=100,
+        log_steps=1000,
         
         # Evaluation - small and efficient
         eval_batch_size=32,

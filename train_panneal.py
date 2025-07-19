@@ -28,7 +28,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.hook_resid_post"
     dict_size_multiple: float = 4.0
     
     # P-Annealing specific parameters
@@ -147,7 +147,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -166,7 +166,7 @@ class ExperimentRunner:
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=model.cfg.d_model,
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -178,10 +178,10 @@ class ExperimentRunner:
         
     def create_model_config(self, model: HookedTransformer) -> PAnnealConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
+        dict_size = int(self.config.dict_size_multiple * model.cfg.d_model)
         
         return PAnnealConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=model.cfg.d_model,
             dict_size=dict_size,
             sparsity_function=self.config.sparsity_function,
             initial_sparsity_penalty=self.config.initial_sparsity_penalty,
@@ -227,7 +227,7 @@ class ExperimentRunner:
         
         return (
             f"PAnneal_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
+            f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_mlp=2048 for gelu-1l
             f"lr{self.config.lr}_{p_range}_{sparsity_fn}_"
             f"anneal{self.config.anneal_start}_updates{self.config.n_sparsity_updates}"
         )
@@ -385,7 +385,7 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # P-annealing parameters
@@ -421,39 +421,39 @@ def create_standard_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # P-annealing parameters
         sparsity_function='Lp',
-        initial_sparsity_penalty=1e-1,
+        initial_sparsity_penalty=1e-2,
         p_start=1.0,
-        p_end=0.1,
-        anneal_start_fraction=0.3,  # Start annealing at 30%
-        n_sparsity_updates=10,
+        p_end=0.2,
+        anneal_start_fraction=0.4,  # Start annealing at 30%
+        n_sparsity_updates=20,
         
         # Full training parameters
-        total_steps=50000,
-        lr=1e-3,
+        total_steps=20000,
+        lr=5e-4,
         
-        # Buffer settings
-        n_ctxs=3000,
+        # GPU memory optimized buffer settings
+        n_ctxs=2500,           
         ctx_len=128,
-        refresh_batch_size=32,
-        out_batch_size=1024,
+        refresh_batch_size=12, 
+        out_batch_size=192,    
         
         # Checkpointing
-        checkpoint_steps=(25000, 50000),
-        log_steps=200,
+        checkpoint_steps=(20000,),
+        log_steps=1000,
         
-        # Evaluation
-        eval_batch_size=64,
-        eval_n_batches=10,
+        # Evaluation - faster and more memory efficient
+        eval_batch_size=24,  # Smaller eval batches
+        eval_n_batches=6,    # Fewer eval batches
         
-        # System settings
+        # System settings for performance
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="float32",
-        autocast_dtype="float32",
+        dtype="bfloat16",    # Memory efficient
+        autocast_dtype="bfloat16",
         seed=42,
     )
 
@@ -499,7 +499,7 @@ def create_memory_efficient_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # P-annealing parameters
@@ -511,8 +511,8 @@ def create_memory_efficient_config() -> ExperimentConfig:
         n_sparsity_updates=8,
         
         # Memory-efficient parameters
-        total_steps=30000,
-        lr=1e-3,
+        total_steps=20000,
+        lr=1e-4,
         
         # Smaller buffer
         n_ctxs=1500,
@@ -521,8 +521,8 @@ def create_memory_efficient_config() -> ExperimentConfig:
         out_batch_size=512,
         
         # Checkpointing
-        checkpoint_steps=(30000,),
-        log_steps=200,
+        checkpoint_steps=(20000,),
+        log_steps=1000,
         
         # Smaller evaluation
         eval_batch_size=32,
@@ -608,12 +608,12 @@ def main():
 
 
 # Usage examples:
-# python train_p_anneal.py --config quick_test
-# python train_p_anneal.py --config standard
-# python train_p_anneal.py --config aggressive_annealing
-# python train_p_anneal.py --config lp_power
-# python train_p_anneal.py --config with_resampling
-# python train_p_anneal.py --config memory_efficient
+# python train_panneal.py --config quick_test
+# python train_panneal.py --config standard
+# python train_panneal.py --config aggressive_annealing
+# python train_panneal.py --config lp_power
+# python train_panneal.py --config with_resampling
+# python train_panneal.py --config memory_efficient
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility

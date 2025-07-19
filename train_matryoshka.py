@@ -33,7 +33,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.hook_resid_post"
     dict_size_multiple: float = 4.0
     
     # Matryoshka-specific configuration
@@ -146,7 +146,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -165,7 +165,7 @@ class ExperimentRunner:
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=model.cfg.d_model,
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -177,10 +177,10 @@ class ExperimentRunner:
         
     def create_model_config(self, model: HookedTransformer) -> MatryoshkaConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
+        dict_size = int(self.config.dict_size_multiple * model.cfg.d_model)
         
         return MatryoshkaConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=model.cfg.d_model,
             dict_size=dict_size,
             k=self.config.k,
             group_fractions=self.config.group_fractions,
@@ -221,7 +221,7 @@ class ExperimentRunner:
         
         return (
             f"MatryoshkaBatchTopK_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"  # Assuming d_mlp=2048 for gelu-1l
+            f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_mlp=2048 for gelu-1l
             f"k{self.config.k}_{groups_str}_{fractions_str}_"
             f"aux{self.config.auxk_alpha:.3f}"
         )
@@ -408,7 +408,7 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # Matryoshka parameters
@@ -442,7 +442,7 @@ def create_full_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",
         dict_size_multiple=4.0,
         
         # Matryoshka parameters
@@ -502,36 +502,37 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post", # was blocks.0.mlp.hook_post
         dict_size_multiple=4.0,
         
         # Matryoshka parameters
-        k=48,  # Moderate k for memory efficiency
-        group_fractions=[0.6, 0.4],  # 2 groups only
+        k=256,  # Moderate k for memory efficiency
+        group_fractions=(0.25, 0.25, 0.25, 0.25),
+        group_weights=(0.4, 0.3, 0.2, 0.1),
         auxk_alpha=1/32,
         threshold_start_step=800,
         
         # Training parameters optimized for 10GB GPU
         total_steps=20000,
-        lr=None,  # Auto-calculated
+        lr=1e-4, 
         
         # GPU memory optimized buffer settings
-        n_ctxs=3000,     # Small enough to fit in 10GB
+        n_ctxs=2500,           
         ctx_len=128,
-        refresh_batch_size=16,  # Conservative batch size
-        out_batch_size=256,     # Conservative output size
+        refresh_batch_size=12, 
+        out_batch_size=192,    
         
         # Checkpointing
         checkpoint_steps=(20000,),
-        log_steps=100,
+        log_steps=1000,
         
-        # Evaluation - small and efficient
-        eval_batch_size=32,
-        eval_n_batches=5,
+        # Evaluation - faster and more memory efficient
+        eval_batch_size=24,  # Smaller eval batches
+        eval_n_batches=6,    # Fewer eval batches
         
-        # System settings
+        # System settings for performance
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
+        dtype="bfloat16",    # Memory efficient
         autocast_dtype="bfloat16",
         seed=42,
     )
@@ -607,12 +608,12 @@ def main():
 
 
 # Usage examples:
-# python train_matryoshka_batch_topk.py --config quick_test
-# python train_matryoshka_batch_topk.py --config full
-# python train_matryoshka_batch_topk.py --config high_sparsity
-# python train_matryoshka_batch_topk.py --config many_groups
-# python train_matryoshka_batch_topk.py --config gpu_10gb
-# python train_matryoshka_batch_topk.py --config balanced_groups
+# python train_matryoshka.py --config quick_test
+# python train_matryoshka.py --config full
+# python train_matryoshka.py --config high_sparsity
+# python train_matryoshka.py --config many_groups
+# python train_matryoshka.py --config gpu_10gb
+# python train_matryoshka.py --config balanced_groups
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility

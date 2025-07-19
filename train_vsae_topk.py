@@ -7,6 +7,7 @@ Key improvements:
 - Enhanced evaluation and logging
 - Better memory management and error handling
 - Comprehensive argument parsing
+- FIXED: All configurations now use residual stream (blocks.0.hook_resid_post)
 """
 
 import torch
@@ -40,7 +41,7 @@ class ExperimentConfig:
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.mlp.hook_post"
+    hook_name: str = "blocks.0.hook_resid_post"  # FIXED: Residual stream for saebench compatibility
     dict_size_multiple: float = 4.0
     k_fraction: float = 0.08  # Fraction of dictionary size for Top-K
     
@@ -165,7 +166,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. d_model: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -179,12 +180,12 @@ class ExperimentRunner:
             return_tokens=True
         )
         
-        # Create activation buffer
+        # Create activation buffer - FIXED: Uses d_model for residual stream
         buffer = TransformerLensActivationBuffer(
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=model.cfg.d_model,  # FIXED: d_model (512) not d_mlp (2048) for residual stream
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -196,12 +197,12 @@ class ExperimentRunner:
         
     def create_model_config(self, model: HookedTransformer) -> VSAETopKConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
+        dict_size = int(self.config.dict_size_multiple * model.cfg.d_model)
         k = int(self.config.k_fraction * dict_size)
         
-        # Create base config
+        # Create base config - FIXED: Uses d_model for residual stream
         model_config = VSAETopKConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=model.cfg.d_model,  # FIXED: d_model (512) for residual stream
             dict_size=dict_size,
             k=k,
             var_flag=self.config.var_flag,
@@ -255,12 +256,12 @@ class ExperimentRunner:
         
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
-        k_value = int(self.config.k_fraction * self.config.dict_size_multiple * 2048)  # Assuming d_mlp=2048 for gelu-1l
+        k_value = int(self.config.k_fraction * self.config.dict_size_multiple * 512)  # FIXED: Using d_model=512
         var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
         
         return (
             f"VSAETopK_{self.config.model_name}_"
-            f"d{int(self.config.dict_size_multiple * 2048)}_"
+            f"d{int(self.config.dict_size_multiple * 512)}_"
             f"k{k_value}_lr{self.config.lr}_kl{self.config.kl_coeff}_"
             f"aux{self.config.auxk_alpha}{var_suffix}"
         )
@@ -274,64 +275,43 @@ class ExperimentRunner:
     def save_config(self, save_dir: Path) -> None:
         """Save experiment configuration."""
         config_path = save_dir / "experiment_config.json"
-        
-        import json
         with open(config_path, 'w') as f:
-            # Convert config to dict, handling special types
-            config_dict = asdict(self.config)
-            json.dump(config_dict, f, indent=2, default=str)
-            
+            import json
+            json.dump(asdict(self.config), f, indent=2, default=str)
         self.logger.info(f"Saved experiment config to {config_path}")
         
-    def check_existing_checkpoint(self, save_dir: Path) -> bool:
-        """Check if there's an existing checkpoint to continue from."""
-        checkpoint_path = save_dir / "trainer_0" / "checkpoints"
-        exists = checkpoint_path.exists() and any(checkpoint_path.glob("*.pt"))
-        
-        if exists:
-            self.logger.info(f"Found existing checkpoint at {checkpoint_path}")
-        else:
-            self.logger.info("No existing checkpoint found, starting from scratch")
-            
-        return exists
-        
-    def run_training(self) -> Dict[str, float]:
-        """Run the complete training experiment with VSAETopK."""
-        self.logger.info("Starting VSAETopK training experiment")
-        self.logger.info(f"Configuration: {self.config}")
-        
+    def run_training(self) -> Optional[Dict[str, float]]:
+        """Run the complete training experiment."""
         start_time = time.time()
         
         try:
-            # Load model and create buffer
+            # Setup
             model = self.load_model()
             buffer = self.create_buffer(model)
-            
-            # Create configurations
             model_config = self.create_model_config(model)
             training_config = self.create_training_config()
             trainer_config = self.create_trainer_config(model_config, training_config)
             
-            # Set up save directory
+            # Save directory and config
             save_dir = self.get_save_directory()
             self.save_config(save_dir)
             
-            # Check for existing checkpoints
-            self.check_existing_checkpoint(save_dir)
-            
-            self.logger.info(f"Model config: {model_config}")
-            self.logger.info(f"Training config: {training_config}")
-            self.logger.info(f"Dictionary size: {model_config.dict_size}, K value: {model_config.k}")
+            # Log experiment details
+            self.logger.info(f"Experiment: {self.get_experiment_name()}")
+            self.logger.info(f"Dictionary size: {model_config.dict_size}")
+            self.logger.info(f"K value: {model_config.k}")
             self.logger.info(f"K fraction: {self.config.k_fraction}, Auxiliary alpha: {self.config.auxk_alpha}")
+            self.logger.info(f"Save directory: {save_dir}")
             
             # Run training
             self.logger.info("Starting VSAETopK training...")
+            
             trainSAE(
                 data=buffer,
-                trainer_configs=[trainer_config],
+                trainer_configs=[trainer_config],  # FIXED: trainSAE expects a list of configs
                 steps=self.config.total_steps,
                 save_dir=str(save_dir),
-                save_steps=list(self.config.checkpoint_steps),
+                save_steps=list(self.config.checkpoint_steps) if self.config.checkpoint_steps else None,
                 log_steps=self.config.log_steps,
                 verbose=True,
                 normalize_activations=True,
@@ -365,9 +345,9 @@ class ExperimentRunner:
             # Clean up GPU memory
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-                
+            
     def evaluate_model(self, save_dir: Path, buffer: TransformerLensActivationBuffer) -> Dict[str, float]:
-        """Evaluate the trained model with enhanced diagnostics."""
+        """Run evaluation on the trained model."""
         self.logger.info("Evaluating trained model...")
         
         try:
@@ -544,7 +524,7 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",  # FIXED: Residual stream
         dict_size_multiple=4.0,
         k_fraction=0.08,
         
@@ -573,7 +553,7 @@ def create_full_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",  # FIXED: Residual stream
         dict_size_multiple=4.0,
         k_fraction=0.08,
         
@@ -639,14 +619,14 @@ def create_gpu_10gb_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",  # FIXED: Residual stream
         dict_size_multiple=4.0,
-        k_fraction=0.08,
+        k_fraction=0.125,
         
         # Training parameters optimized for 10GB GPU
-        total_steps=60000,
+        total_steps=20000,
         lr=8e-4,
-        kl_coeff=30.0,
+        kl_coeff=10.0,
         auxk_alpha=1/32,
         
         # Model settings
@@ -661,8 +641,8 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         out_batch_size=192,     # Smaller output batches
         
         # Checkpointing
-        checkpoint_steps=(60000,),
-        log_steps=50,  # More frequent logging to monitor performance
+        checkpoint_steps=(20000,),
+        log_steps=1000,  # More frequent logging to monitor performance
         
         # Evaluation - smaller to reduce memory spikes
         eval_batch_size=24,
@@ -703,7 +683,7 @@ def create_gpu_10gb_speed_optimized_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.mlp.hook_post",
+        hook_name="blocks.0.hook_resid_post",  # FIXED: Residual stream
         dict_size_multiple=3.0,  # Smaller dictionary for speed
         k_fraction=0.06,         # Lower K for speed
         
@@ -844,12 +824,12 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_topk_enhanced.py --config quick_test
-# python train_vsae_topk_enhanced.py --config learned_variance  
-# python train_vsae_topk_enhanced.py --config gpu_10gb          # Balanced 10GB config
-# python train_vsae_topk_enhanced.py --config gpu_10gb_speed    # Speed-optimized 10GB config
-# python train_vsae_topk_enhanced.py --config high_k           # For comparison with higher K
-# python train_vsae_topk_enhanced.py --sweep --wandb-entity your-username
+# python train_vsae_topk.py --config quick_test
+# python train_vsae_topk.py --config learned_variance  
+# python train_vsae_topk.py --config gpu_10gb          # Balanced 10GB config
+# python train_vsae_topk.py --config gpu_10gb_speed    # Speed-optimized 10GB config
+# python train_vsae_topk.py --config high_k           # For comparison with higher K
+# python train_vsae_topk.py --sweep --wandb-entity your-username
 
 
 if __name__ == "__main__":

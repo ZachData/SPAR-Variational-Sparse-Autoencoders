@@ -9,6 +9,7 @@ Key improvements:
 - Comprehensive logging and diagnostics
 - Gradient clipping and modern training practices
 - Proper initialization and normalization
+- Fixed warmup step validation
 """
 
 import torch
@@ -59,9 +60,14 @@ class GDMTrainingConfig:
     def __post_init__(self):
         """Set derived configuration values."""
         if self.warmup_steps is None:
-            self.warmup_steps = max(1000, int(0.02 * self.steps))
+            # Ensure warmup_steps is always less than total steps
+            suggested_warmup = max(100, int(0.02 * self.steps))
+            self.warmup_steps = min(suggested_warmup, self.steps - 1)
+            
         if self.sparsity_warmup_steps is None:
-            self.sparsity_warmup_steps = max(2000, int(0.05 * self.steps))
+            # Ensure sparsity_warmup_steps is always less than total steps
+            suggested_sparsity_warmup = max(200, int(0.05 * self.steps))
+            self.sparsity_warmup_steps = min(suggested_sparsity_warmup, self.steps - 1)
         
         # Set decay start if not provided
         min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
@@ -222,6 +228,7 @@ class GatedSAETrainer(SAETrainer):
     - Comprehensive logging and diagnostics
     - Gradient clipping and proper optimization
     - Better error handling
+    - Fixed warmup step validation
     """
     
     def __init__(
@@ -433,7 +440,7 @@ class GatedSAETrainer(SAETrainer):
         """Return configuration dictionary for logging/saving."""
         return {
             'dict_class': 'GatedAutoEncoder',
-            'trainer_class': 'GDMTrainer',
+            'trainer_class': 'GatedSAETrainer',
             # Model config
             'activation_dim': self.model_config.activation_dim,
             'dict_size': self.model_config.dict_size,
@@ -456,3 +463,7 @@ class GatedSAETrainer(SAETrainer):
             'submodule_name': self.submodule_name,
             'seed': self.seed,
         }
+
+
+# Alias for backwards compatibility
+GDMTrainer = GatedSAETrainer
