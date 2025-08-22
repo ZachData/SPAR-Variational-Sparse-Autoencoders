@@ -104,29 +104,23 @@ def load_dictionary(base_path: str, device: str) -> tuple:
     elif dict_class == "GatedAutoEncoder":
         dictionary = GatedAutoEncoder.from_pretrained(ae_path, device=device)
     elif dict_class == "AutoEncoderTopK":
-        # Handle both old and new TopK formats
-        from .trainers.top_k import TopKConfig
+        from .trainers.top_k import TopKConfig, AutoEncoderTopK
         
         trainer_config = config["trainer"]
-        k = trainer_config["k"]
         
-        # Check if this is the new config-based format
-        if "model_config" in trainer_config:
-            # New robust format with config classes
-            model_config = TopKConfig(
-                activation_dim=trainer_config["activation_dim"],
-                dict_size=trainer_config["dict_size"],
-                k=k,
-                device=device
-            )
-            dictionary = AutoEncoderTopK.from_pretrained(
-                ae_path, 
-                config=model_config,
-                device=device
-            )
-        else:
-            # Legacy format - direct loading
-            dictionary = AutoEncoderTopK.from_pretrained(ae_path, device=device)
+        # Always create a proper config from the flattened trainer config
+        model_config = TopKConfig(
+            activation_dim=trainer_config["activation_dim"],
+            dict_size=trainer_config["dict_size"],
+            k=trainer_config["k"],
+            device=device
+        )
+        
+        dictionary = AutoEncoderTopK.from_pretrained(
+            ae_path, 
+            config=model_config,
+            device=device
+        )
     elif dict_class == "BatchTopKSAE":
         from .trainers.batch_top_k import BatchTopKSAE, BatchTopKConfig
         
@@ -348,28 +342,10 @@ def load_dictionary(base_path: str, device: str) -> tuple:
             device=device
         )
     elif dict_class == "VSAETopK":
-        # Enhanced VSAETopK with full configuration support
-        from .trainers.vsae_topk import VSAETopKConfig
+        from .trainers.vsae_topk import VSAETopK
         
-        trainer_config = config["trainer"]
-        
-        # Create VSAETopKConfig from saved parameters
-        vsae_config = VSAETopKConfig(
-            activation_dim=trainer_config["activation_dim"],
-            dict_size=trainer_config["dict_size"],
-            k=trainer_config["k"],
-            var_flag=trainer_config.get("var_flag", 0),
-            use_april_update_mode=trainer_config.get("use_april_update_mode", True),
-            log_var_init=trainer_config.get("log_var_init", -2.0),
-            dtype=_convert_string_to_dtype(trainer_config.get("dtype", "torch.float32")),
-            device=device
-        )
-        
-        dictionary = VSAETopK.from_pretrained(
-            ae_path, 
-            config=vsae_config,
-            device=device
-        )
+        k = config["trainer"]["k"]
+        dictionary = VSAETopK.from_pretrained(ae_path, device=device)
     elif dict_class == "VSAEPriorsGaussian":
         from .trainers.vsae_priors import VSAEPriorsGaussian, VSAEPriorsConfig
         
@@ -398,7 +374,7 @@ def load_dictionary(base_path: str, device: str) -> tuple:
     elif dict_class == "LaplacianTopK":
         # Enhanced LaplacianTopK with configuration classes  
         try:
-            from .trainers.laplace_topk import LaplacianTopK, LaplacianTopKConfig 
+            from .trainers.laplace_topk import LaplacianTopK, LaplacianTopKConfig
             
             trainer_config = config["trainer"]
             activation_dim = trainer_config.get("activation_dim")

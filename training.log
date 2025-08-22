@@ -1,0 +1,157 @@
+2025-05-21 21:21:03,053 - INFO - Starting VSAEBatchTopK training experiment
+2025-05-21 21:21:03,053 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, k_ratio=0.05, total_steps=10, lr=0.0005, kl_coeff=500.0, auxk_alpha=1.0, warmup_steps=2, sparsity_warmup_steps=5, decay_start_step=8, threshold_beta=0.1, threshold_start_step=2, var_flag=0, constrain_decoder=False, n_ctxs=1000, ctx_len=128, refresh_batch_size=16, out_batch_size=256, checkpoint_steps=(5, 10), log_steps=2, save_dir='./experiments', use_wandb=True, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', seed=42)
+2025-05-21 21:21:03,054 - INFO - Loading model: gelu-1l
+2025-05-21 21:21:04,079 - INFO - Model loaded. d_mlp: 2048
+2025-05-21 21:21:04,079 - INFO - Setting up data generator and activation buffer
+2025-05-21 21:21:07,380 - INFO - Saved experiment config to experiments\VSAEBatchTopK_gelu-1l_d8192_k0.05_lr0.0005_kl500.0_aux1.0\experiment_config.json
+2025-05-21 21:21:07,380 - INFO - Model config: VSAEBatchTopKConfig(activation_dim=2048, dict_size=8192, k=409, var_flag=0, constrain_decoder=False, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-21 21:21:07,380 - INFO - Training config: TrainingConfig(steps=10, lr=0.0005, kl_coeff=500.0, auxk_alpha=1.0, warmup_steps=2, sparsity_warmup_steps=5, decay_start=8, threshold_beta=0.1, threshold_start_step=2, dead_feature_threshold=10000000, gradient_clip_norm=1.0)
+2025-05-21 21:21:07,381 - INFO - Dictionary size: 8192
+2025-05-21 21:21:07,381 - INFO - K (active features): 409
+2025-05-21 21:21:07,381 - INFO - No existing checkpoint found at experiments\VSAEBatchTopK_gelu-1l_d8192_k0.05_lr0.0005_kl500.0_aux1.0\trainer_0\checkpoints
+2025-05-21 21:21:07,381 - INFO - Starting training from scratch
+2025-05-21 21:21:07,381 - INFO - Starting training...
+2025-05-21 21:21:26,509 - INFO - Evaluating trained model...
+2025-05-21 21:21:26,519 - ERROR - Evaluation failed: VSAEBatchTopK.from_pretrained() got an unexpected keyword argument 'k'
+2025-05-21 21:21:26,520 - INFO - Training completed in 23.46 seconds
+2025-05-21 21:25:50,006 - INFO - Starting VSAEBatchTopK training experiment
+2025-05-21 21:25:50,007 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, k_ratio=0.05, total_steps=10, lr=0.0005, kl_coeff=500.0, auxk_alpha=1.0, warmup_steps=2, sparsity_warmup_steps=5, decay_start_step=8, threshold_beta=0.1, threshold_start_step=2, var_flag=0, constrain_decoder=False, n_ctxs=1000, ctx_len=128, refresh_batch_size=16, out_batch_size=256, checkpoint_steps=(5, 10), log_steps=2, save_dir='./experiments', use_wandb=True, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', seed=42)
+2025-05-21 21:25:50,007 - INFO - Loading model: gelu-1l
+2025-05-21 21:25:50,778 - INFO - Model loaded. d_mlp: 2048
+2025-05-21 21:25:50,778 - INFO - Setting up data generator and activation buffer
+2025-05-21 21:25:52,126 - INFO - Saved experiment config to experiments\VSAEBatchTopK_gelu-1l_d8192_k0.05_lr0.0005_kl500.0_aux1.0\experiment_config.json
+2025-05-21 21:25:52,126 - INFO - Model config: VSAEBatchTopKConfig(activation_dim=2048, dict_size=8192, k=409, var_flag=0, constrain_decoder=False, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-21 21:25:52,126 - INFO - Training config: TrainingConfig(steps=10, lr=0.0005, kl_coeff=500.0, auxk_alpha=1.0, warmup_steps=2, sparsity_warmup_steps=5, decay_start=8, threshold_beta=0.1, threshold_start_step=2, dead_feature_threshold=10000000, gradient_clip_norm=1.0)
+2025-05-21 21:25:52,127 - INFO - Dictionary size: 8192
+2025-05-21 21:25:52,127 - INFO - K (active features): 409
+2025-05-21 21:25:52,127 - INFO - Loading existing SAE from experiments\VSAEBatchTopK_gelu-1l_d8192_k0.05_lr0.0005_kl500.0_aux1.0\trainer_0\checkpoints
+2025-05-21 21:25:52,127 - INFO - Continuing training from checkpoint
+2025-05-21 21:25:52,128 - INFO - Starting training...
+2025-05-21 21:26:10,829 - INFO - Evaluating trained model...
+2025-05-21 21:26:36,577 - INFO - Evaluation Results:
+2025-05-21 21:26:36,577 - INFO -   l2_loss: 13.1717
+2025-05-21 21:26:36,578 - INFO -   l1_loss: 4.9244
+2025-05-21 21:26:36,578 - INFO -   l0: 340.3313
+2025-05-21 21:26:36,578 - INFO -   frac_variance_explained: -0.0007
+2025-05-21 21:26:36,578 - INFO -   cossim: 0.4394
+2025-05-21 21:26:36,578 - INFO -   l2_ratio: 0.4641
+2025-05-21 21:26:36,578 - INFO -   relative_reconstruction_bias: 1.0309
+2025-05-21 21:26:36,578 - INFO -   loss_original: 3.8539
+2025-05-21 21:26:36,578 - INFO -   loss_reconstructed: 8.1490
+2025-05-21 21:26:36,578 - INFO -   loss_zero: 9.1784
+2025-05-21 21:26:36,578 - INFO -   frac_recovered: 0.1939
+2025-05-21 21:26:36,578 - INFO -   frac_alive: 1.0000
+2025-05-21 21:26:36,579 - INFO - Training completed in 46.57 seconds
+2025-05-21 21:32:35,199 - INFO - Starting VSAEJumpReLU training experiment
+2025-05-21 21:32:35,199 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, total_steps=100, lr=0.0005, kl_coeff=500.0, l0_coeff=1.0, target_l0=20.0, warmup_steps=20, sparsity_warmup_steps=50, decay_start_step=80, var_flag=1, bandwidth=0.001, use_april_update_mode=True, n_ctxs=1000, ctx_len=128, refresh_batch_size=16, out_batch_size=256, checkpoint_steps=(50, 100), log_steps=20, save_dir='./experiments', use_wandb=True, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', seed=42)
+2025-05-21 21:32:35,199 - INFO - Loading model: gelu-1l
+2025-05-21 21:32:35,942 - INFO - Model loaded. d_mlp: 2048
+2025-05-21 21:32:35,943 - INFO - Setting up data generator and activation buffer
+2025-05-21 21:32:39,564 - INFO - Saved experiment config to experiments\VSAEJumpReLU_gelu-1l_d8192_lr0.0005_kl500.0_l0c1.0_tl0_20.0_bw0.001\experiment_config.json
+2025-05-21 21:32:39,564 - INFO - Model config: VSAEJumpReLUConfig(activation_dim=2048, dict_size=8192, var_flag=1, bandwidth=0.001, use_april_update_mode=True, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-21 21:32:39,564 - INFO - Training config: TrainingConfig(steps=100, lr=0.0005, kl_coeff=500.0, l0_coeff=1.0, target_l0=20.0, warmup_steps=20, sparsity_warmup_steps=50, decay_start=80, gradient_clip_norm=1.0)
+2025-05-21 21:32:39,564 - INFO - Dictionary size: 8192
+2025-05-21 21:32:39,565 - INFO - Starting training...
+2025-05-21 21:32:59,173 - INFO - Evaluating trained model...
+2025-05-21 21:33:25,293 - INFO - Evaluation Results:
+2025-05-21 21:33:25,293 - INFO -   l2_loss: 14.6855
+2025-05-21 21:33:25,293 - INFO -   l1_loss: 6535.4179
+2025-05-21 21:33:25,293 - INFO -   l0: 8191.9973
+2025-05-21 21:33:25,294 - INFO -   frac_variance_explained: -0.2290
+2025-05-21 21:33:25,294 - INFO -   cossim: 0.2918
+2025-05-21 21:33:25,294 - INFO -   l2_ratio: 0.5937
+2025-05-21 21:33:25,294 - INFO -   relative_reconstruction_bias: 1.9856
+2025-05-21 21:33:25,294 - INFO -   loss_original: 3.8539
+2025-05-21 21:33:25,294 - INFO -   loss_reconstructed: 8.8365
+2025-05-21 21:33:25,294 - INFO -   loss_zero: 9.1784
+2025-05-21 21:33:25,294 - INFO -   frac_recovered: 0.0647
+2025-05-21 21:33:25,294 - INFO -   frac_alive: 1.0000
+2025-05-21 21:33:25,295 - INFO - Training completed in 50.10 seconds
+2025-05-22 19:14:40,960 - INFO - Starting P-Annealing VSAE training experiment
+2025-05-22 19:14:40,960 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, total_steps=10000, lr=0.0005, sparsity_penalty=500.0, warmup_steps=200, sparsity_warmup_steps=500, decay_start_step=8000, p_start=1.0, p_end=0.5, anneal_start=1000, anneal_end=8000, n_sparsity_updates=10, sparsity_function='Lp', sparsity_queue_length=10, var_flag=0, use_april_update_mode=True, n_ctxs=3000, ctx_len=128, refresh_batch_size=32, out_batch_size=1024, checkpoint_steps=(5000, 10000), log_steps=100, save_dir='./experiments', use_wandb=True, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', seed=42)
+2025-05-22 19:14:40,960 - INFO - Loading model: gelu-1l
+2025-05-22 19:14:42,351 - INFO - Model loaded. d_mlp: 2048
+2025-05-22 19:14:42,351 - INFO - Setting up data generator and activation buffer
+2025-05-22 19:14:48,541 - INFO - Saved experiment config to experiments\VSAEPAnneal_gelu-1l_d8192_lr0.0005_sp500.0_p1.0-0.5\experiment_config.json
+2025-05-22 19:14:48,542 - INFO - Model config: PAnnealConfig(activation_dim=2048, dict_size=8192, var_flag=0, use_april_update_mode=True, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-22 19:14:48,542 - INFO - Training config: PAnnealTrainingConfig(steps=10000, lr=0.0005, sparsity_penalty=500.0, warmup_steps=200, sparsity_warmup_steps=500, decay_start=8000, gradient_clip_norm=1.0, sparsity_function='Lp', anneal_start=1000, anneal_end=8000, p_start=1.0, p_end=0.5, n_sparsity_updates=10, sparsity_queue_length=10)
+2025-05-22 19:14:48,542 - INFO - Dictionary size: 8192
+2025-05-22 19:14:48,542 - INFO - P-Annealing: 1.0 -> 0.5
+2025-05-22 19:14:48,542 - INFO - Starting training from scratch
+2025-05-22 19:14:48,542 - INFO - Starting training...
+2025-05-22 19:16:45,446 - INFO - Starting VSAEJumpReLU training experiment
+2025-05-22 19:16:45,447 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, total_steps=100, lr=0.0005, kl_coeff=500.0, l0_coeff=1.0, target_l0=20.0, warmup_steps=20, sparsity_warmup_steps=50, decay_start_step=80, var_flag=1, bandwidth=0.001, use_april_update_mode=True, n_ctxs=1000, ctx_len=128, refresh_batch_size=16, out_batch_size=256, checkpoint_steps=(50, 100), log_steps=20, save_dir='./experiments', use_wandb=True, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', seed=42)
+2025-05-22 19:16:45,447 - INFO - Loading model: gelu-1l
+2025-05-22 19:16:46,582 - INFO - Model loaded. d_mlp: 2048
+2025-05-22 19:16:46,582 - INFO - Setting up data generator and activation buffer
+2025-05-22 19:16:49,432 - INFO - Saved experiment config to experiments\VSAEJumpReLU_gelu-1l_d8192_lr0.0005_kl500.0_l0c1.0_tl0_20.0_bw0.001\experiment_config.json
+2025-05-22 19:16:49,433 - INFO - Model config: VSAEJumpReLUConfig(activation_dim=2048, dict_size=8192, var_flag=1, bandwidth=0.001, use_april_update_mode=True, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-22 19:16:49,433 - INFO - Training config: TrainingConfig(steps=100, lr=0.0005, kl_coeff=500.0, l0_coeff=1.0, target_l0=20.0, warmup_steps=20, sparsity_warmup_steps=50, decay_start=80, gradient_clip_norm=1.0)
+2025-05-22 19:16:49,433 - INFO - Dictionary size: 8192
+2025-05-22 19:16:49,433 - INFO - Starting training...
+2025-05-22 19:17:08,793 - INFO - Evaluating trained model...
+2025-05-22 19:17:37,182 - INFO - Evaluation Results:
+2025-05-22 19:17:37,182 - INFO -   l2_loss: 14.6855
+2025-05-22 19:17:37,182 - INFO -   l1_loss: 6535.4179
+2025-05-22 19:17:37,182 - INFO -   l0: 8191.9973
+2025-05-22 19:17:37,182 - INFO -   frac_variance_explained: -0.2290
+2025-05-22 19:17:37,182 - INFO -   cossim: 0.2918
+2025-05-22 19:17:37,182 - INFO -   l2_ratio: 0.5937
+2025-05-22 19:17:37,182 - INFO -   relative_reconstruction_bias: 1.9856
+2025-05-22 19:17:37,183 - INFO -   loss_original: 3.8539
+2025-05-22 19:17:37,183 - INFO -   loss_reconstructed: 8.8365
+2025-05-22 19:17:37,183 - INFO -   loss_zero: 9.1784
+2025-05-22 19:17:37,183 - INFO -   frac_recovered: 0.0647
+2025-05-22 19:17:37,183 - INFO -   frac_alive: 1.0000
+2025-05-22 19:17:37,184 - INFO - Training completed in 51.74 seconds
+2025-05-22 19:27:06,966 - INFO - Starting VSAEGatedAnneal training experiment
+2025-05-22 19:27:06,966 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, total_steps=100, lr=0.0005, kl_coeff=500.0, warmup_steps=10, sparsity_warmup_steps=20, decay_start_step=80, resample_steps=None, anneal_start=20, anneal_end=70, p_start=1.0, p_end=0.1, n_sparsity_updates=5, sparsity_function='Lp^p', sparsity_queue_length=10, var_flag=0, n_ctxs=1000, ctx_len=128, refresh_batch_size=16, out_batch_size=256, checkpoint_steps=(50, 100), log_steps=10, save_dir='./experiments', use_wandb=True, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', normalize_activations=True, gradient_clip_norm=1.0, seed=42)
+2025-05-22 19:27:06,966 - INFO - Loading model: gelu-1l
+2025-05-22 19:27:08,317 - INFO - Model loaded. d_mlp: 2048
+2025-05-22 19:27:08,317 - INFO - Setting up data generator and activation buffer
+2025-05-22 19:27:13,226 - INFO - Saved experiment config to experiments\VSAEGatedAnneal_gelu-1l_d8192_lr0.0005_kl500.0_p1.0-0.1\experiment_config.json
+2025-05-22 19:27:13,226 - INFO - Model config: VSAEGatedConfig(activation_dim=2048, dict_size=8192, var_flag=0, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-22 19:27:13,226 - INFO - Training config: TrainingConfig(steps=100, lr=0.0005, kl_coeff=500.0, warmup_steps=10, sparsity_warmup_steps=20, decay_start=80, resample_steps=None, gradient_clip_norm=1.0)
+2025-05-22 19:27:13,226 - INFO - Annealing config: AnnealingConfig(anneal_start=20, anneal_end=70, p_start=1.0, p_end=0.1, n_sparsity_updates=5, sparsity_function='Lp^p', sparsity_queue_length=10)
+2025-05-22 19:27:13,226 - INFO - Dictionary size: 8192
+2025-05-22 19:27:13,226 - INFO - Starting training...
+2025-05-22 19:27:15,724 - ERROR - Training failed with error: index 5 is out of bounds for dimension 0 with size 5
+2025-05-22 19:29:29,206 - INFO - Starting VSAEGated training experiment
+2025-05-22 19:29:29,206 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, total_steps=10, lr=0.0005, kl_coeff=500.0, l1_penalty=0.1, aux_weight=0.1, warmup_steps=2, sparsity_warmup_steps=5, decay_start_step=8, var_flag=1, use_constrained_optimizer=True, use_april_update_mode=True, n_ctxs=1000, ctx_len=128, refresh_batch_size=16, out_batch_size=256, checkpoint_steps=(5, 10), log_steps=2, save_dir='./experiments', use_wandb=False, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', seed=42)
+2025-05-22 19:29:29,206 - INFO - Loading model: gelu-1l
+2025-05-22 19:29:29,950 - INFO - Model loaded. d_mlp: 2048
+2025-05-22 19:29:29,950 - INFO - Setting up data generator and activation buffer
+2025-05-22 19:29:31,330 - INFO - Saved experiment config to experiments\VSAEGated_gelu-1l_d8192_lr0.0005_kl500.0_l10.1_aux0.1_var1\experiment_config.json
+2025-05-22 19:29:31,330 - INFO - Model config: GatedVSAEConfig(activation_dim=2048, dict_size=8192, var_flag=1, use_april_update_mode=True, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-22 19:29:31,330 - INFO - Training config: GatedTrainingConfig(steps=10, lr=0.0005, kl_coeff=500.0, l1_penalty=0.1, aux_weight=0.1, warmup_steps=2, sparsity_warmup_steps=5, decay_start=8, use_constrained_optimizer=True, gradient_clip_norm=1.0)
+2025-05-22 19:29:31,330 - INFO - Dictionary size: 8192
+2025-05-22 19:29:31,330 - INFO - Starting training...
+2025-05-22 19:29:33,381 - INFO - Evaluating trained model...
+2025-05-22 19:29:33,389 - ERROR - Evaluation failed: VSAEGated.from_pretrained() got an unexpected keyword argument 'var_flag'
+2025-05-22 19:29:33,389 - INFO - Training completed in 4.18 seconds
+2025-05-22 19:30:20,181 - INFO - Starting VSAEGatedAnneal training experiment
+2025-05-22 19:30:20,182 - INFO - Configuration: ExperimentConfig(model_name='gelu-1l', layer=0, hook_name='blocks.0.mlp.hook_post', dict_size_multiple=4.0, total_steps=100, lr=0.0005, kl_coeff=500.0, warmup_steps=10, sparsity_warmup_steps=20, decay_start_step=80, resample_steps=None, anneal_start=20, anneal_end=70, p_start=1.0, p_end=0.1, n_sparsity_updates=5, sparsity_function='Lp^p', sparsity_queue_length=10, var_flag=0, n_ctxs=1000, ctx_len=128, refresh_batch_size=16, out_batch_size=256, checkpoint_steps=(50, 100), log_steps=10, save_dir='./experiments', use_wandb=True, wandb_entity='zachdata', wandb_project='vsae-experiments', device='cuda', dtype='bfloat16', autocast_dtype='bfloat16', normalize_activations=True, gradient_clip_norm=1.0, seed=42)
+2025-05-22 19:30:20,182 - INFO - Loading model: gelu-1l
+2025-05-22 19:30:20,859 - INFO - Model loaded. d_mlp: 2048
+2025-05-22 19:30:20,860 - INFO - Setting up data generator and activation buffer
+2025-05-22 19:30:22,435 - INFO - Saved experiment config to experiments\VSAEGatedAnneal_gelu-1l_d8192_lr0.0005_kl500.0_p1.0-0.1\experiment_config.json
+2025-05-22 19:30:22,436 - INFO - Model config: VSAEGatedConfig(activation_dim=2048, dict_size=8192, var_flag=0, dtype=torch.bfloat16, device=device(type='cuda'))
+2025-05-22 19:30:22,436 - INFO - Training config: TrainingConfig(steps=100, lr=0.0005, kl_coeff=500.0, warmup_steps=10, sparsity_warmup_steps=20, decay_start=80, resample_steps=None, gradient_clip_norm=1.0)
+2025-05-22 19:30:22,436 - INFO - Annealing config: AnnealingConfig(anneal_start=20, anneal_end=70, p_start=1.0, p_end=0.1, n_sparsity_updates=5, sparsity_function='Lp^p', sparsity_queue_length=10)
+2025-05-22 19:30:22,436 - INFO - Dictionary size: 8192
+2025-05-22 19:30:22,436 - INFO - Starting training...
+2025-05-22 19:30:39,253 - INFO - Evaluating trained model...
+2025-05-22 19:31:06,397 - INFO - Evaluation Results:
+2025-05-22 19:31:06,398 - INFO -   l2_loss: 14.7816
+2025-05-22 19:31:06,398 - INFO -   l1_loss: 0.0544
+2025-05-22 19:31:06,398 - INFO -   l0: 0.2598
+2025-05-22 19:31:06,398 - INFO -   frac_variance_explained: 0.0005
+2025-05-22 19:31:06,398 - INFO -   cossim: 0.1156
+2025-05-22 19:31:06,398 - INFO -   l2_ratio: 0.2902
+2025-05-22 19:31:06,398 - INFO -   relative_reconstruction_bias: 2.4258
+2025-05-22 19:31:06,398 - INFO -   loss_original: 3.8539
+2025-05-22 19:31:06,398 - INFO -   loss_reconstructed: 10.7693
+2025-05-22 19:31:06,399 - INFO -   loss_zero: 9.1784
+2025-05-22 19:31:06,399 - INFO -   frac_recovered: -0.2985
+2025-05-22 19:31:06,399 - INFO -   frac_alive: 0.0781
+2025-05-22 19:31:06,400 - INFO - Training completed in 46.22 seconds
