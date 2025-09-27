@@ -1,6 +1,7 @@
 """
 Real activations: analyze what actually fires SAE features in real text.
-Uses the same c4-code dataset and activation pipeline as the training script.
+Uses TinyStories dataset with proper tokenization to avoid vocabulary mismatches.
+Enhanced with coherent context extraction.
 """
 import torch
 import numpy as np
@@ -8,24 +9,29 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
+from tqdm import tqdm
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import data utilities from parent directory (same as training script)
-from dictionary_learning.utils import hf_dataset_to_generator
-from dictionary_learning.buffer import TransformerLensActivationBuffer
+try:
+    from dictionary_learning.utils import hf_dataset_to_generator
+except ImportError:
+    # Fallback if structure is different
+    from utils import hf_dataset_to_generator
 
 
 @dataclass
 class ActivationExample:
-    """Single example of feature activation"""
+    """Single example of feature activation with enhanced context"""
     text: str
     tokens: List[str]
     token_ids: List[int]
-    activations: List[float]  # Per-token activations
+    activations: List[float]  # Per-token activations in context window
     max_activation: float
-    peak_position: int
+    peak_position: int        # Position of peak within context window
+    full_context: str        # Human-readable context text
 
 
 @dataclass
@@ -41,43 +47,12 @@ class FeatureStats:
     top_suppressed_tokens: List[Tuple[str, float]]
 
 
-def create_activation_buffer(model, device: str, buffer_size: int = 20000, 
-                           ctx_len: int = 128) -> TransformerLensActivationBuffer:
-    """Create activation buffer using same setup as training script"""
-    hook_name = "blocks.0.hook_resid_post"  # Same hook as training script
-    
-    print(f"Creating activation buffer with hook: {hook_name}")
-    print(f"Buffer config: n_ctxs={buffer_size}, ctx_len={ctx_len}")
-    
-    # Set up data generator exactly like training script
-    data_gen = hf_dataset_to_generator(
-        "NeelNanda/c4-code-tokenized-2b",  # Same dataset as training
-        split="train", 
-        return_tokens=True
-    )
-    
-    # Create activation buffer exactly like training script
-    buffer = TransformerLensActivationBuffer(
-        data=data_gen,
-        model=model,
-        hook_name=hook_name,
-        d_submodule=model.cfg.d_model,  # Use d_model (512) for residual stream
-        n_ctxs=buffer_size,
-        ctx_len=ctx_len,
-        refresh_batch_size=min(16, buffer_size // 10),  # Adaptive batch size
-        out_batch_size=min(256, buffer_size // 4),      # Adaptive output batch size
-        device=device,
-    )
-    
-    print(f"✅ Activation buffer created successfully")
-    return buffer
-
-
 def analyze_real_activations(sae_model, transformer_model, feature_indices: List[int], 
-                           max_examples: int = 20, batch_size: int = 8, 
-                           buffer_size: int = 20000, ctx_len: int = 128) -> Dict[int, FeatureStats]:
+                           max_examples: int = 11, batch_size: int = 8, 
+                           buffer_size: int = 2000, ctx_len: int = 128,
+                           context_window: int = 25) -> Dict[int, FeatureStats]:
     """
-    Analyze real activations using the same c4-code dataset as training.
+    Analyze real activations using TinyStories dataset with proper tokenization.
     
     Args:
         sae_model: Trained SAE model
@@ -85,8 +60,9 @@ def analyze_real_activations(sae_model, transformer_model, feature_indices: List
         feature_indices: Which features to analyze
         max_examples: Top examples per feature
         batch_size: Processing batch size
-        buffer_size: Size of activation buffer (number of contexts)
+        buffer_size: Number of sequences to process
         ctx_len: Context length for each sample
+        context_window: Size of context around firing tokens (default 25)
         
     Returns:
         Dict mapping feature_idx -> FeatureStats
@@ -97,220 +73,295 @@ def analyze_real_activations(sae_model, transformer_model, feature_indices: List
     sae_interface = UnifiedSAEInterface(sae_model)
     sae_interface.sae.to(device)
     
-    print(f"Analyzing {len(feature_indices)} features using c4-code dataset...")
-    print(f"Using same activation hook as training: blocks.0.hook_resid_post")
+    print(f"Analyzing {len(feature_indices)} features using TinyStories dataset...")
+    print(f"Using activation hook: blocks.3.hook_resid_post")
+    print(f"Context window: {context_window} tokens around firing positions")
     
-    # Create activation buffer using same setup as training script
-    buffer = create_activation_buffer(transformer_model, device, buffer_size, ctx_len)
-    
-    # Process activations through SAE
-    all_activations, all_tokens, all_token_ids, all_texts = _process_activations_from_buffer(
-        buffer, transformer_model, sae_interface, batch_size, device
+    # Process sequences and collect real activations
+    all_sequences = _process_real_sequences(
+        transformer_model, sae_interface, batch_size, device, buffer_size, ctx_len
     )
+    
+    if not all_sequences:
+        print("Error: No sequences were processed successfully!")
+        return {}
+    
+    print(f"Successfully processed {len(all_sequences)} sequences")
     
     # Analyze each feature
     results = {}
     for feature_idx in feature_indices:
-        print(f"Analyzing feature {feature_idx}...")
+        print(f"Analyzing feature {feature_idx} with {context_window}-token context...")
         results[feature_idx] = _analyze_single_feature(
-            feature_idx, all_activations, all_tokens, all_token_ids, all_texts,
-            max_examples, sae_interface, transformer_model
+            feature_idx, all_sequences, max_examples, sae_interface, 
+            transformer_model, context_window
         )
     
     return results
 
 
-def _process_activations_from_buffer(buffer: TransformerLensActivationBuffer, 
-                                   model, sae_interface, batch_size: int, 
-                                   device) -> Tuple:
-    """Process activations from buffer through SAE"""
-    all_activations = []
-    all_tokens = []
-    all_token_ids = []
-    all_texts = []
+def _process_real_sequences(model, sae_interface, batch_size: int, device, 
+                           n_sequences: int, ctx_len: int) -> List[Dict]:
+    """Process real sequences from TinyStories dataset through transformer and SAE"""
     
-    print("Processing activations from c4-code dataset...")
-    
-    # Process fixed number of batches since buffer doesn't have len()
-    num_batches = 50  # Process more batches with larger buffer for better coverage
-    
-    for batch_idx in range(num_batches):
-        try:
-            # Get activation batch from buffer 
-            activations = next(iter(buffer))  # Shape: [batch_size, seq_len, d_model]
-            
-            # Debug: Check buffer output shape
-            print(f"  Buffer output shape: {activations.shape}")
-            
-            if activations.shape[0] > batch_size:
-                activations = activations[:batch_size]
-            
-            batch_size_actual = activations.shape[0]
-            
-            # Handle case where buffer returns [batch_size, d_model] instead of [batch_size, seq_len, d_model]
-            if len(activations.shape) == 2:
-                # Add sequence dimension
-                activations = activations.unsqueeze(1)  # [batch_size, 1, d_model]
-                seq_len = 1
-            else:
-                seq_len = activations.shape[1]
-            
-            print(f"Processing batch {batch_idx + 1}/{num_batches}, final shape: {activations.shape}")
-            
-            # Run through SAE
-            with torch.no_grad():
-                sae_output = sae_interface.encode(activations)
-            
-            # Debug: Check actual shapes
-            print(f"  SAE output shape: {sae_output.sparse_features.shape}")
-            
-            # Since we have activations but not the original tokens, we need to create
-            # representative examples. For each sequence, we'll create mock tokens.
-            for i in range(batch_size_actual):
-                # Get individual sequence activations [seq_len, dict_size]
-                seq_activations = sae_output.sparse_features[i].cpu()  
-                actual_seq_len = seq_activations.shape[0]
-                
-                # Create mock programming tokens based on actual sequence length
-                mock_tokens = _generate_mock_programming_tokens(actual_seq_len, batch_idx * batch_size + i)
-                mock_token_ids = list(range(100 + i*actual_seq_len, 100 + (i+1)*actual_seq_len))
-                mock_text = " ".join(mock_tokens)
-                
-                all_activations.append(seq_activations)
-                all_tokens.append(mock_tokens)
-                all_token_ids.append(mock_token_ids)
-                all_texts.append(mock_text)
-                
-        except StopIteration:
-            print("Buffer exhausted")
-            break
-        except Exception as e:
-            print(f"Error processing batch {batch_idx}: {e}")
-            continue
-    
-    print(f"Processed {len(all_activations)} sequences from c4-code dataset")
-    return all_activations, all_tokens, all_token_ids, all_texts
+    print("Loading TinyStories dataset...")
+    try:
+        data_gen = hf_dataset_to_generator(
+            "roneneldan/TinyStories",
+            split="train",
+            return_tokens=False  # We want raw text, not tokens
+        )
+    except Exception as e:
+        print(f"Failed to load TinyStories dataset: {e}")
+        return []
 
-
-def _generate_mock_programming_tokens(seq_len: int, seed: int) -> List[str]:
-    """Generate mock programming tokens to represent c4-code content"""
-    import random
-    random.seed(seed)
+    all_sequences = []
+    sequences_processed = 0
+    batch_texts = []
     
-    # Programming vocabulary that might appear in c4-code
-    programming_tokens = [
-        "def", "class", "import", "from", "if", "else", "elif", "for", "while", "try", "except",
-        "return", "yield", "lambda", "with", "as", "in", "not", "and", "or", "is", "None",
-        "True", "False", "self", "init", "__", "main", "__", "print", "len", "range", "str",
-        "int", "float", "list", "dict", "set", "tuple", "enumerate", "zip", "map", "filter",
-        "open", "read", "write", "close", "split", "join", "strip", "replace", "format",
-        "append", "extend", "insert", "remove", "pop", "sort", "sorted", "reverse",
-        "torch", "nn", "Module", "forward", "cuda", "device", "tensor", "numpy", "array",
-        "pandas", "dataframe", "matplotlib", "plt", "scipy", "sklearn", "requests", "json",
-        "data", "input", "output", "result", "value", "index", "item", "element", "key",
-        "function", "method", "variable", "parameter", "argument", "attribute", "property",
-        "(", ")", "[", "]", "{", "}", ":", ",", ".", "=", "+", "-", "*", "/", "%", "**",
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "100", "1000",
-        "x", "y", "z", "i", "j", "k", "n", "m", "a", "b", "c", "idx", "val", "tmp"
-    ]
-    
-    # Generate tokens for this sequence
-    tokens = []
-    for i in range(seq_len):
-        if i == 0:
-            # Start with common programming beginnings
-            token = random.choice(["def", "class", "import", "from", "if", "for", "with", "try"])
-        elif i < 5:
-            # Early tokens often follow patterns
-            if tokens[-1] == "def":
-                token = f"func_{seed % 100}"
-            elif tokens[-1] == "class":
-                token = f"Class_{seed % 100}"
-            elif tokens[-1] == "import":
-                token = random.choice(["torch", "numpy", "pandas", "json", "os", "sys"])
+    try:
+        for data_item in data_gen:
+            if sequences_processed >= n_sequences:
+                break
+                
+            # Extract TEXT from dataset - handle both dict and string formats
+            if isinstance(data_item, dict):
+                text = data_item.get('text', '')
+            elif isinstance(data_item, str):
+                text = data_item  # TinyStories returns raw strings
             else:
-                token = random.choice(programming_tokens)
-        else:
-            token = random.choice(programming_tokens)
+                continue
+            
+            # Skip empty or very short texts
+            if not text or len(text.strip()) < 50:
+                continue
+                
+            batch_texts.append(text.strip())
+            
+            # Process batch when full
+            if len(batch_texts) >= batch_size:
+                _process_text_batch(
+                    batch_texts, model, sae_interface, 
+                    device, all_sequences, ctx_len
+                )
+                sequences_processed += len(batch_texts)
+                if sequences_processed % 100 == 0:
+                    print(f"Processed {sequences_processed}/{n_sequences} sequences...")
+                
+                batch_texts = []
         
-        tokens.append(token)
+        # Process remaining batch
+        if batch_texts:
+            _process_text_batch(
+                batch_texts, model, sae_interface, 
+                device, all_sequences, ctx_len
+            )
+            sequences_processed += len(batch_texts)
     
-    return tokens
+    except Exception as e:
+        print(f"Error during data processing: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print(f"Processed {len(all_sequences)} sequences from TinyStories dataset")
+    return all_sequences
 
 
-def _analyze_single_feature(feature_idx: int, all_activations, all_tokens, 
-                          all_token_ids, all_texts, max_examples: int,
-                          sae_interface, model) -> FeatureStats:
-    """Analyze a single feature across all sequences"""
+def _process_text_batch(batch_texts: List[str], model, sae_interface, 
+                       device, all_sequences: List[Dict], ctx_len: int):
+    """Process a batch of raw texts by tokenizing with the model's tokenizer"""
+    
+    # Tokenize texts with the model's own tokenizer
+    tokenized_batch = []
+    valid_texts = []
+    
+    for text in batch_texts:
+        try:
+            # Tokenize with model's tokenizer (this creates the token IDs)
+            tokens = model.tokenizer.encode(text, add_special_tokens=False)
+            
+            # Skip very short sequences
+            if len(tokens) < 10:
+                continue
+                
+            # Truncate to context length
+            if len(tokens) > ctx_len:
+                tokens = tokens[:ctx_len]
+                # Also truncate text to roughly match
+                words = text.split()
+                text = ' '.join(words[:min(len(words), ctx_len)])
+                
+            tokenized_batch.append(tokens)
+            valid_texts.append(text)
+            
+        except Exception as e:
+            continue  # Skip problematic texts
+    
+    if not tokenized_batch:
+        return
+        
+    # Pad sequences to same length for batch processing
+    max_len = max(len(tokens) for tokens in tokenized_batch)
+    max_len = min(max_len, ctx_len)  # Cap at context length
+    
+    padded_batch = []
+    for tokens in tokenized_batch:
+        if len(tokens) < max_len:
+            pad_id = model.tokenizer.pad_token_id or model.tokenizer.eos_token_id
+            tokens = tokens + [pad_id] * (max_len - len(tokens))
+        elif len(tokens) > max_len:
+            tokens = tokens[:max_len]
+        padded_batch.append(tokens)
+    
+    try:
+        # Convert to tensor
+        input_ids = torch.tensor(padded_batch, device=device)
+        
+        # Get transformer activations at hook point
+        with torch.no_grad():
+            _, cache = model.run_with_cache(input_ids, stop_at_layer=4)  # Stop after block 3
+            
+            # Get residual stream activations after block 3
+            hook_name = "blocks.3.hook_resid_post"
+            if hook_name in cache:
+                activations = cache[hook_name]
+            else:
+                # Fallback to other possible names
+                possible_hooks = ["blocks.0.hook_resid_post", "blocks.1.hook_resid_post", "blocks.2.hook_resid_post"]
+                activations = None
+                for hook in possible_hooks:
+                    if hook in cache:
+                        activations = cache[hook]
+                        print(f"Using fallback hook: {hook}")
+                        break
+                
+                if activations is None:
+                    return
+            
+            # Pass through SAE
+            sae_output = sae_interface.encode(activations)
+            
+    except Exception as e:
+        return
+    
+    # Process each sequence in the batch
+    for seq_idx in range(len(valid_texts)):
+        if seq_idx >= len(tokenized_batch):
+            break
+            
+        text = valid_texts[seq_idx]
+        original_tokens = tokenized_batch[seq_idx]  # Original length before padding
+        
+        # Get token strings by decoding with the SAME tokenizer that created the IDs
+        token_strings = []
+        for token_id in original_tokens:
+            try:
+                token_str = model.tokenizer.decode([token_id])
+                token_strings.append(token_str if token_str.strip() else "<unk>")
+            except:
+                token_strings.append("<unk>")
+        
+        # Get SAE activations for this sequence (remove padding dimension)
+        seq_len = len(original_tokens)
+        if seq_idx < sae_output.sparse_features.shape[0] and seq_len <= sae_output.sparse_features.shape[1]:
+            sequence_activations = sae_output.sparse_features[seq_idx, :seq_len].cpu().numpy()
+            
+            # Store sequence data
+            all_sequences.append({
+                'text': text,
+                'token_ids': original_tokens,
+                'token_strings': token_strings,  # Now decoded with correct tokenizer!
+                'sae_activations': sequence_activations,
+            })
+
+
+def _analyze_single_feature(feature_idx: int, all_sequences: List[Dict], 
+                          max_examples: int, sae_interface, model,
+                          context_window: int = 25) -> FeatureStats:
+    """Analyze a single feature across all sequences with enhanced context"""
     
     # Collect all activations for this feature
     activation_contexts = []
+    total_positions = 0
     
-    for seq_idx, activations in enumerate(all_activations):
-        # Handle both 1D and 2D activation tensors
-        if len(activations.shape) == 1:
-            # 1D case: [dict_size] - single token
-            if feature_idx < activations.shape[0] and activations[feature_idx] > 0:
-                activation_contexts.append({
-                    'seq_idx': seq_idx,
-                    'pos': 0,  # Single position
-                    'activation': activations[feature_idx].item(),
-                    'text': all_texts[seq_idx],
-                    'tokens': all_tokens[seq_idx],
-                    'token_ids': all_token_ids[seq_idx]
-                })
-        else:
-            # 2D case: [seq_len, dict_size] - multiple tokens
-            feature_acts = activations[:, feature_idx]
-            active_positions = (feature_acts > 0).nonzero(as_tuple=True)[0]
+    for seq_data in all_sequences:
+        sae_activations = seq_data['sae_activations']
+        
+        # Handle both 2D and 3D activation arrays
+        if len(sae_activations.shape) == 2:
+            # Shape: [seq_len, dict_size]
+            seq_len, dict_size = sae_activations.shape
+            
+            # Check if feature index is valid
+            if feature_idx >= dict_size:
+                continue
+                
+            # Get activations for this feature across the sequence
+            feature_acts = sae_activations[:, feature_idx]
+            
+            # Find positions where this feature fires (any positive activation)
+            active_positions = np.where(feature_acts > 0)[0]
             
             for pos in active_positions:
-                pos_idx = pos.item()
-                activation_val = feature_acts[pos_idx].item()
+                activation_val = feature_acts[pos]
+                
+                # ENHANCED: Get coherent context from original text
+                context_text, peak_in_context, context_tokens = _get_coherent_context(
+                    original_text=seq_data['text'],
+                    token_strings=seq_data['token_strings'],
+                    peak_token_pos=pos,
+                    context_window=context_window
+                )
+                
+                # Get corresponding token IDs for the context
+                half_window = context_window // 2
+                context_start = max(0, pos - half_window)
+                context_end = min(len(seq_data['token_ids']), pos + half_window + 1)
+                context_token_ids = seq_data['token_ids'][context_start:context_end]
+                
+                # Get activations for the context window
+                context_activations = feature_acts[context_start:context_end]
                 
                 activation_contexts.append({
-                    'seq_idx': seq_idx,
-                    'pos': pos_idx,
                     'activation': activation_val,
-                    'text': all_texts[seq_idx],
-                    'tokens': all_tokens[seq_idx],
-                    'token_ids': all_token_ids[seq_idx]
+                    'position': pos,
+                    'firing_pos_in_context': peak_in_context,
+                    'context_tokens': context_tokens,
+                    'context_token_ids': context_token_ids,
+                    'context_activations': context_activations,
+                    'full_context': context_text,
+                    'full_text': seq_data['text'][:1000],
                 })
+            
+            total_positions += seq_len
+        else:
+            # Handle unexpected shapes
+            continue
     
     # Sort by activation strength and take top examples
-    sorted_contexts = sorted(activation_contexts, key=lambda x: x['activation'], reverse=True)
-    top_contexts = sorted_contexts[:max_examples]
+    activation_contexts.sort(key=lambda x: x['activation'], reverse=True)
+    top_contexts = activation_contexts[:max_examples]
     
-    # Create ActivationExample objects
+    # Create ActivationExample objects with enhanced context
     examples = []
     for ctx in top_contexts:
-        activations_tensor = all_activations[ctx['seq_idx']]
-        
-        # Handle both 1D and 2D cases for sequence activations
-        if len(activations_tensor.shape) == 1:
-            # Single token case
-            seq_activations = [activations_tensor[feature_idx].item()]
-        else:
-            # Multi-token case
-            seq_activations = activations_tensor[:, feature_idx].tolist()
-        
         example = ActivationExample(
-            text=ctx['text'],
-            tokens=ctx['tokens'],
-            token_ids=ctx['token_ids'],
-            activations=seq_activations,
+            text=ctx['full_context'],  # Use coherent context
+            tokens=ctx['context_tokens'],  # Coherent tokens
+            token_ids=ctx['context_token_ids'],
+            activations=ctx['context_activations'].tolist(),
             max_activation=ctx['activation'],
-            peak_position=ctx['pos']
+            peak_position=ctx['firing_pos_in_context'],
+            full_context=ctx['full_context']  # Clean, readable text
         )
         examples.append(example)
     
     # Compute statistics
-    all_feature_activations = [ctx['activation'] for ctx in activation_contexts]
-    if all_feature_activations:
-        total_positions = sum(len(acts) for acts in all_activations)
-        sparsity = 1.0 - (len(all_feature_activations) / total_positions)
-        mean_activation = np.mean(all_feature_activations)
-        max_activation = max(all_feature_activations)
+    if activation_contexts:
+        all_activations = [ctx['activation'] for ctx in activation_contexts]
+        sparsity = 1.0 - (len(all_activations) / max(total_positions, 1))
+        mean_activation = np.mean(all_activations)
+        max_activation = max(all_activations)
     else:
         sparsity = 1.0
         mean_activation = 0.0
@@ -334,48 +385,74 @@ def _analyze_single_feature(feature_idx: int, all_activations, all_tokens,
     )
 
 
+def _get_coherent_context(original_text: str, token_strings: List[str], 
+                         peak_token_pos: int, context_window: int) -> Tuple[str, int, List[str]]:
+    """Extract coherent context around peak position"""
+    
+    # Define context window in tokens
+    half_window = context_window // 2
+    context_start = max(0, peak_token_pos - half_window)
+    context_end = min(len(token_strings), peak_token_pos + half_window + 1)
+    
+    # Get context tokens
+    context_tokens = token_strings[context_start:context_end]
+    
+    # Create coherent text by joining tokens
+    context_text = ''.join(context_tokens)
+    
+    # Clean up common tokenizer artifacts
+    context_text = context_text.replace('Ġ', ' ')  # GPT-2 style
+    context_text = context_text.replace('▁', ' ')  # SentencePiece style
+    context_text = context_text.strip()
+    
+    # Calculate peak position within context
+    peak_in_context = peak_token_pos - context_start
+    
+    return context_text, peak_in_context, context_tokens
+
+
 def _compute_logit_effects(feature_idx: int, sae_interface, model, 
                          top_k: int = 10) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
-    """Compute which tokens this feature promotes/suppresses"""
+    """Compute which tokens this feature promotes/suppresses in the output"""
     try:
+        # Get the decoder direction for this feature
         decoder_direction = sae_interface.decoder_weights[feature_idx]
         
-        # Project to residual stream if needed
+        # Ensure decoder direction matches d_model
         if decoder_direction.shape[0] != model.cfg.d_model:
-            if hasattr(model, 'W_out') and decoder_direction.shape[0] == 2048:
-                W_out = model.W_out[0]
-                residual_direction = decoder_direction @ W_out
+            if decoder_direction.shape[0] > model.cfg.d_model:
+                residual_direction = decoder_direction[:model.cfg.d_model]
             else:
-                residual_direction = decoder_direction
+                # Pad with zeros if needed
+                pad_size = model.cfg.d_model - decoder_direction.shape[0]
+                residual_direction = torch.cat([decoder_direction, torch.zeros(pad_size, device=decoder_direction.device)])
         else:
             residual_direction = decoder_direction
         
-        # Project to logit space
+        # Project to vocabulary logits using unembedding matrix
         if hasattr(model, 'W_U'):
             unembedding = model.W_U
+            logit_effects = residual_direction @ unembedding
         else:
             return [], []
         
-        logit_effects = residual_direction @ unembedding
-        
-        # Get top/bottom tokens
-        top_indices = torch.topk(logit_effects, top_k).indices
-        bottom_indices = torch.topk(logit_effects, top_k, largest=False).indices
-        
+        # Get top boosted tokens (highest logit effects)
+        top_values, top_indices = torch.topk(logit_effects, min(top_k, logit_effects.shape[0]))
         top_boosted = []
-        for idx in top_indices:
+        for val, idx in zip(top_values, top_indices):
             token = model.tokenizer.decode([idx.item()])
-            effect = logit_effects[idx].item()
+            effect = val.item()
             top_boosted.append((token, effect))
         
+        # Get top suppressed tokens (lowest logit effects)
+        bottom_values, bottom_indices = torch.topk(logit_effects, min(top_k, logit_effects.shape[0]), largest=False)
         top_suppressed = []
-        for idx in bottom_indices:
+        for val, idx in zip(bottom_values, bottom_indices):
             token = model.tokenizer.decode([idx.item()])
-            effect = logit_effects[idx].item()
+            effect = val.item()
             top_suppressed.append((token, effect))
         
         return top_boosted, top_suppressed
         
     except Exception as e:
-        print(f"Warning: Could not compute logit effects for feature {feature_idx}: {e}")
         return [], []

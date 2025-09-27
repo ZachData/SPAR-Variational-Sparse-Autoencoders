@@ -1,0 +1,167 @@
+{
+  "model_info": {
+    "model_name": "EleutherAI/pythia-70m-deduped",
+    "hook_name": "blocks.3.hook_resid_post",
+    "dict_size": 8192,
+    "activation_dim": 512,
+    "dictionary_type": "VSAETopK",
+    "kl_coeff": 1.0,
+    "k_value": 256
+  },
+  "processing_info": {
+    "samples_processed": 1000192,
+    "target_samples": 1000000,
+    "k_value": 256,
+    "seed": 42,
+    "ctx_len": 128
+  },
+  "overall_activation_stats": {
+    "count": 256049152,
+    "mean": 0.4485389310867004,
+    "std": 0.2779200553989576,
+    "min": 0.047765523195266724,
+    "max": 15.11346435546875,
+    "sum": 114848012.94372807
+  },
+  "histogram_config": {
+    "activation_bins": 200,
+    "activation_range": [
+      -2.5,
+      2.5
+    ],
+    "log_activation_bins": 100,
+    "log_activation_range": [
+      -6.0,
+      1.0
+    ],
+    "sample_stats_bins": 100,
+    "max_activation_range": [
+      0.0,
+      2.5
+    ],
+    "mean_magnitude_range": [
+      0.0,
+      2.5
+    ],
+    "activation_range_range": [
+      0.0,
+      5.0
+    ],
+    "pos_neg_ratio_range": [
+      0.0,
+      1.0
+    ],
+    "kth_activation_range": [
+      0.0,
+      2.5
+    ],
+    "cv_range": [
+      0.0,
+      3.0
+    ],
+    "margin_range": [
+      0.0,
+      2.5
+    ],
+    "quantile_range": [
+      0.0,
+      2.5
+    ],
+    "effective_features_range": [
+      0,
+      1024
+    ],
+    "usage_bins": 50,
+    "selection_freq_range": [
+      0.0,
+      1.0
+    ],
+    "feature_mean_range": [
+      -2.5,
+      2.5
+    ],
+    "feature_max_range": [
+      0.0,
+      2.5
+    ],
+    "feature_cv_range": [
+      0.0,
+      5.0
+    ],
+    "feature_dominance_range": [
+      1.0,
+      10.0
+    ],
+    "feature_polarity_range": [
+      0.0,
+      1.0
+    ],
+    "feature_index_bins": 100,
+    "activation_2d_bins": 50,
+    "activation_2d_range": [
+      -2.5,
+      2.5
+    ],
+    "position_bins": 50,
+    "feature_index_distribution_bins": 100,
+    "position_distribution_bins": 50
+  },
+  "feature_usage_summary": {
+    "total_features": 8192,
+    "features_used": 1474,
+    "features_never_selected": 6718,
+    "mean_selection_frequency": 0.03125,
+    "std_selection_frequency": 0.12003294209278265,
+    "most_used_features": [
+      6848,
+      7280,
+      7969,
+      2379,
+      10,
+      3686,
+      2308,
+      3265,
+      7770,
+      4063,
+      5042,
+      2063,
+      5745,
+      4185,
+      2254,
+      5002,
+      4362,
+      3305,
+      1242,
+      737
+    ],
+    "least_used_features": [
+      0,
+      5198,
+      5197,
+      5196,
+      5195,
+      5194,
+      5193,
+      5192,
+      5190,
+      5189,
+      5187,
+      5184,
+      5199,
+      5183,
+      5181,
+      5180,
+      5179,
+      5177,
+      5176,
+      5175
+    ]
+  },
+  "activation_distribution_stats": {
+    "total_activations_processed": 256049152,
+    "mean_activation": 0.4485389310867004,
+    "std_activation": 0.2779200553989576,
+    "min_activation": 0.047765523195266724,
+    "max_activation": 15.11346435546875
+  }
+}

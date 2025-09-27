@@ -30,7 +30,7 @@ def extract_metrics(results):
         
         if 'TopK' in release_id or 'topk' in release_id.lower():
             model_type = 'vSAE TopK' if is_vsae else 'TopK'
-            # Extract k value - try multiple patterns
+            # Extract k value - try multiple patterns for Pythia models
             k_value = 64  # default
             if '_k' in release_id:
                 k_match = release_id.split('_k')[1].split('_')[0]
@@ -146,19 +146,16 @@ def create_comparison_plots(df, save_path='saebench_plots'):
     plt.style.use('seaborn-v0_8')
     colors = ['#2E86AB', '#A23B72']  # Blue for TopK, Pink for vSAE TopK
     
-    # Key metrics to plot
+    # Key metrics to plot - UPDATED to include the 4 requested metrics
     metrics = [
-        ('kl_div_score', 'KL Divergence Score', 'Higher is better'),
         ('ce_loss_score', 'CE Loss Score', 'Higher is better'), 
         ('explained_variance', 'Explained Variance', 'Higher is better'),
         ('cossim', 'Cosine Similarity', 'Higher is better'),
-        ('l0', 'L0 Norm (Sparsity)', 'Context-dependent'),
         ('frac_alive', 'Fraction Alive Features', 'Higher is better')
     ]
     
-    # Create subplots
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    axes = axes.flatten()
+    # Create subplots - UPDATED to 1x4 layout for 4 metrics
+    fig, axes = plt.subplots(1, 4, figsize=(24, 6))
     
     for idx, (metric, title, note) in enumerate(metrics):
         ax = axes[idx]
@@ -181,7 +178,7 @@ def create_comparison_plots(df, save_path='saebench_plots'):
         ax.set_xticklabels(['64', '128', '256', '512'])
     
     plt.tight_layout()
-    plt.savefig(f'{save_path}/core_comparison_overview.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/core_comparison_overview_pythia70m.pdf', dpi=300, bbox_inches='tight')
     plt.show()
 
 def create_pareto_plot(df, save_path='saebench_plots'):
@@ -212,10 +209,10 @@ def create_pareto_plot(df, save_path='saebench_plots'):
     
     plt.xlabel('L0 Norm (Sparsity)')
     plt.ylabel('Explained Variance')
-    plt.title('Sparsity vs Reconstruction Quality\nPareto Frontier Comparison')
+    plt.title('Sparsity vs Reconstruction Quality\nPareto Frontier Comparison (Pythia-70M)')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.savefig(f'{save_path}/pareto_plot.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/pareto_plot_pythia70m.pdf', dpi=300, bbox_inches='tight')
     plt.show()
 
 def get_color_for_k(model_type, k_value):
@@ -244,6 +241,8 @@ def get_marker_for_model(model_type):
 def create_scr_plots(df, save_path='saebench_plots'):
     """Create SCR-specific visualization plots"""
     scr_df = df[df['eval_type'] == 'scr']
+    # Filter to only include k=256 and k=512 for clarity
+    scr_df = scr_df[scr_df['k_value'].isin([256, 512])]
     if scr_df.empty:
         print("No SCR data found for visualization")
         return
@@ -253,7 +252,7 @@ def create_scr_plots(df, save_path='saebench_plots'):
     thresholds = [2, 5, 10, 20, 50, 100, 500]
     
     # SCR Performance across thresholds
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(1, 4, figsize=(24, 6))
     
     # Overall SCR metric performance
     for model_type in ['TopK', 'vSAE TopK']:
@@ -261,17 +260,17 @@ def create_scr_plots(df, save_path='saebench_plots'):
         if not model_data.empty:
             for _, row in model_data.iterrows():
                 scr_values = [row[f'scr_metric_threshold_{t}'] for t in thresholds]
-                ax1.plot(thresholds, scr_values, marker=get_marker_for_model(model_type), linestyle='-',
+                axes[0].plot(thresholds, scr_values, marker=get_marker_for_model(model_type), linestyle='-',
                         color=get_color_for_k(model_type, row['k_value']), alpha=0.8,
                         linewidth=2, markersize=8,
                         label=f'{model_type} k={int(row["k_value"])}')
     
-    ax1.set_xlabel('Threshold')
-    ax1.set_ylabel('SCR Metric')
-    ax1.set_title('SCR Performance Across Thresholds')
-    ax1.set_xscale('log', base=2)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    axes[0].set_xlabel('Threshold')
+    axes[0].set_ylabel('SCR Metric')
+    axes[0].set_title('SCR Performance Across Thresholds (Pythia-70M)')
+    axes[0].set_xscale('log', base=2)
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
     
     # Direction 1 performance
     for model_type in ['TopK', 'vSAE TopK']:
@@ -279,17 +278,17 @@ def create_scr_plots(df, save_path='saebench_plots'):
         if not model_data.empty:
             for _, row in model_data.iterrows():
                 dir1_values = [row[f'scr_dir1_threshold_{t}'] for t in thresholds]
-                ax2.plot(thresholds, dir1_values, marker=get_marker_for_model(model_type), linestyle='-',
+                axes[1].plot(thresholds, dir1_values, marker=get_marker_for_model(model_type), linestyle='-',
                         color=get_color_for_k(model_type, row['k_value']), alpha=0.8,
                         linewidth=2, markersize=8,
                         label=f'{model_type} k={int(row["k_value"])}')
     
-    ax2.set_xlabel('Threshold')
-    ax2.set_ylabel('SCR Direction 1')
-    ax2.set_title('SCR Direction 1 Performance')
-    ax2.set_xscale('log', base=2)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    axes[1].set_xlabel('Threshold')
+    axes[1].set_ylabel('SCR Direction 1')
+    axes[1].set_title('SCR Direction 1 Performance')
+    axes[1].set_xscale('log', base=2)
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
     
     # Direction 2 performance
     for model_type in ['TopK', 'vSAE TopK']:
@@ -297,19 +296,19 @@ def create_scr_plots(df, save_path='saebench_plots'):
         if not model_data.empty:
             for _, row in model_data.iterrows():
                 dir2_values = [row[f'scr_dir2_threshold_{t}'] for t in thresholds]
-                ax3.plot(thresholds, dir2_values, marker=get_marker_for_model(model_type), linestyle='-',
+                axes[2].plot(thresholds, dir2_values, marker=get_marker_for_model(model_type), linestyle='-',
                         color=get_color_for_k(model_type, row['k_value']), alpha=0.8,
                         linewidth=2, markersize=8,
                         label=f'{model_type} k={int(row["k_value"])}')
     
-    ax3.set_xlabel('Threshold')
-    ax3.set_ylabel('SCR Direction 2')
-    ax3.set_title('SCR Direction 2 Performance')
-    ax3.set_xscale('log', base=2)
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
+    axes[2].set_xlabel('Threshold')
+    axes[2].set_ylabel('SCR Direction 2')
+    axes[2].set_title('SCR Direction 2 Performance')
+    axes[2].set_xscale('log', base=2)
+    axes[2].legend()
+    axes[2].grid(True, alpha=0.3)
     
-    # Heatmap of SCR performance by k-value and threshold - FIXED VERSION
+    # Heatmap of SCR performance by k-value and threshold
     if len(scr_df) > 1:
         pivot_data = []
         for _, row in scr_df.iterrows():
@@ -325,19 +324,18 @@ def create_scr_plots(df, save_path='saebench_plots'):
         # Check for and handle duplicates before pivoting
         if pivot_df.duplicated(subset=['model_k', 'threshold']).any():
             print("Warning: Found duplicate entries in SCR data. Taking mean values.")
-            # Group by model_k and threshold, take mean of scr_metric
             pivot_df = pivot_df.groupby(['model_k', 'threshold'], as_index=False)['scr_metric'].mean()
         
         heatmap_data = pivot_df.pivot(index='model_k', columns='threshold', values='scr_metric')
         
         sns.heatmap(heatmap_data, annot=True, fmt='.3f', cmap='RdYlBu_r', 
-                   center=0, ax=ax4, cbar_kws={'label': 'SCR Metric'})
-        ax4.set_title('SCR Performance Heatmap')
-        ax4.set_xlabel('Threshold')
-        ax4.set_ylabel('Model Configuration')
+                   center=0, ax=axes[3], cbar_kws={'label': 'SCR Metric'})
+        axes[3].set_title('SCR Performance Heatmap')
+        axes[3].set_xlabel('Threshold')
+        axes[3].set_ylabel('Model Configuration')
     
     plt.tight_layout()
-    plt.savefig(f'{save_path}/scr_analysis.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/scr_analysis_pythia70m.pdf', dpi=300, bbox_inches='tight')
     plt.show()
 
 def create_sparse_probing_plots(df, save_path='saebench_plots'):
@@ -373,7 +371,7 @@ def create_sparse_probing_plots(df, save_path='saebench_plots'):
     ax1.plot([0.8, 1.0], [0.8, 1.0], 'k--', alpha=0.5, label='Perfect Preservation')
     ax1.set_xlabel('LLM Test Accuracy')
     ax1.set_ylabel('SAE Test Accuracy')
-    ax1.set_title('Overall Accuracy: SAE vs LLM Performance')
+    ax1.set_title('Overall Accuracy: SAE vs LLM Performance (Pythia-70M)')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
@@ -457,91 +455,14 @@ def create_sparse_probing_plots(df, save_path='saebench_plots'):
     ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(f'{save_path}/sparse_probing_analysis.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
-    # Create dataset-specific performance breakdown
-    create_dataset_breakdown_plot(df, save_path)
-
-def create_dataset_breakdown_plot(df, save_path='saebench_plots'):
-    """Create detailed dataset breakdown for sparse probing"""
-    sp_df = df[df['eval_type'] == 'sparse_probing']
-    if sp_df.empty or 'eval_result_details' not in df.columns:
-        return
-    
-    # This would require access to the detailed results
-    # For now, create a summary plot
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # Performance by model type
-    model_types = sp_df['model_type'].unique()
-    metrics = ['sae_test_accuracy', 'sae_top_1_test_accuracy', 'sae_top_2_test_accuracy', 'sae_top_5_test_accuracy']
-    
-    x_pos = np.arange(len(metrics))
-    width = 0.35
-    
-    for i, model_type in enumerate(model_types):
-        model_data = sp_df[sp_df['model_type'] == model_type]
-        if not model_data.empty:
-            avg_scores = [model_data[metric].mean() for metric in metrics]
-            # Use the middle k-value color for the bar chart
-            middle_k = sorted(model_data['k_value'].unique())[len(model_data['k_value'].unique())//2] if len(model_data['k_value'].unique()) > 0 else 64
-            ax1.bar(x_pos + i*width, avg_scores, width, 
-                   color=get_color_for_k(model_type, middle_k), alpha=0.8, label=model_type)
-    
-    ax1.set_xlabel('Accuracy Metric')
-    ax1.set_ylabel('Average Accuracy')
-    ax1.set_title('Average Performance by Model Type')
-    ax1.set_xticks(x_pos + width/2)
-    ax1.set_xticklabels(['Overall', 'Top-1', 'Top-2', 'Top-5'])
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # K-value performance comparison
-    k_values = sorted(sp_df['k_value'].unique())
-    for model_type in model_types:
-        model_data = sp_df[sp_df['model_type'] == model_type]
-        if not model_data.empty:
-            accuracies = []
-            colors_list = []
-            for k in k_values:
-                k_data = model_data[model_data['k_value'] == k]
-                if len(k_data) > 0:
-                    accuracies.append(k_data['sae_test_accuracy'].iloc[0])
-                    colors_list.append(get_color_for_k(model_type, k))
-                else:
-                    accuracies.append(0)
-                    colors_list.append('#999999')
-            
-            # Create a line plot with individual colored points
-            for i, (k, acc, color) in enumerate(zip(k_values, accuracies, colors_list)):
-                if i == 0:  # Add label only for first point
-                    ax2.scatter(k, acc, color=color, s=120, alpha=0.8, 
-                              marker=get_marker_for_model(model_type),
-                              edgecolors='black', linewidth=1, label=model_type)
-                else:
-                    ax2.scatter(k, acc, color=color, s=120, alpha=0.8, 
-                              marker=get_marker_for_model(model_type),
-                              edgecolors='black', linewidth=1)
-            
-            # Connect points with a line using the model type's base color
-            base_color = get_color_for_k(model_type, 256)  # Use middle k as base color
-            ax2.plot(k_values, accuracies, '--', color=base_color, alpha=0.5, linewidth=1)
-    
-    ax2.set_xlabel('K Value')
-    ax2.set_ylabel('SAE Test Accuracy')
-    ax2.set_title('Performance vs K Value')
-    ax2.set_xscale('log', base=2)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_path}/sparse_probing_breakdown.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/sparse_probing_analysis_pythia70m.pdf', dpi=300, bbox_inches='tight')
     plt.show()
 
 def create_tpp_plots(df, save_path='saebench_plots'):
     """Create TPP-specific visualization plots"""
     tpp_df = df[df['eval_type'] == 'tpp']
+    # Filter to only include k=256 and k=512 for clarity
+    tpp_df = tpp_df[tpp_df['k_value'].isin([256, 512])]
     if tpp_df.empty:
         print("No TPP data found for visualization")
         return
@@ -551,7 +472,7 @@ def create_tpp_plots(df, save_path='saebench_plots'):
     thresholds = [2, 5, 10, 20, 50, 100, 500]
     
     # TPP Performance across thresholds
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(1, 4, figsize=(24, 6))
     
     # Total TPP metric performance
     for model_type in ['TopK', 'vSAE TopK']:
@@ -559,17 +480,17 @@ def create_tpp_plots(df, save_path='saebench_plots'):
         if not model_data.empty:
             for _, row in model_data.iterrows():
                 tpp_values = [row[f'tpp_threshold_{t}_total_metric'] for t in thresholds]
-                ax1.plot(thresholds, tpp_values, marker=get_marker_for_model(model_type), linestyle='-',
+                axes[0].plot(thresholds, tpp_values, marker=get_marker_for_model(model_type), linestyle='-',
                         color=get_color_for_k(model_type, row['k_value']), alpha=0.8,
                         linewidth=2, markersize=8,
                         label=f'{model_type} k={int(row["k_value"])}')
     
-    ax1.set_xlabel('Threshold')
-    ax1.set_ylabel('TPP Total Metric')
-    ax1.set_title('TPP Total Performance Across Thresholds')
-    ax1.set_xscale('log', base=2)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    axes[0].set_xlabel('Threshold')
+    axes[0].set_ylabel('TPP Total Metric')
+    axes[0].set_title('TPP Total Performance Across Thresholds (Pythia-70M)')
+    axes[0].set_xscale('log', base=2)
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
     
     # Intended vs Unintended effects comparison
     for model_type in ['TopK', 'vSAE TopK']:
@@ -581,19 +502,19 @@ def create_tpp_plots(df, save_path='saebench_plots'):
                 
                 color = get_color_for_k(model_type, row['k_value'])
                 marker = get_marker_for_model(model_type)
-                ax2.plot(thresholds, intended_values, marker=marker, linestyle='-',
+                axes[1].plot(thresholds, intended_values, marker=marker, linestyle='-',
                         color=color, alpha=0.9, linewidth=2, markersize=8,
                         label=f'{model_type} k={int(row["k_value"])} (Intended)')
-                ax2.plot(thresholds, unintended_values, marker='s', linestyle='--',
+                axes[1].plot(thresholds, unintended_values, marker='s', linestyle='--',
                         color=color, alpha=0.6, linewidth=1, markersize=5,
                         label=f'{model_type} k={int(row["k_value"])} (Unintended)')
     
-    ax2.set_xlabel('Threshold')
-    ax2.set_ylabel('TPP Effect Size')
-    ax2.set_title('Intended vs Unintended Effects')
-    ax2.set_xscale('log', base=2)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    axes[1].set_xlabel('Threshold')
+    axes[1].set_ylabel('TPP Effect Size')
+    axes[1].set_title('Intended vs Unintended Effects')
+    axes[1].set_xscale('log', base=2)
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
     
     # Selectivity analysis (intended vs unintended ratio)
     for model_type in ['TopK', 'vSAE TopK']:
@@ -611,19 +532,19 @@ def create_tpp_plots(df, save_path='saebench_plots'):
                         ratio = intended if intended > 0 else 0
                     selectivity_ratios.append(ratio)
                 
-                ax3.plot(thresholds, selectivity_ratios, marker=get_marker_for_model(model_type), linestyle='-',
+                axes[2].plot(thresholds, selectivity_ratios, marker=get_marker_for_model(model_type), linestyle='-',
                         color=get_color_for_k(model_type, row['k_value']), alpha=0.8,
                         linewidth=2, markersize=8,
                         label=f'{model_type} k={int(row["k_value"])}')
     
-    ax3.set_xlabel('Threshold')
-    ax3.set_ylabel('Selectivity Ratio (Intended/|Unintended|)')
-    ax3.set_title('TPP Selectivity Analysis')
-    ax3.set_xscale('log', base=2)
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
+    axes[2].set_xlabel('Threshold')
+    axes[2].set_ylabel('Selectivity Ratio (Intended/|Unintended|)')
+    axes[2].set_title('TPP Selectivity Analysis')
+    axes[2].set_xscale('log', base=2)
+    axes[2].legend()
+    axes[2].grid(True, alpha=0.3)
     
-    # Heatmap of TPP total performance by k-value and threshold - FIXED VERSION
+    # Heatmap of TPP total performance by k-value and threshold
     if len(tpp_df) > 1:
         pivot_data = []
         for _, row in tpp_df.iterrows():
@@ -639,23 +560,22 @@ def create_tpp_plots(df, save_path='saebench_plots'):
         # Check for and handle duplicates before pivoting
         if pivot_df.duplicated(subset=['model_k', 'threshold']).any():
             print("Warning: Found duplicate entries in TPP data. Taking mean values.")
-            # Group by model_k and threshold, take mean of tpp_total
             pivot_df = pivot_df.groupby(['model_k', 'threshold'], as_index=False)['tpp_total'].mean()
         
         heatmap_data = pivot_df.pivot(index='model_k', columns='threshold', values='tpp_total')
         
         sns.heatmap(heatmap_data, annot=True, fmt='.3f', cmap='YlOrRd', 
-                   ax=ax4, cbar_kws={'label': 'TPP Total Metric'})
-        ax4.set_title('TPP Performance Heatmap')
-        ax4.set_xlabel('Threshold')
-        ax4.set_ylabel('Model Configuration')
+                   ax=axes[3], cbar_kws={'label': 'TPP Total Metric'})
+        axes[3].set_title('TPP Performance Heatmap')
+        axes[3].set_xlabel('Threshold')
+        axes[3].set_ylabel('Model Configuration')
     
     plt.tight_layout()
-    plt.savefig(f'{save_path}/tpp_analysis.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{save_path}/tpp_analysis_pythia70m.pdf', dpi=300, bbox_inches='tight')
     plt.show()
 
 def create_detailed_table(df, save_path='saebench_plots'):
-    """Create detailed comparison tables for core, SCR, and sparse probing metrics"""
+    """Create detailed comparison tables for core, SCR, sparse probing, and TPP metrics"""
     Path(save_path).mkdir(exist_ok=True)
     
     # Core metrics table
@@ -678,12 +598,14 @@ def create_detailed_table(df, save_path='saebench_plots'):
             table_data.append(row)
         
         core_table_df = pd.DataFrame(table_data)
-        core_table_df.to_csv(f'{save_path}/core_comparison.csv', index=False)
+        core_table_df.to_csv(f'{save_path}/core_comparison_pythia70m.csv', index=False)
         print("Core Metrics Comparison Table:")
         print(core_table_df.to_string(index=False))
     
     # SCR metrics table  
     scr_df = df[df['eval_type'] == 'scr']
+    # Filter to only include k=256 and k=512 for clarity
+    scr_df = scr_df[scr_df['k_value'].isin([256, 512])]
     if not scr_df.empty:
         thresholds = [2, 5, 10, 20, 50, 100, 500]
         scr_table_data = []
@@ -691,7 +613,7 @@ def create_detailed_table(df, save_path='saebench_plots'):
         for threshold in thresholds:
             row = {'Threshold': threshold}
             for model_type in ['TopK', 'vSAE TopK']:
-                for k in [64, 128, 256, 512]:
+                for k in [256, 512]:  # Only k=256 and k=512 for SCR
                     data_point = scr_df[(scr_df['model_type'] == model_type) & (scr_df['k_value'] == k)]
                     if not data_point.empty:
                         value = data_point[f'scr_metric_threshold_{threshold}'].iloc[0]
@@ -701,7 +623,7 @@ def create_detailed_table(df, save_path='saebench_plots'):
             scr_table_data.append(row)
         
         scr_table_df = pd.DataFrame(scr_table_data)
-        scr_table_df.to_csv(f'{save_path}/scr_comparison.csv', index=False)
+        scr_table_df.to_csv(f'{save_path}/scr_comparison_pythia70m.csv', index=False)
         print("\nSCR Metrics Comparison Table:")
         print(scr_table_df.to_string(index=False))
     
@@ -729,12 +651,14 @@ def create_detailed_table(df, save_path='saebench_plots'):
         
         if sp_table_data:
             sp_table_df = pd.DataFrame(sp_table_data)
-            sp_table_df.to_csv(f'{save_path}/sparse_probing_comparison.csv', index=False)
+            sp_table_df.to_csv(f'{save_path}/sparse_probing_comparison_pythia70m.csv', index=False)
             print("\nSparse Probing Metrics Comparison Table:")
             print(sp_table_df.to_string(index=False))
     
     # TPP metrics table
     tpp_df = df[df['eval_type'] == 'tpp']
+    # Filter to only include k=256 and k=512 for clarity
+    tpp_df = tpp_df[tpp_df['k_value'].isin([256, 512])]
     if not tpp_df.empty:
         thresholds = [2, 5, 10, 20, 50, 100, 500]
         tpp_table_data = []
@@ -742,7 +666,7 @@ def create_detailed_table(df, save_path='saebench_plots'):
         for threshold in thresholds:
             row = {'Threshold': threshold}
             for model_type in ['TopK', 'vSAE TopK']:
-                for k in [64, 128, 256, 512]:
+                for k in [256, 512]:  # Only k=256 and k=512 for TPP
                     data_point = tpp_df[(tpp_df['model_type'] == model_type) & (tpp_df['k_value'] == k)]
                     if not data_point.empty:
                         total_value = data_point[f'tpp_threshold_{threshold}_total_metric'].iloc[0]
@@ -759,63 +683,53 @@ def create_detailed_table(df, save_path='saebench_plots'):
         
         if tpp_table_data:
             tpp_table_df = pd.DataFrame(tpp_table_data)
-            tpp_table_df.to_csv(f'{save_path}/tpp_comparison.csv', index=False)
+            tpp_table_df.to_csv(f'{save_path}/tpp_comparison_pythia70m.csv', index=False)
             print("\nTPP Metrics Comparison Table:")
             print(tpp_table_df.to_string(index=False))
-        
-        return (core_table_df if not core_df.empty else None, 
-                scr_table_df if not scr_df.empty else None,
-                sp_table_df if sp_table_data else None,
-                tpp_table_df if tpp_table_data else None)
-    
-    return (core_table_df if not core_df.empty else None, 
-            scr_table_df if not scr_df.empty else None, 
-            sp_table_df if sp_table_data else None,
-            None)
 
-# Example usage:
+# Example usage for Pythia-70M trained models:
 if __name__ == "__main__":
-    # Example file paths - replace with your actual file paths
+    # Updated file paths for your Pythia-70M trained models
     json_files = [
-        # Core evaluation files
-        r'eval_results\core\TopK_SAE_gelu-1l_d2048_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\core\TopK_SAE_gelu-1l_d2048_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json', 
-        r'eval_results\core\TopK_SAE_gelu-1l_d2048_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\core\TopK_SAE_gelu-1l_d2048_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\core\VSAETopK_gelu-1l_d2048_k64_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\core\VSAETopK_gelu-1l_d2048_k128_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\core\VSAETopK_gelu-1l_d2048_k256_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\core\VSAETopK_gelu-1l_d2048_k512_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
+        # Core evaluation files 
+        r'eval_results\core\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\core\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\core\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\core\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\core\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\core\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\core\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\core\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
         
         # SCR evaluation files
-        r'eval_results\scr\scr\TopK_SAE_gelu-1l_d2048_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\TopK_SAE_gelu-1l_d2048_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json', 
-        r'eval_results\scr\scr\TopK_SAE_gelu-1l_d2048_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\TopK_SAE_gelu-1l_d2048_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\VSAETopK_gelu-1l_d2048_k64_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\VSAETopK_gelu-1l_d2048_k128_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\VSAETopK_gelu-1l_d2048_k256_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\VSAETopK_gelu-1l_d2048_k512_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
         
         # Sparse probing evaluation files
-        r'eval_results\sparse_probing\TopK_SAE_gelu-1l_d2048_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\TopK_SAE_gelu-1l_d2048_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json', 
-        r'eval_results\sparse_probing\TopK_SAE_gelu-1l_d2048_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\TopK_SAE_gelu-1l_d2048_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\VSAETopK_gelu-1l_d2048_k64_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\VSAETopK_gelu-1l_d2048_k128_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\VSAETopK_gelu-1l_d2048_k256_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\VSAETopK_gelu-1l_d2048_k512_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
         
         # TPP evaluation files
-        r'eval_results\tpp\tpp\TopK_SAE_gelu-1l_d2048_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\TopK_SAE_gelu-1l_d2048_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json', 
-        r'eval_results\tpp\tpp\TopK_SAE_gelu-1l_d2048_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\TopK_SAE_gelu-1l_d2048_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\VSAETopK_gelu-1l_d2048_k64_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\VSAETopK_gelu-1l_d2048_k128_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\VSAETopK_gelu-1l_d2048_k256_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\VSAETopK_gelu-1l_d2048_k512_lr0.0008_kl1.0_aux0.03125_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl1.0_aux0_fixed_var_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
     ]
     
     # Load and process results
@@ -835,18 +749,19 @@ if __name__ == "__main__":
     
     if not scr_df.empty:
         print("Creating SCR evaluation plots...")
-        create_scr_plots(df)  # Pass full df so function can filter
+        create_scr_plots(df)
     
     if not sp_df.empty:
         print("Creating sparse probing evaluation plots...")
-        create_sparse_probing_plots(df)  # Pass full df so function can filter
+        create_sparse_probing_plots(df)
     
     if not tpp_df.empty:
         print("Creating TPP evaluation plots...")
-        create_tpp_plots(df)  # Pass full df so function can filter
+        create_tpp_plots(df)
     
     # Create detailed tables
     create_detailed_table(df)
     
     print(f"Visualization complete! Check the 'saebench_plots' directory for outputs.")
     print("Supported evaluation types: core, SCR, sparse_probing, TPP")
+    print("All plots and tables are labeled with 'pythia70m' to distinguish from other models.")

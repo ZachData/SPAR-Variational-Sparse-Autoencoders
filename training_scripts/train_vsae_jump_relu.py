@@ -168,7 +168,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_mlp: {model.cfg.d_mlp}")
+        self.logger.info(f"Model loaded. model.cfg.d_model: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -187,7 +187,7 @@ class ExperimentRunner:
             data=data_gen,
             model=model,
             hook_name=self.config.hook_name,
-            d_submodule=model.cfg.d_mlp,
+            d_submodule=model.cfg.d_model,
             n_ctxs=self.config.n_ctxs,
             ctx_len=self.config.ctx_len,
             refresh_batch_size=self.config.refresh_batch_size,
@@ -202,7 +202,7 @@ class ExperimentRunner:
         dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
         return VSAEJumpReLUConfig(
-            activation_dim=model.cfg.d_mlp,
+            activation_dim=model.cfg.d_model,
             dict_size=dict_size,
             var_flag=self.config.var_flag,
             threshold=self.config.threshold,
@@ -587,86 +587,21 @@ def create_quick_test_config() -> ExperimentConfig:
 def create_full_config() -> ExperimentConfig:
     """Create a configuration for full training - memory efficient."""
     return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.mlp.hook_post",
-        dict_size_multiple=4.0,
+        model_name = "EleutherAI/pythia-70m-deduped",  # Changed from "gelu-1l"
+        layer = 3,  # Changed from 0 - typical layers for pythia-70m are 3,4
+        hook_name = "blocks.3.hook_resid_post",  # Updated to match layer
+        dict_size_multiple=16.0,
         
         # Full training parameters
-        total_steps=25000,  # Reduced from 50000
+        total_steps=20001,  # Reduced from 50000
         lr=5e-4,
-        kl_coeff=500.0,
-        l0_coeff=1.0,
-        target_l0=20.0,
-        
-        # VSAEJumpReLU specific settings
-        var_flag=1,
-        threshold=0.001,
-        use_april_update_mode=True,
-        
-        # MEMORY EFFICIENT buffer settings
-        n_ctxs=8000,   # Reduced from 30000
-        ctx_len=128,
-        refresh_batch_size=24,  # Smaller batches
-        out_batch_size=768,     # Smaller output batches
-        
-        # Checkpointing
-        checkpoint_steps=(8000, 16000, 25000),
-        log_steps=100,
-        
-        # Evaluation
-        eval_batch_size=48,
-        eval_n_batches=8,
-        
-        # System settings
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
-        autocast_dtype="bfloat16",
-        seed=42,
-    )
-
-
-def create_learned_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with learned variance - memory efficient."""
-    config = create_full_config()
-    
-    # Adjustments for learned variance
-    config.total_steps = 30000  # Slightly longer for learned variance
-    config.lr = 3e-4  # Slightly lower LR for stability
-    config.kl_coeff = 300.0  # Lower KL coeff for learned variance
-    config.var_flag = 1  # Enable learned variance
-    config.threshold = 0.0005  # Smaller threshold for learned variance
-    
-    # Even more conservative memory settings
-    config.n_ctxs = 5000
-    config.refresh_batch_size = 16
-    config.out_batch_size = 512
-    config.eval_batch_size = 32
-    config.eval_n_batches = 5
-    
-    config.checkpoint_steps = (10000, 20000, 30000)
-    
-    return config
-
-
-def create_gpu_10gb_config() -> ExperimentConfig:
-    """Create a configuration optimized for 10GB GPU memory."""
-    return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.mlp.hook_post",
-        dict_size_multiple=4.0,
-        
-        # Training parameters optimized for 10GB GPU
-        total_steps=60000,
-        lr=5e-5,
-        kl_coeff=1.0,
-        l0_coeff=1.0,
-        target_l0=64.0,
+        kl_coeff=1,
+        l0_coeff=0.1,
+        target_l0=512.0,
         
         # Model settings
         var_flag=0,  # Fixed variance for memory efficiency
-        threshold=0.013,
+        threshold=0.0045,
         use_april_update_mode=True,
         
         # GPU memory optimized buffer settings
@@ -676,7 +611,7 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         out_batch_size=192,    
         
         # Checkpointing
-        checkpoint_steps=(60000,),
+        checkpoint_steps=(20000,),
         log_steps=1000,
         
         # Evaluation - faster and more memory efficient
@@ -689,52 +624,6 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         autocast_dtype="bfloat16",
         seed=42,
     )
-
-
-def create_gpu_10gb_learned_var_config() -> ExperimentConfig:
-    """Create a learned variance configuration optimized for 10GB GPU."""
-    config = create_gpu_10gb_config()
-    
-    # Enable learned variance with conservative settings
-    config.var_flag = 1
-    config.total_steps = 15000  # Even shorter for learned variance
-    config.lr = 3e-4  # Lower LR for stability
-    config.kl_coeff = 300.0  # Lower KL coefficient
-    config.threshold = 0.0005  # Smaller threshold
-    config.checkpoint_steps = (15000,)
-    
-    # Even more conservative memory settings
-    config.n_ctxs = 2000
-    config.refresh_batch_size = 12
-    config.out_batch_size = 192
-    config.eval_batch_size = 24
-    config.eval_n_batches = 3
-    
-    return config
-
-
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration targeting higher sparsity (lower L0)."""
-    config = create_full_config()
-    
-    # Adjust for higher sparsity
-    config.target_l0 = 10.0  # Lower target L0
-    config.l0_coeff = 2.0  # Higher L0 penalty
-    config.threshold = 0.0005  # Smaller threshold for more precise sparsity
-    
-    return config
-
-
-def create_low_sparsity_config() -> ExperimentConfig:
-    """Create a configuration targeting lower sparsity (higher L0)."""
-    config = create_full_config()
-    
-    # Adjust for lower sparsity
-    config.target_l0 = 50.0  # Higher target L0
-    config.l0_coeff = 0.5  # Lower L0 penalty
-    config.threshold = 0.002  # Larger threshold
-    
-    return config
 
 
 def main():
@@ -752,13 +641,8 @@ def main():
         choices=[
             "quick_test", 
             "full", 
-            "learned_variance",
-            "gpu_10gb",
-            "gpu_10gb_learned_var",
-            "high_sparsity",
-            "low_sparsity"
         ], 
-        default="quick_test",
+        default="full",
         help="Configuration preset for single training runs"
     )
     parser.add_argument(
@@ -783,11 +667,6 @@ def main():
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "learned_variance": create_learned_variance_config,
-        "gpu_10gb": create_gpu_10gb_config,
-        "gpu_10gb_learned_var": create_gpu_10gb_learned_var_config,
-        "high_sparsity": create_high_sparsity_config,
-        "low_sparsity": create_low_sparsity_config,
     }
     
     config = config_functions[args.config]()
@@ -823,10 +702,8 @@ def main():
 
 
 # Usage examples:
+# python train-vsae-jump-relu.py
 # python train-vsae-jump-relu.py --config quick_test
-# python train-vsae-jump-relu.py --config gpu_10gb
-# python train-vsae-jump-relu.py --config learned_variance
-# python train-vsae-jump-relu.py --config high_sparsity
 # python train-vsae-jump-relu.py --sweep --wandb-entity your-username
 
 

@@ -43,7 +43,7 @@ class ExperimentConfig:
     apply_b_dec_to_input: bool = False  # SAE-lens compatibility
     
     # Training configuration
-    total_steps: int = 10000
+    total_steps: int = 20000
     lr: float = 7e-5
     
     # Buffer configuration
@@ -53,7 +53,7 @@ class ExperimentConfig:
     out_batch_size: int = 1024
     
     # Logging and saving
-    checkpoint_steps: tuple = (5000, 10000)
+    checkpoint_steps: tuple = (20000,)
     log_steps: int = 100
     save_dir: str = "./experiments"
     
@@ -416,84 +416,19 @@ def create_quick_test_config() -> ExperimentConfig:
         seed=42,
     )
 
-
 def create_standard_config() -> ExperimentConfig:
-    """Create a configuration for standard training."""
-    return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.hook_resid_post",
-        dict_size_multiple=4.0,
-        
-        # JumpReLU parameters
-        bandwidth=0.001,
-        threshold_init=0.001,
-        sparsity_penalty=1.0,
-        target_l0=20.0,
-        
-        # Standard training parameters
-        total_steps=25000,
-        lr=7e-5,
-        
-        # Buffer settings
-        n_ctxs=8000,
-        ctx_len=128,
-        refresh_batch_size=24,
-        out_batch_size=768,
-        
-        # Checkpointing
-        checkpoint_steps=(8000, 16000, 25000),
-        log_steps=100,
-        
-        # Evaluation
-        eval_batch_size=48,
-        eval_n_batches=8,
-        
-        # System settings
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="float32",
-        autocast_dtype="float32",
-        seed=42,
-    )
-
-
-def create_high_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for high sparsity training."""
-    config = create_standard_config()
-    
-    # High sparsity settings
-    config.target_l0 = 10.0  # Lower target L0 for higher sparsity
-    config.sparsity_penalty = 2.0  # Higher penalty
-    config.bandwidth = 0.0005  # Smaller bandwidth for sharper thresholds
-    
-    return config
-
-
-def create_low_sparsity_config() -> ExperimentConfig:
-    """Create a configuration for low sparsity training."""
-    config = create_standard_config()
-    
-    # Low sparsity settings
-    config.target_l0 = 40.0  # Higher target L0 for lower sparsity
-    config.sparsity_penalty = 0.5  # Lower penalty
-    config.bandwidth = 0.002  # Larger bandwidth for smoother thresholds
-    
-    return config
-
-
-def create_gpu_10gb_config() -> ExperimentConfig:
     """Create a configuration optimized for 10GB GPU memory."""
     return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.hook_resid_post",
-        dict_size_multiple=4.0,
+        model_name = "EleutherAI/pythia-70m-deduped",  # Changed from "gelu-1l"
+        layer = 3,  # Changed from 0 - typical layers for pythia-70m are 3,4
+        hook_name = "blocks.3.hook_resid_post",  # Updated to match layer
+        dict_size_multiple=16.0,
         
         # JumpReLU parameters
         bandwidth=0.001,
         threshold_init=0.001,
         sparsity_penalty=1.0,
-        target_l0=256.0,
+        target_l0=356.0,
         
         # GPU memory optimized parameters
         total_steps=20000,
@@ -531,11 +466,8 @@ def main():
         choices=[
             "quick_test", 
             "standard",
-            "high_sparsity",
-            "low_sparsity", 
-            "gpu_10gb"
         ], 
-        default="quick_test",
+        default="standard",
         help="Configuration preset for training"
     )
     args = parser.parse_args()
@@ -544,9 +476,6 @@ def main():
     config_functions = {
         "quick_test": create_quick_test_config,
         "standard": create_standard_config,
-        "high_sparsity": create_high_sparsity_config,
-        "low_sparsity": create_low_sparsity_config,
-        "gpu_10gb": create_gpu_10gb_config,
     }
     
     config = config_functions[args.config]()
@@ -583,11 +512,7 @@ def main():
 
 # Usage examples:
 # python train_jumprelu.py --config quick_test
-# python train_jumprelu.py --config standard
-# python train_jumprelu.py --config high_sparsity
-# python train_jumprelu.py --config low_sparsity
-# python train_jumprelu.py --config gpu_10gb
-
+# python train_jumprelu.py 
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility

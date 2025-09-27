@@ -656,6 +656,20 @@ class VSAEJumpReLUTrainer(SAETrainer):
         self.logging_parameters = ["effective_l0", "threshold_mean"]
         self.effective_l0 = 0.0
         self.threshold_mean = 0.0
+
+    def _compute_consistent_l0(self, mu: torch.Tensor) -> float:
+        """
+        Compute L0 consistently as average features per sample (like evaluation).
+        
+        Args:
+            mu: Encoded features [batch_size, dict_size]
+            
+        Returns:
+            Average number of active features per sample
+        """
+        # Count active features per sample (features > threshold)
+        active_per_sample = (mu > 0).float().sum(dim=-1)  # [batch_size]
+        return active_per_sample.mean().item()
     
     def _compute_kl_loss(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
         """
@@ -727,13 +741,14 @@ class VSAEJumpReLUTrainer(SAETrainer):
         # FIXED: Separate scaling - KL gets kl_scale, aux gets sparsity_scale
         total_loss = (
             recon_loss + 
-            self.training_config.kl_coeff * kl_scale * kl_loss + 
+            self.training_config.kl_coeff * kl_scale * kl_loss +
             self.training_config.aux_weight * sparsity_scale * aux_loss
         )
         
         # Update logging stats
         with torch.no_grad():
-            self.effective_l0 = float((mu > 0).float().sum().item()) / mu.numel()
+            # self.effective_l0 = float((mu > 0).float().sum().item()) / mu.numel() 
+            self.effective_l0 = self._compute_consistent_l0(mu) # to keep training/evaluation consistent
             self.threshold_mean = float(torch.mean(self.ae.threshold).item())
         
         if not logging:

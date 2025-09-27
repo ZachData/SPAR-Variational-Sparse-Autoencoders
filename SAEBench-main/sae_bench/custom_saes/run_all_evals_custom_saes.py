@@ -24,11 +24,11 @@ from dictionary_learning_wrapper import DictionaryLearningSAEWrapper
 
 RANDOM_SEED = 42
 
-MODEL_CONFIGS = {
+MODEL_CONFIGS = { #look in dictionary learning wrapper! there are hardcoded values
     "pythia-70m-deduped": {
         "batch_size": 512,
-        "dtype": "float32",
-        "layers": [3, 4],
+        "dtype": "bfloat16",
+        "layers": [3],
         "d_model": 512,
     },
     "gemma-2-2b": {
@@ -99,7 +99,7 @@ def run_evals(
                 compute_featurewise_density_statistics=True,
                 compute_featurewise_weight_based_metrics=True,
                 exclude_special_tokens_from_reconstruction=True,
-                dataset="roneneldan/TinyStories",
+                dataset="NeelNanda/c4-code-tokenized-2b", # "roneneldan/TinyStories", 
                 context_size=128,
                 output_folder="eval_results/core",
                 verbose=True,
@@ -200,14 +200,14 @@ def load_your_trained_saes(experiments_dir: str = "../../../experiments") -> lis
     
     # List of your trained models (update these names to match your actual trained models)
     model_names = [
-        # 'VSAETopK_gelu-1l_d2048_k512_lr0.0008_kl1.0_aux0.03125_fixed_var',
-        # 'VSAETopK_gelu-1l_d2048_k256_lr0.0008_kl1.0_aux0.03125_fixed_var',
-        # 'VSAETopK_gelu-1l_d2048_k128_lr0.0008_kl1.0_aux0.03125_fixed_var',
-        # 'VSAETopK_gelu-1l_d2048_k64_lr0.0008_kl1.0_aux0.03125_fixed_var',
-        'TopK_SAE_gelu-1l_d2048_k512_auxk0.03125_lr_auto',
-        'TopK_SAE_gelu-1l_d2048_k256_auxk0.03125_lr_auto',
-        'TopK_SAE_gelu-1l_d2048_k128_auxk0.03125_lr_auto',
-        'TopK_SAE_gelu-1l_d2048_k64_auxk0.03125_lr_auto'
+        'VSAETopK_pythia70m_d8192_k64_lr0.0008_kl1.0_aux0_fixed_var',
+        'VSAETopK_pythia70m_d8192_k128_lr0.0008_kl1.0_aux0_fixed_var',
+        'VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var',
+        'VSAETopK_pythia70m_d8192_k512_lr0.0008_kl1.0_aux0_fixed_var',
+        'TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto',
+        'TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto',
+        'TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto',
+        'TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto',
     ]
     
     for model_name in model_names:
@@ -231,7 +231,7 @@ def main():
     """Main function to run evaluations on your trained models."""
     
     # Configuration
-    model_name = "gelu-1l"
+    model_name = "pythia-70m-deduped"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     config = MODEL_CONFIGS[model_name]
     
@@ -250,11 +250,11 @@ def main():
     # Choose which evaluations to run (excluding ones that require special setup)
     eval_types = [
         "core",           # L0/Loss Recovered - fast and fundamental
-        "sparse_probing", # Sparse Probing - relatively fast
-        #"absorption",     # Feature Absorption - moderate time
-        "scr",           # Spurious Correlation Removal - moderate time
-        "tpp",           # Targeted Probe Perturbation - moderate time
-        # "ravel",        # RAVEL - skip for now, requires model architecture support
+        # "sparse_probing", # Sparse Probing - relatively fast
+        # #"absorption",     # Feature Absorption - moderate time
+        # "scr",           # Spurious Correlation Removal - moderate time
+        # "tpp",           # Targeted Probe Perturbation - moderate time
+        # # "ravel",        # RAVEL - skip for now, requires model architecture support
     ]
     
     print(f"\nRunning evaluations: {', '.join(eval_types)}")

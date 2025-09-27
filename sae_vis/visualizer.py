@@ -1,78 +1,20 @@
 """
 Visualizer: create image-based visualizations of SAE feature analysis.
-FIXED VERSION with comprehensive text sanitization to prevent LaTeX parsing errors.
+Modified to show contextual tokens around peak activations with single-line display.
 """
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
-import re
 from typing import Dict, List, Optional
 from pathlib import Path
 import seaborn as sns
-from real_activations import FeatureStats
+from real_activations import FeatureStats, ActivationExample
+
 
 # Color scheme constants
 REAL_COLOR = 'lightcoral'      # Red for real data
 SYNTHETIC_COLOR = 'lightblue'   # Blue for synthetic data
-
-
-def sanitize_text_for_matplotlib(text: str) -> str:
-    """
-    Sanitize text to prevent matplotlib from interpreting it as LaTeX.
-    
-    Args:
-        text: Raw text that might contain special characters
-        
-    Returns:
-        Sanitized text safe for matplotlib display
-    """
-    if not isinstance(text, str):
-        text = str(text)
-    
-    # Replace problematic characters that trigger LaTeX parsing
-    text = text.replace('$', '\\$')  # Escape dollar signs
-    text = text.replace('\\', '\\\\')  # Escape backslashes (but do this after $ replacement)
-    text = text.replace('_', '\\_')   # Escape underscores (subscript in LaTeX)
-    text = text.replace('^', '\\^')   # Escape carets (superscript in LaTeX)
-    text = text.replace('{', '\\{')   # Escape braces
-    text = text.replace('}', '\\}')   # Escape braces
-    text = text.replace('#', '\\#')   # Escape hashes
-    text = text.replace('&', '\\&')   # Escape ampersands
-    text = text.replace('%', '\\%')   # Escape percent signs
-    
-    # Handle newlines and special whitespace
-    text = text.replace('\n', '\\n')
-    text = text.replace('\t', '\\t')
-    text = text.replace('\r', '\\r')
-    
-    # Truncate very long strings
-    if len(text) > 50:
-        text = text[:47] + "..."
-    
-    return text
-
-
-def safe_matplotlib_text(ax, x, y, text, **kwargs):
-    """
-    Safely add text to matplotlib axis with automatic sanitization.
-    
-    Args:
-        ax: matplotlib axis
-        x, y: coordinates
-        text: text to display
-        **kwargs: additional arguments for ax.text()
-    """
-    # Sanitize the text
-    safe_text = sanitize_text_for_matplotlib(text)
-    
-    return ax.text(x, y, safe_text, **kwargs)
-
-
-def configure_matplotlib_safe():
-    """Configure matplotlib to be safe from LaTeX parsing errors"""
-    plt.rcParams['text.usetex'] = False
-    plt.rcParams['mathtext.default'] = 'regular'
 
 
 def visualize_features(feature_stats: Dict[int, FeatureStats], output_dir: str = "visualizations",
@@ -89,8 +31,6 @@ def visualize_features(feature_stats: Dict[int, FeatureStats], output_dir: str =
     Returns:
         List of generated image paths
     """
-    configure_matplotlib_safe()
-    
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
@@ -100,7 +40,7 @@ def visualize_features(feature_stats: Dict[int, FeatureStats], output_dir: str =
     for feature_idx, stats in feature_stats.items():
         print(f"Creating visualization for feature {feature_idx}...")
         
-        fig_path = output_path / f"feature_{feature_idx}_{analysis_type}.png"
+        fig_path = output_path / f"feature_{feature_idx}_{analysis_type}.pdf"
         _create_single_feature_plot(stats, fig_path, analysis_type)
         generated_files.append(str(fig_path))
     
@@ -110,12 +50,12 @@ def visualize_features(feature_stats: Dict[int, FeatureStats], output_dir: str =
         batch_indices = feature_indices[i:i+max_features_per_plot]
         batch_stats = {idx: feature_stats[idx] for idx in batch_indices}
         
-        summary_path = output_path / f"summary_{i//max_features_per_plot}_{analysis_type}.png"
+        summary_path = output_path / f"summary_{i//max_features_per_plot}_{analysis_type}.pdf"
         _create_summary_plot(batch_stats, summary_path, analysis_type)
         generated_files.append(str(summary_path))
     
     # Create overall statistics plot
-    stats_path = output_path / f"statistics_{analysis_type}.png"
+    stats_path = output_path / f"statistics_{analysis_type}.pdf"
     _create_statistics_plot(feature_stats, stats_path, analysis_type)
     generated_files.append(str(stats_path))
     
@@ -127,8 +67,6 @@ def compare_real_vs_synthetic(real_stats: Dict[int, FeatureStats],
                             synthetic_stats: Dict[int, FeatureStats],
                             output_dir: str = "comparison") -> List[str]:
     """Create combined real+synthetic visualizations for comparison"""
-    configure_matplotlib_safe()
-    
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
@@ -141,7 +79,7 @@ def compare_real_vs_synthetic(real_stats: Dict[int, FeatureStats],
     for feature_idx in common_features:
         print(f"Creating combined visualization for feature {feature_idx}...")
         
-        fig_path = output_path / f"feature_{feature_idx}_combined.png"
+        fig_path = output_path / f"feature_{feature_idx}_combined.pdf"
         _create_combined_feature_plot(real_stats[feature_idx], synthetic_stats[feature_idx], fig_path)
         generated_files.append(str(fig_path))
     
@@ -151,76 +89,62 @@ def compare_real_vs_synthetic(real_stats: Dict[int, FeatureStats],
 
 def _create_single_feature_plot(stats: FeatureStats, output_path: Path, analysis_type: str):
     """Create detailed plot for a single feature"""
-    configure_matplotlib_safe()
-    
-    fig = plt.figure(figsize=(16, 10))
+    fig = plt.figure(figsize=(16, 10))  # Reduced height since removing logit effects
     
     # Choose color based on analysis type
     color = REAL_COLOR if analysis_type == "real" else SYNTHETIC_COLOR
     
     # Main title
-    title_text = f"Feature {stats.feature_idx} - {analysis_type.title()} Analysis"
-    fig.suptitle(title_text, fontsize=16, fontweight='bold')
+    fig.suptitle(f"Feature {stats.feature_idx} Analysis", 
+                fontsize=16, fontweight='bold')
     
-    # Create more compact 3x2 grid layout
-    gs = fig.add_gridspec(3, 2, height_ratios=[0.8, 1, 1.5], width_ratios=[2, 1])
+    # Create 2 row layout: stats+distribution on top, tokens on bottom
+    gs = fig.add_gridspec(2, 2, height_ratios=[1, 2.5], width_ratios=[2, 1])
     
-    # Feature statistics (top row, spanning both columns)
-    ax_stats = fig.add_subplot(gs[0, :])
-    _plot_feature_stats_list(ax_stats, stats)
-    
-    # Activation distribution (middle left)
-    ax_dist = fig.add_subplot(gs[1, 0])
+    # Activation distribution (top left)
+    ax_dist = fig.add_subplot(gs[0, 0])
     _plot_activation_histogram(ax_dist, stats, title="Activation Distribution", color=color)
     
-    # Logit effects (middle right)
-    ax_logits = fig.add_subplot(gs[1, 1])
-    _plot_logit_effects(ax_logits, stats)
+    # Feature statistics (top right)
+    ax_stats = fig.add_subplot(gs[0, 1])
+    _plot_feature_stats_list(ax_stats, stats)
     
-    # Top firing tokens (bottom row, spanning both columns) - now large detailed view
-    ax_tokens = fig.add_subplot(gs[2, :])
+    # Top firing tokens (bottom row, spanning both columns) - now with more space
+    ax_tokens = fig.add_subplot(gs[1, :])
     _plot_top_tokens(ax_tokens, stats, color=color)
     
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.savefig(output_path, bbox_inches='tight', facecolor='white')
     plt.close()
 
 
 def _create_combined_feature_plot(real_stats: FeatureStats, synthetic_stats: FeatureStats, output_path: Path):
     """Create combined real+synthetic plot for a single feature"""
-    configure_matplotlib_safe()
-    
-    fig = plt.figure(figsize=(16, 12))
+    fig = plt.figure(figsize=(16, 12))  # Reduced height since removing logit effects
     
     # Main title
-    title_text = f"Feature {real_stats.feature_idx} - Real vs Synthetic Analysis"
-    fig.suptitle(title_text, fontsize=18, fontweight='bold')
+    fig.suptitle(f"Feature {real_stats.feature_idx} - Real vs Synthetic Analysis", 
+                fontsize=18, fontweight='bold')
     
-    # Create more compact grid layout - moved everything up
-    gs = fig.add_gridspec(4, 2, height_ratios=[0.25, 0.8, 0.8, 1.5], width_ratios=[2, 1])
+    # Create more compact grid layout - removed logit effects
+    gs = fig.add_gridspec(3, 2, height_ratios=[0.8, 0.8, 2.5], width_ratios=[2, 1])
     
     # === REAL ANALYSIS SECTION (RED) ===
-    ax_real_title = fig.add_subplot(gs[0, :])
-    safe_matplotlib_text(ax_real_title, 0.5, 0.5, "REAL DATA ANALYSIS", ha='center', va='center', 
-                        fontsize=14, fontweight='bold', 
-                        bbox=dict(boxstyle='round', facecolor=REAL_COLOR, alpha=0.7))
-    ax_real_title.axis('off')
-    
-    ax_real_dist = fig.add_subplot(gs[1, 0])
+    ax_real_dist = fig.add_subplot(gs[0, 0])
     _plot_activation_histogram(ax_real_dist, real_stats, title="Real Activation Distribution", color=REAL_COLOR)
     
-    ax_real_stats = fig.add_subplot(gs[1, 1])
+    ax_real_stats = fig.add_subplot(gs[0, 1])
     _plot_feature_stats_list(ax_real_stats, real_stats)
     
     # === SYNTHETIC ANALYSIS SECTION (BLUE) ===
-    ax_synth_dist = fig.add_subplot(gs[2, 0])
+    ax_synth_dist = fig.add_subplot(gs[1, 0])
     _plot_activation_histogram(ax_synth_dist, synthetic_stats, title="Synthetic Activation Distribution", color=SYNTHETIC_COLOR)
     
-    ax_synth_logits = fig.add_subplot(gs[2, 1])
-    _plot_logit_effects(ax_synth_logits, synthetic_stats)
+    ax_synth_explanation = fig.add_subplot(gs[1, 1])
+    _plot_explanation_text(ax_synth_explanation)
     
-    # Large token info section (spans full width)
-    ax_tokens = fig.add_subplot(gs[3, :])
+    # Large token info section (spans full width) - more space now
+    ax_tokens = fig.add_subplot(gs[2, :])
     _plot_large_token_comparison(ax_tokens, real_stats, synthetic_stats)
     
     plt.tight_layout()
@@ -228,173 +152,177 @@ def _create_combined_feature_plot(real_stats: FeatureStats, synthetic_stats: Fea
     plt.close()
 
 
-def _plot_large_token_comparison(ax, real_stats: FeatureStats, synthetic_stats: FeatureStats):
-    """Plot top 20 tokens as clean lists with sub-word token awareness"""
-    ax.set_title("Top 20 Firing Tokens: Real vs Synthetic", fontsize=14, fontweight='bold')
+def _plot_explanation_text(ax):
+    """Plot explanation text in compact box"""
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis('off')
     
-    # Add explanation text
-    safe_matplotlib_text(ax, 0.5, 0.98, "Note: Each entry represents one token position. Sub-word tokens are shown in blue.", 
-                        ha='center', va='top', fontsize=9, style='italic',
-                        bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
+    # Title
+    ax.text(0.5, 0.9, "Context Display", ha='center', va='center', 
+           fontsize=12, fontweight='bold')
     
-    # Collect tokens from both analyses
-    real_tokens = []
-    synthetic_tokens = []
+    # Explanation background box
+    rect = patches.Rectangle((0.05, 0.1), 0.9, 0.7, 
+                           linewidth=2, edgecolor='black', 
+                           facecolor='lightyellow', alpha=0.7)
+    ax.add_patch(rect)
     
-    # Real tokens (include token IDs)
-    for example in real_stats.examples:
-        for i, act in enumerate(example.activations):
-            if act > 0 and i < len(example.tokens) and i < len(example.token_ids):
-                real_tokens.append((act, example.tokens[i], example.token_ids[i]))
+    # Explanation text
+    explanation = """Shows 12 tokens before peak +
+peak token (bold red) + 
+12 tokens after
+
+Each line: Ex# (activation): context"""
     
-    # Synthetic tokens (include token IDs)
-    for example in synthetic_stats.examples:
-        for i, act in enumerate(example.activations):
-            if act > 0 and i < len(example.tokens) and i < len(example.token_ids):
-                synthetic_tokens.append((act, example.tokens[i], example.token_ids[i]))
+    ax.text(0.5, 0.45, explanation, ha='center', va='center', 
+           fontsize=9, style='italic', linespacing=1.3)
+
+
+def _plot_top_tokens(ax, stats: FeatureStats, color: str = 'lightblue'):
+    """Plot contextual tokens around peak activations (12 before + peak + 12 after)"""
+    ax.set_title("Context Around Peak Activations", fontsize=14, fontweight='bold')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis('off')
     
-    # Sort and take top 20 tokens from each
-    real_tokens.sort(key=lambda x: x[0], reverse=True)
-    synthetic_tokens.sort(key=lambda x: x[0], reverse=True)
+    if not stats.examples:
+        ax.text(0.5, 0.5, "No token data available", ha='center', va='center',
+               transform=ax.transAxes, fontsize=10)
+        return
     
-    top_real = real_tokens[:20]
-    top_synthetic = synthetic_tokens[:20]
+    # Background box
+    rect = patches.Rectangle((0.05, 0.05), 0.9, 0.9, 
+                           linewidth=2, edgecolor='black', 
+                           facecolor=color, alpha=0.1)
+    ax.add_patch(rect)
+    
+    # Show contextual examples around peak activations - more space now
+    _draw_contextual_tokens(ax, stats.examples[:12], 0.08, 0.9, 0.84)  # Show top 12 examples
+
+
+def _draw_contextual_tokens(ax, examples: List[ActivationExample], start_x: float, start_y: float, width: float):
+    """Draw contextual tokens around peak positions - SINGLE LINE with larger font"""
+    if not examples:
+        ax.text(start_x + width/2, start_y - 0.1, "No examples found", 
+               ha='center', va='center', fontsize=10)
+        return
+    
+    line_height = 0.08  # Much tighter since everything is on one line now
+    
+    for ex_idx, example in enumerate(examples):
+        y_pos = start_y - (ex_idx * line_height)  # Single y position for entire line
+        
+        # Get peak position
+        peak_pos = example.peak_position
+        tokens = example.tokens
+        activations = example.activations
+        
+        # Calculate context window (12 before + peak + 12 after = 25 total)
+        context_start = max(0, peak_pos - 12)
+        context_end = min(len(tokens), peak_pos + 13)  # +13 to include peak + 12 after
+        
+        # Get context tokens and activations
+        context_tokens = tokens[context_start:context_end]
+        context_activations = activations[context_start:context_end]
+        
+        # Adjust peak position within context
+        peak_in_context = peak_pos - context_start
+        
+        # Build text parts
+        before_parts = []
+        peak_part = ""
+        after_parts = []
+        
+        for i, (token, activation) in enumerate(zip(context_tokens, context_activations)):
+            token_clean = token.strip().replace('\n', '\\n').replace('\t', '\\t')
+            
+            if i < peak_in_context:
+                before_parts.append(token_clean)
+            elif i == peak_in_context:
+                peak_part = token_clean
+            else:
+                after_parts.append(token_clean)
+        
+        # Create the text segments
+        before_text = " ".join(before_parts)
+        after_text = " ".join(after_parts)
+        
+        # Start position for this line
+        x_offset = start_x + 0.01
+        
+        # SINGLE LINE: Example header + tokens all together
+        # Example header (same size as tokens now)
+        header_text = f"Ex{ex_idx + 1} ({example.max_activation:.3f}): "
+        ax.text(x_offset, y_pos, header_text, 
+               ha='left', va='center', fontsize=9, fontweight='bold')  # Same as token size
+        x_offset += len(header_text) * 0.0045  # Tight spacing
+        
+        # Display before text
+        if before_text:
+            ax.text(x_offset, y_pos, before_text + " ", 
+                   ha='left', va='center', fontsize=9,  # INCREASED from 7 to 9
+                   family='monospace', color='black')
+            x_offset += len(before_text + " ") * 0.0049  # Tight spacing
+        
+        # Display peak token in bold red
+        if peak_part:
+            ax.text(x_offset, y_pos, peak_part, 
+                   ha='left', va='center', fontsize=9,  # INCREASED from 7 to 9
+                   family='monospace', color='red', fontweight='bold')
+            x_offset += len(peak_part) * 0.0045
+        
+        # Display after text
+        if after_text:
+            ax.text(x_offset, y_pos, " " + after_text,
+                   ha='left', va='center', fontsize=9,  # INCREASED from 7 to 9
+                   family='monospace', color='black')
+
+
+def _plot_large_token_comparison(ax, real_stats: FeatureStats, synthetic_stats: FeatureStats):
+    """Plot contextual comparisons instead of top token lists"""
+    ax.set_title("Context Around Peak Activations: Real vs Synthetic", fontsize=16, fontweight='bold')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis('off')
     
     # === LEFT SIDE: REAL DATA (RED) ===
     real_x = 0.02
     real_width = 0.46
     
     # Real data background box
-    real_rect = patches.Rectangle((real_x, 0.05), real_width, 0.87, 
+    real_rect = patches.Rectangle((real_x, 0.05), real_width, 0.9, 
                                 linewidth=2, edgecolor='black', 
                                 facecolor=REAL_COLOR, alpha=0.1)
     ax.add_patch(real_rect)
     
     # Real data title
-    safe_matplotlib_text(ax, real_x + real_width/2, 0.88, "Real Data Tokens", 
-                        ha='center', va='center', fontsize=12, fontweight='bold',
-                        bbox=dict(boxstyle='round', facecolor=REAL_COLOR, alpha=0.8))
+    ax.text(real_x + real_width/2, 0.93, "Real Data Context", 
+           ha='center', va='center', fontsize=14, fontweight='bold',
+           bbox=dict(boxstyle='round', facecolor=REAL_COLOR, alpha=0.8))
     
-    # List real tokens
-    _draw_token_list(ax, top_real, real_x + 0.02, 0.82, real_width - 0.04)
+    # Show contextual examples for real data - more examples now
+    if real_stats.examples:
+        _draw_contextual_tokens(ax, real_stats.examples[:10], real_x + 0.02, 0.88, real_width - 0.04)
     
     # === RIGHT SIDE: SYNTHETIC DATA (BLUE) ===
     synth_x = 0.52
     synth_width = 0.46
     
     # Synthetic data background box
-    synth_rect = patches.Rectangle((synth_x, 0.05), synth_width, 0.87, 
+    synth_rect = patches.Rectangle((synth_x, 0.05), synth_width, 0.9, 
                                  linewidth=2, edgecolor='black', 
                                  facecolor=SYNTHETIC_COLOR, alpha=0.1)
     ax.add_patch(synth_rect)
     
     # Synthetic data title
-    safe_matplotlib_text(ax, synth_x + synth_width/2, 0.88, "Synthetic Tokens", 
-                        ha='center', va='center', fontsize=12, fontweight='bold',
-                        bbox=dict(boxstyle='round', facecolor=SYNTHETIC_COLOR, alpha=0.8))
+    ax.text(synth_x + synth_width/2, 0.93, "Synthetic Context", 
+           ha='center', va='center', fontsize=14, fontweight='bold',
+           bbox=dict(boxstyle='round', facecolor=SYNTHETIC_COLOR, alpha=0.8))
     
-    # List synthetic tokens
-    _draw_token_list(ax, top_synthetic, synth_x + 0.02, 0.82, synth_width - 0.04)
-
-
-def _draw_token_list(ax, token_list, start_x, start_y, width):
-    """Draw a clean list of tokens with context when possible"""
-    if not token_list:
-        safe_matplotlib_text(ax, start_x + width/2, start_y - 0.1, "No tokens found", 
-                            ha='center', va='center', fontsize=10)
-        return
-    
-    line_height = 0.04  # Space between lines
-    
-    for i, (activation, token, token_id) in enumerate(token_list):
-        y = start_y - (i * line_height)
-        
-        # Clean and sanitize token display
-        token_display = sanitize_text_for_matplotlib(str(token).strip())
-        if len(token_display) > 15:
-            token_display = token_display[:15] + "..."
-        
-        # Check if this looks like a sub-word token (check original token before sanitization)
-        original_token = str(token).strip()
-        is_subword = (original_token.startswith(('Ä ', 'â–', '##')) or 
-                     len(original_token.strip()) <= 2 or
-                     not original_token.strip().replace('\\', '').replace('$', '').isalnum())
-        
-        # Format the display based on whether it's likely a sub-word
-        rank = i + 1
-        if is_subword:
-            # Show it's a sub-word token
-            text = f"{rank:2d}. \"{token_display}\" (subword ID: {token_id}) - {activation:.3f}"
-        else:
-            # Regular token
-            text = f"{rank:2d}. \"{token_display}\" (ID: {token_id}) - {activation:.3f}"
-        
-        # Color based on rank
-        if rank <= 5:
-            fontweight = 'bold'
-            fontsize = 9
-        elif rank <= 10:
-            fontweight = 'normal'
-            fontsize = 8.5
-        else:
-            fontweight = 'normal'
-            fontsize = 8
-        
-        # Color coding for sub-word vs full tokens
-        if is_subword:
-            color = 'darkblue'  # Darker for sub-word tokens
-        else:
-            color = 'black'     # Black for complete tokens
-        
-        safe_matplotlib_text(ax, start_x, y, text, ha='left', va='center', 
-                           fontsize=fontsize, fontweight=fontweight,
-                           family='monospace', color=color)
-
-
-def _plot_top_tokens(ax, stats: FeatureStats, color: str = 'lightblue'):
-    """Plot top 20 firing tokens as a clean list with sub-word awareness"""
-    ax.set_title("Top 20 Firing Tokens", fontsize=12, fontweight='bold')
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis('off')
-    
-    if not stats.examples:
-        safe_matplotlib_text(ax, 0.5, 0.5, "No token data available", ha='center', va='center',
-                            transform=ax.transAxes, fontsize=10)
-        return
-    
-    # Add explanation
-    safe_matplotlib_text(ax, 0.5, 0.95, "Each entry = one token position. Sub-word tokens in blue.", 
-                        ha='center', va='center', fontsize=9, style='italic',
-                        bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
-    
-    # Collect all activations and corresponding tokens with IDs
-    activation_tokens = []
-    for example in stats.examples:
-        for i, act in enumerate(example.activations):
-            if act > 0 and i < len(example.tokens) and i < len(example.token_ids):
-                activation_tokens.append((act, example.tokens[i], example.token_ids[i]))
-    
-    if not activation_tokens:
-        safe_matplotlib_text(ax, 0.5, 0.5, "No positive activations found", ha='center', va='center',
-                            transform=ax.transAxes, fontsize=10)
-        return
-    
-    # Sort by activation value and get top 20 tokens
-    activation_tokens.sort(key=lambda x: x[0], reverse=True)
-    top_tokens = activation_tokens[:20]
-    
-    # Background box
-    rect = patches.Rectangle((0.05, 0.05), 0.9, 0.85, 
-                           linewidth=2, edgecolor='black', 
-                           facecolor=color, alpha=0.1)
-    ax.add_patch(rect)
-    
-    # Draw the token list
-    _draw_token_list(ax, top_tokens, 0.08, 0.85, 0.84)
+    # Show contextual examples for synthetic data - more examples now
+    if synthetic_stats.examples:
+        _draw_contextual_tokens(ax, synthetic_stats.examples[:10], synth_x + 0.02, 0.88, synth_width - 0.04)
 
 
 def _plot_feature_stats_list(ax, stats: FeatureStats):
@@ -404,8 +332,8 @@ def _plot_feature_stats_list(ax, stats: FeatureStats):
     ax.axis('off')
     
     # Title above the box
-    safe_matplotlib_text(ax, 0.5, 0.95, "Feature Statistics", ha='center', va='center', 
-                        fontsize=12, fontweight='bold')
+    ax.text(0.5, 0.95, "Feature Statistics", ha='center', va='center', 
+           fontsize=12, fontweight='bold')
     
     # Red background box
     rect = patches.Rectangle((0.05, 0.05), 0.9, 0.85, 
@@ -425,8 +353,8 @@ def _plot_feature_stats_list(ax, stats: FeatureStats):
     # Draw each line
     for i, stat_line in enumerate(stats_list):
         y_pos = 0.75 - (i * 0.12)
-        safe_matplotlib_text(ax, 0.1, y_pos, stat_line, ha='left', va='center', 
-                            fontsize=10, fontweight='normal')
+        ax.text(0.1, y_pos, stat_line, ha='left', va='center', 
+               fontsize=10, fontweight='normal')
 
 
 def _plot_activation_histogram(ax, stats: FeatureStats, title: str = "Activation Distribution", color: str = 'skyblue'):
@@ -434,8 +362,8 @@ def _plot_activation_histogram(ax, stats: FeatureStats, title: str = "Activation
     ax.set_title(title, fontsize=12, fontweight='bold')
     
     if not stats.examples:
-        safe_matplotlib_text(ax, 0.5, 0.5, "No activation data", ha='center', va='center',
-                            transform=ax.transAxes, fontsize=10)
+        ax.text(0.5, 0.5, "No activation data", ha='center', va='center',
+               transform=ax.transAxes, fontsize=10)
         return
     
     # Collect all positive activations
@@ -444,8 +372,8 @@ def _plot_activation_histogram(ax, stats: FeatureStats, title: str = "Activation
         all_activations.extend([act for act in example.activations if act > 0])
     
     if not all_activations:
-        safe_matplotlib_text(ax, 0.5, 0.5, "No positive activations", ha='center', va='center',
-                            transform=ax.transAxes, fontsize=10)
+        ax.text(0.5, 0.5, "No positive activations", ha='center', va='center',
+               transform=ax.transAxes, fontsize=10)
         return
     
     # Create histogram
@@ -485,8 +413,8 @@ def _plot_activation_histogram(ax, stats: FeatureStats, title: str = "Activation
     std_val = np.std(all_activations)
     
     stats_text = f"Mean: {mean_val:.3f} | Max: {max_val:.3f} | Std: {std_val:.3f} | Count: {len(all_activations)}"
-    safe_matplotlib_text(ax, 0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
-                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+           verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
 
 def _plot_logit_effects(ax, stats: FeatureStats):
@@ -500,23 +428,23 @@ def _plot_logit_effects(ax, stats: FeatureStats):
     
     # Add boosted tokens (positive effects) - now blue
     for token, effect in stats.top_boosted_tokens[:5]:
-        # Sanitize token for display
-        safe_token = sanitize_text_for_matplotlib(str(token))
-        all_tokens.append(f"+{safe_token}")
+        # Show full token without truncation
+        token_display = token.strip().replace('\n', '\\n').replace('\t', '\\t')
+        all_tokens.append(f"+{token_display}")
         all_effects.append(effect)
         colors.append('steelblue')  # Blue for positive
     
     # Add suppressed tokens (negative effects) - also blue but darker
     for token, effect in stats.top_suppressed_tokens[:5]:
-        # Sanitize token for display
-        safe_token = sanitize_text_for_matplotlib(str(token))
-        all_tokens.append(f"-{safe_token}")
+        # Show full token without truncation
+        token_display = token.strip().replace('\n', '\\n').replace('\t', '\\t')
+        all_tokens.append(f"-{token_display}")
         all_effects.append(effect)
         colors.append('darkblue')  # Darker blue for negative
     
     if not all_tokens:
-        safe_matplotlib_text(ax, 0.5, 0.5, "No logit effects computed", ha='center', va='center',
-                            transform=ax.transAxes, fontsize=10)
+        ax.text(0.5, 0.5, "No logit effects computed", ha='center', va='center',
+               transform=ax.transAxes, fontsize=10)
         ax.axis('off')
         return
     
@@ -524,31 +452,21 @@ def _plot_logit_effects(ax, stats: FeatureStats):
     y_pos = np.arange(len(all_tokens))
     bars = ax.barh(y_pos, all_effects, color=colors, alpha=0.7)
     
-    # Set y-tick labels with sanitized text
-    sanitized_labels = []
-    for token in all_tokens:
-        # Apply additional sanitization for y-tick labels
-        sanitized_token = sanitize_text_for_matplotlib(token)
-        sanitized_labels.append(sanitized_token)
-    
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(sanitized_labels, fontsize=8)
+    ax.set_yticklabels(all_tokens, fontsize=7)  # Smaller font to fit longer tokens
     ax.set_xlabel("Logit Effect", fontsize=10)
     ax.axvline(x=0, color='black', linestyle='-', alpha=0.3)
     
     # Add value labels on bars
     for bar, effect in zip(bars, all_effects):
         width = bar.get_width()
-        label_text = f'{effect:.3f}'
         ax.text(width + (0.01 * max(abs(e) for e in all_effects) if all_effects else 0.01), 
-               bar.get_y() + bar.get_height()/2, label_text,
+               bar.get_y() + bar.get_height()/2, f'{effect:.3f}',
                ha='left' if width >= 0 else 'right', va='center', fontsize=7)
 
 
 def _create_summary_plot(feature_stats: Dict[int, FeatureStats], output_path: Path, analysis_type: str):
     """Create summary plot for multiple features"""
-    configure_matplotlib_safe()
-    
     n_features = len(feature_stats)
     color = REAL_COLOR if analysis_type == "real" else SYNTHETIC_COLOR
     
@@ -617,8 +535,6 @@ def _create_summary_plot(feature_stats: Dict[int, FeatureStats], output_path: Pa
 
 def _create_statistics_plot(feature_stats: Dict[int, FeatureStats], output_path: Path, analysis_type: str):
     """Create overall statistics visualization"""
-    configure_matplotlib_safe()
-    
     color = REAL_COLOR if analysis_type == "real" else SYNTHETIC_COLOR
     
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))

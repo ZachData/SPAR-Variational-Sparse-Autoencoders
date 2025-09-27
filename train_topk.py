@@ -58,7 +58,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "topk-sae-experiments"
+    wandb_project: str = "TinyStories"
     
     # System configuration
     device: str = "cuda"
@@ -143,9 +143,9 @@ class ExperimentRunner:
         
         # Set up data generator
         data_gen = hf_dataset_to_generator(
-            "NeelNanda/c4-code-tokenized-2b",
+            "roneneldan/TinyStories",
             split="train",
-            return_tokens=True
+            return_tokens=False
         )
         
         # Create activation buffer
@@ -209,12 +209,25 @@ class ExperimentRunner:
             "seed": self.config.seed,
         }
         
+    def clean_model_name_for_path(self, model_name: str) -> str:
+        """Clean model name for use in file paths."""
+        # Remove organization prefix (everything before and including the last '/')
+        if '/' in model_name:
+            model_name = model_name.split('/')[-1]
+        
+        # Remove or replace problematic characters
+        model_name = model_name.replace('-deduped', '')
+        model_name = model_name.replace('-', '')  # Remove hyphens if desired
+        
+        return model_name
+
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
+        clean_model_name = self.clean_model_name_for_path(self.config.model_name)
         lr_str = f"_lr{self.config.lr}" if self.config.lr else "_lr_auto"
         
         return (
-            f"TopK_SAE_{self.config.model_name}_"
+            f"TopK_SAE_{clean_model_name}_"
             f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_model=512 for gelu-1l
             f"k{self.config.k}_auxk{self.config.auxk_alpha}"
             f"{lr_str}"
@@ -494,90 +507,35 @@ def create_quick_test_config() -> ExperimentConfig:
         seed=42,
     )
 
-
 def create_full_config() -> ExperimentConfig:
-    """Create a configuration for full training."""
-    return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.hook_resid_post",
-        dict_size_multiple=4.0,
-        k=32,
-        
-        # Full training parameters
-        total_steps=25000,
-        lr=None,  # Auto-computed
-        auxk_alpha=1/32,
-        threshold_beta=0.999,
-        threshold_start_step=1000,
-        
-        # Buffer settings
-        n_ctxs=8000,
-        ctx_len=128,
-        refresh_batch_size=24,
-        out_batch_size=768,
-        
-        # Checkpointing
-        checkpoint_steps=(8000, 16000, 25000),
-        log_steps=100,
-        
-        # Evaluation
-        eval_batch_size=48,
-        eval_n_batches=8,
-        
-        # System settings
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
-        autocast_dtype="bfloat16",
-        seed=42,
-    )
-
-
-def create_high_k_config() -> ExperimentConfig:
-    """Create a configuration with higher k for denser representation."""
-    config = create_full_config()
-    config.k = 64  # Higher sparsity level
-    config.auxk_alpha = 1/16  # Stronger auxiliary loss for higher k
-    return config
-
-
-def create_low_k_config() -> ExperimentConfig:
-    """Create a configuration with lower k for sparser representation."""
-    config = create_full_config()
-    config.k = 16  # Lower sparsity level
-    config.auxk_alpha = 1/64  # Weaker auxiliary loss for lower k
-    return config
-
-
-def create_gpu_10gb_config() -> ExperimentConfig:
     """Create a configuration optimized for 10GB GPU memory - VERY conservative to avoid slowdowns."""
     return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.hook_resid_post", # was blocks.0.mlp.hook_post (mlp)
-        dict_size_multiple=4.0,
-        k=512,
+        model_name = "EleutherAI/pythia-70m-deduped",  # Changed from "gelu-1l"
+        layer = 3,  # Changed from 0 - typical layers for pythia-70m are 3,4
+        hook_name = "blocks.3.hook_resid_post",  # Updated to match layer
+        dict_size_multiple=16.0,
+        k=64,
         
         # Training parameters optimized for 10GB GPU
-        total_steps=20000,
+        total_steps=10001,
         lr=None,  # Auto-computed
         auxk_alpha=1/32,
         threshold_beta=0.999,
-        threshold_start_step=1000,
+        threshold_start_step=500,
         
-        # MUCH more conservative buffer settings to prevent memory accumulation
-        n_ctxs=1500,           # Reduced from 3000 - smaller activation buffer
-        ctx_len=96,            # Reduced from 128 - shorter sequences
-        refresh_batch_size=8,  # Reduced from 16 - smaller refresh batches
-        out_batch_size=128,    # Reduced from 256 - smaller output batches
+        # OPTIMIZED buffer settings for consistent speed
+        n_ctxs=2500,     # Reduced to prevent memory pressure
+        ctx_len=128,
+        refresh_batch_size=12,  # Smaller batches for consistent memory usage
+        out_batch_size=192,     # Smaller output batches
         
-        # More frequent checkpointing for memory cleanup
-        checkpoint_steps=(20000,),
-        log_steps=1000,  # Less frequent logging to reduce overhead
+        # Checkpointing
+        checkpoint_steps=(10000,),
+        log_steps=1000,  # More frequent logging to monitor performance
         
-        # Even smaller evaluation to minimize memory spikes
-        eval_batch_size=16,    # Reduced from 32
-        eval_n_batches=3,      # Reduced from 5
+        # Evaluation - smaller to reduce memory spikes
+        eval_batch_size=24,
+        eval_n_batches=4,
         
         # System settings
         device="cuda" if torch.cuda.is_available() else "cpu",
@@ -585,7 +543,6 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         autocast_dtype="bfloat16",
         seed=42,
     )
-
 
 def main():
     """Main training function with multiple configuration options."""
@@ -597,21 +554,15 @@ def main():
         choices=[
             "quick_test", 
             "full", 
-            "high_k",
-            "low_k",
-            "gpu_10gb"
-        ], 
-        default="quick_test",
-        help="Configuration preset for training"
-    )
+        ],
+        default="full",
+        help="Configuration preset for training",
+        )
     args = parser.parse_args()
     
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "high_k": create_high_k_config,
-        "low_k": create_low_k_config,
-        "gpu_10gb": create_gpu_10gb_config,
     }
     
     config = config_functions[args.config]()
@@ -648,11 +599,7 @@ def main():
 
 # Usage examples:
 # python train_topk.py --config quick_test
-# python train_topk.py --config full
-# python train_topk.py --config high_k    # k=64 for denser representation
-# python train_topk.py --config low_k     # k=16 for sparser representation
-# python train_topk.py --config gpu_10gb  # Optimized for 10GB GPU
-
+# python train_topk.py
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility

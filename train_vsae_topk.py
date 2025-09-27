@@ -39,9 +39,9 @@ from dictionary_learning.trainers.vsae_topk import (
 class ExperimentConfig:
     """Configuration for the entire experiment with enhanced TopK support."""
     # Model configuration
-    model_name: str = "gelu-1l"
-    layer: int = 0
-    hook_name: str = "blocks.0.hook_resid_post"  # FIXED: Residual stream for saebench compatibility
+    model_name: str = "EleutherAI/pythia-70m-deduped"  # Changed from "gelu-1l"
+    layer: int = 3  # Changed from 0 - typical layers for pythia-70m are 3,4
+    hook_name: str = "blocks.3.hook_resid_post"  # Updated to match layer
     dict_size_multiple: float = 4.0
     k_fraction: float = 0.08  # Fraction of dictionary size for Top-K
     
@@ -76,7 +76,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "vsae-topk-experiments"
+    wandb_project: str = "TinyStories"
     
     # System configuration
     device: str = "cuda"
@@ -175,9 +175,9 @@ class ExperimentRunner:
         
         # Set up data generator
         data_gen = hf_dataset_to_generator(
-            "NeelNanda/c4-code-tokenized-2b",
+            "roneneldan/TinyStories",
             split="train",
-            return_tokens=True
+            return_tokens=False
         )
         
         # Create activation buffer - FIXED: Uses d_model for residual stream
@@ -253,14 +253,29 @@ class ExperimentRunner:
             })
         
         return trainer_config
+
+    def clean_model_name_for_path(self, model_name: str) -> str:
+        """Clean model name for use in file paths."""
+        # Remove organization prefix (everything before and including the last '/')
+        if '/' in model_name:
+            model_name = model_name.split('/')[-1]
         
+        # Remove or replace problematic characters
+        model_name = model_name.replace('-deduped', '')
+        model_name = model_name.replace('-', '')  # Remove hyphens if desired
+        
+        return model_name
+
     def get_experiment_name(self) -> str:
         """Generate a descriptive experiment name."""
-        k_value = int(self.config.k_fraction * self.config.dict_size_multiple * 512)  # FIXED: Using d_model=512
+        # Use cleaned model name for path safety
+        clean_model_name = self.clean_model_name_for_path(self.config.model_name)
+        
+        k_value = int(self.config.k_fraction * self.config.dict_size_multiple * 512)  # Assuming d_mlp=2048 for gelu-1l
         var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
         
         return (
-            f"VSAETopK_{self.config.model_name}_"
+            f"VSAETopK_{clean_model_name}_"
             f"d{int(self.config.dict_size_multiple * 512)}_"
             f"k{k_value}_lr{self.config.lr}_kl{self.config.kl_coeff}_"
             f"aux{self.config.auxk_alpha}{var_suffix}"
@@ -549,85 +564,19 @@ def create_quick_test_config() -> ExperimentConfig:
 
 
 def create_full_config() -> ExperimentConfig:
-    """Create a configuration for full training - memory efficient."""
-    return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.hook_resid_post",  # FIXED: Residual stream
-        dict_size_multiple=4.0,
-        k_fraction=0.08,
-        
-        # Full training parameters
-        total_steps=25000,  # Reduced from 50000
-        lr=5e-4,
-        kl_coeff=500.0,
-        auxk_alpha=1/32,
-        
-        # Model settings
-        var_flag=0,  # Start with fixed variance
-        use_april_update_mode=True,
-        threshold_beta=0.999,
-        
-        # MEMORY EFFICIENT buffer settings
-        n_ctxs=8000,   # Reduced from 30000
-        ctx_len=128,
-        refresh_batch_size=24,  # Smaller batches
-        out_batch_size=768,     # Smaller output batches
-        
-        # Checkpointing
-        checkpoint_steps=(8000, 16000, 25000),
-        log_steps=100,
-        
-        # Evaluation
-        eval_batch_size=48,
-        eval_n_batches=8,
-        
-        # System settings
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
-        autocast_dtype="bfloat16",
-        seed=42,
-    )
-
-
-def create_learned_variance_config() -> ExperimentConfig:
-    """Create a configuration for training with learned variance - memory efficient version."""
-    config = create_full_config()
-    
-    # Enable learned variance with adjusted settings
-    config.var_flag = 1
-    config.total_steps = 30000  # Slightly longer for learned variance
-    config.lr = 3e-4  # Slightly lower LR for learned variance stability
-    config.kl_coeff = 300.0  # Lower KL coeff since learned variance provides more flexibility
-    config.auxk_alpha = 1/48  # Slightly lower auxiliary loss for stability
-    
-    # Smaller buffer for learned variance (uses more memory)
-    config.n_ctxs = 5000
-    config.refresh_batch_size = 16
-    config.out_batch_size = 512
-    config.checkpoint_steps = (10000, 20000, 30000)
-    
-    # Smaller evaluation for memory
-    config.eval_batch_size = 32
-    config.eval_n_batches = 5
-    
-    return config
-
-
-def create_gpu_10gb_config() -> ExperimentConfig:
     """Create a configuration optimized for 10GB GPU memory with consistent speed."""
     return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.hook_resid_post",  # FIXED: Residual stream
-        dict_size_multiple=4.0,
-        k_fraction=0.125,
+        model_name = "EleutherAI/pythia-70m-deduped",  # Changed from "gelu-1l"
+        layer = 3,  # Changed from 0 - typical layers for pythia-70m are 3,4
+        hook_name = "blocks.3.hook_resid_post",  # Updated to match layer
+        dict_size_multiple=16.0,
+        k_fraction=0.0625, #0.0078125, 0.015625, 0.03125, 0.0625
         
         # Training parameters optimized for 10GB GPU
-        total_steps=20000,
+        total_steps=10001,
         lr=8e-4,
-        kl_coeff=10.0,
-        auxk_alpha=1/32,
+        kl_coeff=1.0,
+        auxk_alpha=0,
         
         # Model settings
         var_flag=0,  # Fixed variance for memory efficiency
@@ -641,7 +590,7 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         out_batch_size=192,     # Smaller output batches
         
         # Checkpointing
-        checkpoint_steps=(20000,),
+        checkpoint_steps=(10000,),
         log_steps=1000,  # More frequent logging to monitor performance
         
         # Evaluation - smaller to reduce memory spikes
@@ -654,87 +603,6 @@ def create_gpu_10gb_config() -> ExperimentConfig:
         autocast_dtype="bfloat16",
         seed=42,
     )
-
-
-def create_gpu_10gb_learned_var_config() -> ExperimentConfig:
-    """Create a learned variance configuration optimized for 10GB GPU."""
-    config = create_gpu_10gb_config()
-    
-    # Enable learned variance with very conservative settings for speed
-    config.var_flag = 1
-    config.total_steps = 15000  # Shorter for learned variance
-    config.lr = 3e-4  # Lower LR for stability
-    config.kl_coeff = 300.0  # Lower KL coefficient
-    config.auxk_alpha = 1/48  # Lower auxiliary coefficient
-    config.checkpoint_steps = (15000,)
-    
-    # Extra conservative memory settings for learned variance
-    config.n_ctxs = 1800      # Even smaller for learned variance
-    config.refresh_batch_size = 10  # Very small batches
-    config.out_batch_size = 150     # Very small output
-    config.eval_batch_size = 16     # Tiny evaluation batches
-    config.eval_n_batches = 3
-    
-    return config
-
-
-def create_gpu_10gb_speed_optimized_config() -> ExperimentConfig:
-    """Create a configuration optimized for maximum speed on 10GB GPU."""
-    return ExperimentConfig(
-        model_name="gelu-1l",
-        layer=0,
-        hook_name="blocks.0.hook_resid_post",  # FIXED: Residual stream
-        dict_size_multiple=3.0,  # Smaller dictionary for speed
-        k_fraction=0.06,         # Lower K for speed
-        
-        # Training parameters optimized for speed
-        total_steps=25000,       # Can afford more steps with faster training
-        lr=6e-4,                 # Slightly higher LR to compensate for smaller model
-        kl_coeff=400.0,
-        auxk_alpha=1/40,
-        
-        # Model settings
-        var_flag=0,  # Fixed variance for speed
-        use_april_update_mode=True,
-        threshold_beta=0.999,
-        
-        # SPEED-OPTIMIZED buffer settings
-        n_ctxs=2000,     # Smaller buffer for consistent memory usage
-        ctx_len=128,
-        refresh_batch_size=10,   # Very small batches to prevent memory spikes
-        out_batch_size=160,      # Optimized for speed
-        
-        # Checkpointing
-        checkpoint_steps=(25000,),
-        log_steps=40,  # Frequent logging to monitor
-        
-        # Evaluation - minimal to save time
-        eval_batch_size=20,
-        eval_n_batches=3,
-        
-        # System settings
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
-        autocast_dtype="bfloat16",
-        seed=42,
-    )
-
-
-def create_high_k_config() -> ExperimentConfig:
-    """Create a configuration with higher K fraction for comparison."""
-    config = create_full_config()
-    config.k_fraction = 0.15  # 15% instead of 8%
-    config.auxk_alpha = 1/24   # Higher auxiliary loss for higher K
-    return config
-
-
-def create_low_k_config() -> ExperimentConfig:
-    """Create a configuration with lower K fraction for sparsity."""
-    config = create_full_config()
-    config.k_fraction = 0.04  # 4% instead of 8%
-    config.auxk_alpha = 1/48   # Lower auxiliary loss for lower K
-    return config
-
 
 def main():
     """Main training function with multiple configuration options."""
@@ -751,14 +619,8 @@ def main():
         choices=[
             "quick_test", 
             "full", 
-            "learned_variance",
-            "gpu_10gb",
-            "gpu_10gb_learned_var",
-            "gpu_10gb_speed",
-            "high_k",
-            "low_k"
         ], 
-        default="quick_test",
+        default="full",
         help="Configuration preset for single training runs"
     )
     parser.add_argument(
@@ -783,14 +645,7 @@ def main():
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
-        "learned_variance": create_learned_variance_config,
-        "gpu_10gb": create_gpu_10gb_config,
-        "gpu_10gb_learned_var": create_gpu_10gb_learned_var_config,
-        "gpu_10gb_speed": create_gpu_10gb_speed_optimized_config,
-        "high_k": create_high_k_config,
-        "low_k": create_low_k_config,
     }
-    
     config = config_functions[args.config]()
     runner = ExperimentRunner(config)
     results = runner.run_training()
@@ -825,10 +680,8 @@ def main():
 
 # Usage examples:
 # python train_vsae_topk.py --config quick_test
-# python train_vsae_topk.py --config learned_variance  
-# python train_vsae_topk.py --config gpu_10gb          # Balanced 10GB config
-# python train_vsae_topk.py --config gpu_10gb_speed    # Speed-optimized 10GB config
-# python train_vsae_topk.py --config high_k           # For comparison with higher K
+# python train_vsae_topk.py   
+        
 # python train_vsae_topk.py --sweep --wandb-entity your-username
 
 

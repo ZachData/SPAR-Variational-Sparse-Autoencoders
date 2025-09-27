@@ -1,0 +1,167 @@
+{
+  "model_info": {
+    "model_name": "gelu-1l",
+    "hook_name": "blocks.0.hook_resid_post",
+    "dict_size": 2048,
+    "activation_dim": 512,
+    "dictionary_type": "VSAETopK",
+    "kl_coeff": 0.01,
+    "k_value": 256
+  },
+  "processing_info": {
+    "samples_processed": 1000192,
+    "target_samples": 1000000,
+    "k_value": 256,
+    "seed": 42,
+    "ctx_len": 128
+  },
+  "overall_activation_stats": {
+    "count": 256049152,
+    "mean": 1.0972608649368796,
+    "std": 0.7375809307756547,
+    "min": 0.1731240153312683,
+    "max": 41.587242126464844,
+    "sum": 280952713.9895855
+  },
+  "histogram_config": {
+    "activation_bins": 200,
+    "activation_range": [
+      -2.5,
+      2.5
+    ],
+    "log_activation_bins": 100,
+    "log_activation_range": [
+      -6.0,
+      1.0
+    ],
+    "sample_stats_bins": 100,
+    "max_activation_range": [
+      0.0,
+      2.5
+    ],
+    "mean_magnitude_range": [
+      0.0,
+      2.5
+    ],
+    "activation_range_range": [
+      0.0,
+      5.0
+    ],
+    "pos_neg_ratio_range": [
+      0.0,
+      1.0
+    ],
+    "kth_activation_range": [
+      0.0,
+      2.5
+    ],
+    "cv_range": [
+      0.0,
+      3.0
+    ],
+    "margin_range": [
+      0.0,
+      2.5
+    ],
+    "quantile_range": [
+      0.0,
+      2.5
+    ],
+    "effective_features_range": [
+      0,
+      1024
+    ],
+    "usage_bins": 50,
+    "selection_freq_range": [
+      0.0,
+      1.0
+    ],
+    "feature_mean_range": [
+      -2.5,
+      2.5
+    ],
+    "feature_max_range": [
+      0.0,
+      2.5
+    ],
+    "feature_cv_range": [
+      0.0,
+      5.0
+    ],
+    "feature_dominance_range": [
+      1.0,
+      10.0
+    ],
+    "feature_polarity_range": [
+      0.0,
+      1.0
+    ],
+    "feature_index_bins": 100,
+    "activation_2d_bins": 50,
+    "activation_2d_range": [
+      -2.5,
+      2.5
+    ],
+    "position_bins": 50,
+    "feature_index_distribution_bins": 100,
+    "position_distribution_bins": 50
+  },
+  "feature_usage_summary": {
+    "total_features": 2048,
+    "features_used": 1301,
+    "features_never_selected": 747,
+    "mean_selection_frequency": 0.125,
+    "std_selection_frequency": 0.21622573871473894,
+    "most_used_features": [
+      1385,
+      357,
+      767,
+      1933,
+      484,
+      534,
+      1825,
+      1309,
+      682,
+      22,
+      598,
+      1613,
+      348,
+      1015,
+      202,
+      552,
+      689,
+      1035,
+      1993,
+      1307
+    ],
+    "least_used_features": [
+      2047,
+      606,
+      1419,
+      609,
+      610,
+      1418,
+      1417,
+      1415,
+      614,
+      616,
+      617,
+      605,
+      1411,
+      622,
+      1408,
+      624,
+      1407,
+      1405,
+      627,
+      1404
+    ]
+  },
+  "activation_distribution_stats": {
+    "total_activations_processed": 256049152,
+    "mean_activation": 1.0972608649368796,
+    "std_activation": 0.7375809307756547,
+    "min_activation": 0.1731240153312683,
+    "max_activation": 41.587242126464844
+  }
+}

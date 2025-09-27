@@ -1,0 +1,3 @@
+The sentence around the top firing token is incoherent. There are a few possible fixes, but the paper should be written before we dive into that. 
+
+I have learned to never trust artifacts or project files in claude. They will only burn you. And I did not have good enough versioning to solve the problem. 

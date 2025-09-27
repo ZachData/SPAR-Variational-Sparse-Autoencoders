@@ -28,7 +28,8 @@ class DictionaryLearningSAEWrapper(BaseSAE):
         self.model_path = Path(model_path)
         
         # Check if required files exist
-        ae_path = self.model_path / "ae.pt"
+        # ae_path = self.model_path / "ae.pt"``
+        ae_path = self.model_path / "ae_10000.pt"
         config_path = self.model_path / "config.json"
         
         if not ae_path.exists():
@@ -79,11 +80,11 @@ class DictionaryLearningSAEWrapper(BaseSAE):
         super().__init__(
             d_in=d_in,
             d_sae=d_sae,
-            model_name="gelu-1l",  # Fixed for your case
-            hook_layer=0,
+            model_name="pythia-70m-deduped",  # Fixed for your case
+            hook_layer=3,
             device=torch.device(device),
             dtype=torch.bfloat16,
-            hook_name="blocks.0.hook_resid_post"
+            hook_name="blocks.3.hook_resid_post"
         )
         
         # NOW assign the SAE and config after super().__init__()
@@ -147,15 +148,20 @@ class DictionaryLearningSAEWrapper(BaseSAE):
     def encode(self, x):
         """Encode activations to features using the underlying SAE."""
         if hasattr(self.sae, 'encode'):
-            # Handle different SAE types
+            # For VSAETopK, get just the sparse features (first element of tuple)
             if 'VSAETopK' in str(type(self.sae)):
-                # For VSAETopK, get just the sparse features
-                sparse_features, _, _, _ = self.sae.encode(x)
+                result = self.sae.encode(x, training=False)  # Set training=False for evaluation
+                sparse_features = result[0]  # First element is sparse_features
                 return sparse_features
-            elif 'AutoEncoderTopK' in str(type(self.sae)):
-                # For regular Top-K SAE
-                return self.sae.encode(x)
+            # For AutoEncoderTopK, also returns tuple but different structure
+            elif hasattr(self.sae, 'k') and hasattr(self.sae, 'encode'):
+                result = self.sae.encode(x)
+                if isinstance(result, tuple):
+                    return result[0]  # First element should be the sparse features
+                else:
+                    return result
             else:
+                # Standard SAE that returns tensor directly
                 return self.sae.encode(x)
         else:
             raise NotImplementedError("SAE does not have encode method")
@@ -176,7 +182,6 @@ class DictionaryLearningSAEWrapper(BaseSAE):
             return reconstruction, features
         else:
             return reconstruction
-
     @classmethod
     def from_pretrained(cls, model_path: str, device: str = "cuda"):
         """Load a pretrained model."""

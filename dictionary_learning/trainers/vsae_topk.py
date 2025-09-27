@@ -1,27 +1,18 @@
 """
-COMPLETELY FIXED implementation of hybrid Variational Sparse Autoencoder with Top-K activation mechanism.
+Hybrid Variational Sparse Autoencoder with Top-K activation mechanism.
 
-This module combines the variational approach from VSAEIso with the structured sparsity of TopK,
-with MAJOR ARCHITECTURAL FIXES applied:
+This module combines the variational approach from VSAEIso with the structured sparsity of TopK.
+The architecture maintains proper VAE properties while enforcing structured sparsity through
+Top-K selection on latent activations.
 
-CRITICAL FIXES APPLIED:
-1. ✅ REMOVED ReLU FROM LATENT SPACE: Latent variables remain unconstrained throughout VAE computation
-2. ✅ TOP-K ON ABSOLUTE VALUES: Selection based on |z| but preserves original sign for gradients  
-3. ✅ CLEAN VAE + SPARSITY SEPARATION: Clear separation between VAE latent space and sparse selection
-4. ✅ PROPER KL COMPUTATION: KL computed on actual latent variables being used, not just encoder means
-5. ✅ FIXED AUXILIARY LOSS: Uses sparse features and full latent space appropriately
-6. ✅ REMOVED CONFLICTING MECHANISMS: No more threshold filtering competing with Top-K
-7. ✅ CONSISTENT REPARAMETERIZATION: Always use reparameterization during training
-8. ✅ BETTER GRADIENT FLOW: No ReLU interference with reparameterization gradients
-9. ✅ ENHANCED DIAGNOSTICS: Detailed monitoring of both VAE and sparsity components
-10. ✅ ROBUST MODEL LOADING: Better error handling and auto-detection
+Key architectural principles:
+- Latent variables remain unconstrained throughout VAE computation
+- Top-K selection based on absolute values while preserving original sign for gradients  
+- Clean separation between VAE latent space and sparse selection
+- KL computation on actual latent variables being used
+- Auxiliary loss mechanism for dead feature resurrection
 
-KEY ARCHITECTURAL INSIGHT:
-The original implementation tried to apply ReLU before Top-K, which broke VAE properties.
-The fixed version applies Top-K selection on absolute values |z| but uses original signed 
-values z for reconstruction, preserving both VAE gradients and structured sparsity.
-
-FLOW: x → encoder → μ,σ² → reparameterize → z → Top-K(|z|) → sparse_z → decode → x̂
+Flow: x → encoder → μ,σ² → reparameterize → z → Top-K(|z|) → sparse_z → decode → x̂
                                                 ↳ KL(z)     ↳ L2(x,x̂)
 """
 
@@ -120,16 +111,17 @@ class VSAETopKConfig:
 
 class VSAETopK(Dictionary, nn.Module):
     """
-    COMPLETELY FIXED hybrid dictionary that combines the variational approach from VSAEIso 
-    with the structured Top-K sparsity mechanism.
+    Hybrid dictionary that combines variational autoencoders with Top-K sparsity mechanism.
     
-    Key improvements:
+    This architecture maintains proper VAE properties while enforcing structured sparsity.
+    The key insight is to apply Top-K selection on absolute values of latent variables
+    while preserving the original signed values for gradient computation.
+    
+    Key features:
     - Unconstrained VAE latent space throughout computation
-    - Top-K selection on absolute values |z| preserves original sign and gradients
+    - Top-K selection preserves gradient flow
     - Clean separation between VAE properties and sparsity constraints
-    - Proper KL computation on actual latent variables being used
     - Enhanced numerical stability and dtype handling
-    - Better weight initialization and bias management
     """
 
     def __init__(self, config: VSAETopKConfig):
@@ -240,13 +232,11 @@ class VSAETopK(Dictionary, nn.Module):
         training: bool = True
     ) -> Tuple[torch.Tensor, ...]:
         """
-        COMPLETELY FIXED encode method following proper VAE + Top-K principles.
+        Encode input through VAE latent space with Top-K sparsity selection.
         
-        Key improvements:
-        - Clean separation between VAE latent space and sparse selection
-        - Top-K applied on absolute values to preserve gradient flow
-        - No ReLU interference with reparameterization
-        - Consistent latent space interpretation
+        The encoding process maintains proper VAE properties by keeping latent variables
+        unconstrained throughout computation. Top-K selection is applied on absolute values
+        to preserve gradient flow while enforcing structured sparsity.
         
         Args:
             x: Input activation tensor
@@ -258,28 +248,28 @@ class VSAETopK(Dictionary, nn.Module):
         """
         x_processed = self._preprocess_input(x)
         
-        # Step 1: Encode to latent distribution parameters (unconstrained)
-        mu = self.encoder(x_processed)  # FIXED: Unconstrained mean (no ReLU)
-        mu = F.relu(mu)
+        # Step 1: Encode to latent distribution parameters
+        mu = self.encoder(x_processed)
+        mu = F.relu(mu)  # Ensure positive mean for stability
         
         log_var = None
         if self.var_flag == 1:
-            log_var = self.var_encoder(x_processed)  # FIXED: Direct log variance encoding
+            log_var = self.var_encoder(x_processed)
         
         # Step 2: Sample from latent distribution (reparameterization trick)
         if training and self.var_flag == 1 and log_var is not None:
-            z = self.reparameterize(mu, log_var)  # Sampled latents (unconstrained)
+            z = self.reparameterize(mu, log_var)
         else:
             z = mu  # Deterministic latents
             
-        # Step 3: Apply Top-K sparsity on absolute values (preserves gradients)
-        # KEY INSIGHT: select based on magnitude, but keep original values
-        z_abs = torch.abs(z)  # Use absolute values for selection
+        # Step 3: Apply Top-K sparsity while preserving gradients
+        # Key insight: select based on magnitude, but keep original values
+        z_abs = torch.abs(z)
         top_vals_abs, top_indices = z_abs.topk(self.k.item(), sorted=False, dim=-1)
         
         # Step 4: Create sparse feature vector using original latent values
         sparse_features = torch.zeros_like(z)
-        # CRITICAL: Gather the original values (not absolute values) for the selected indices
+        # Gather the original values (not absolute values) for the selected indices
         selected_vals = torch.gather(z, dim=-1, index=top_indices)
         sparse_features = sparse_features.scatter_(dim=-1, index=top_indices, src=selected_vals)
         
@@ -290,29 +280,26 @@ class VSAETopK(Dictionary, nn.Module):
 
     def reparameterize(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
         """
-        FIXED reparameterization trick with consistent log_var = log(σ²) interpretation.
+        Reparameterization trick with consistent log_var = log(σ²) interpretation.
         
         Args:
-            mu: Mean of latent distribution (unconstrained)
+            mu: Mean of latent distribution
             log_var: Log variance = log(σ²) (None for fixed variance)
             
         Returns:
-            z: Sampled latent features (unconstrained)
+            z: Sampled latent features
         """
         if log_var is None or self.var_flag == 0:
             return mu
         
-        # FIXED: Conservative clamping range
-        # log_var ∈ [-6, 2] means σ² ∈ [0.002, 7.4] - reasonable range
+        # Conservative clamping range: log_var ∈ [-6, 2] means σ² ∈ [0.002, 7.4]
         log_var_clamped = torch.clamp(log_var, min=-6.0, max=2.0)
         
         # Since log_var = log(σ²), we have σ = sqrt(exp(log_var)) = sqrt(σ²)
         std = torch.sqrt(torch.exp(log_var_clamped))
         
-        # Sample noise
+        # Sample noise and reparameterize
         eps = torch.randn_like(std)
-        
-        # Reparameterize
         z = mu + eps * std
         
         return z.to(dtype=mu.dtype)
@@ -337,7 +324,7 @@ class VSAETopK(Dictionary, nn.Module):
 
     def forward(self, x: torch.Tensor, output_features: bool = False, training: bool = True):
         """
-        FIXED forward pass with cleaner VAE + Top-K architecture.
+        Forward pass through the hybrid VAE + Top-K architecture.
         
         Args:
             x: Input tensor
@@ -520,7 +507,7 @@ class VSAETopK(Dictionary, nn.Module):
         var_flag: Optional[int] = None
     ) -> 'VSAETopK':
         """
-        FIXED model loading with robust error handling and auto-detection.
+        Load a pretrained model with robust error handling and auto-detection.
         
         Args:
             path: Path to the saved model
@@ -632,7 +619,7 @@ class VSAETopK(Dictionary, nn.Module):
 
 @dataclass 
 class VSAETopKTrainingConfig:
-    """FIXED training configuration with proper scaling separation and cleaner architecture."""
+    """Training configuration with proper scaling separation and clean architecture."""
     steps: int
     lr: float = 5e-4
     kl_coeff: float = 500.0
@@ -693,15 +680,15 @@ class DeadFeatureTracker:
 
 class VSAETopKTrainer(SAETrainer):
     """
-    COMPLETELY FIXED trainer for the hybrid VSAETopK model with all improvements applied.
+    Trainer for the hybrid VSAETopK model with improved stability and monitoring.
     
-    Key fixes:
+    Features:
     - Separate KL and sparsity annealing schedules
     - Clean KL divergence computation on actual latent variables
     - Proper reparameterization trick handling
     - Enhanced numerical stability and dtype handling
     - Better gradient clipping and optimization
-    - Detailed KL and sparsity diagnostics and monitoring
+    - Detailed KL and sparsity diagnostics
     """
     
     def __init__(
@@ -724,7 +711,7 @@ class VSAETopKTrainer(SAETrainer):
         var_flag: Optional[int] = None,
         use_april_update_mode: Optional[bool] = None,
         device: Optional[str] = None,
-        **kwargs  # Catch any other parameters (including removed threshold params)
+        **kwargs  # Catch any other parameters
     ):
         super().__init__(seed)
         
@@ -803,7 +790,7 @@ class VSAETopKTrainer(SAETrainer):
             training_config.steps, 
             training_config.sparsity_warmup_steps
         )
-        # FIXED: Separate KL annealing function
+        # Separate KL annealing function
         self.kl_warmup_fn = get_kl_warmup_fn(
             training_config.steps,
             training_config.kl_warmup_steps
@@ -811,7 +798,7 @@ class VSAETopKTrainer(SAETrainer):
 
     def _compute_kl_loss(self, latent_z: torch.Tensor, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
         """
-        FIXED KL divergence computation using actual latent variables.
+        KL divergence computation using actual latent variables.
         
         Computes KL[q(z|x) || p(z)] where q(z|x) = N(μ, σ²) and p(z) = N(0, I)
         
@@ -849,7 +836,7 @@ class VSAETopKTrainer(SAETrainer):
 
     def get_auxiliary_loss(self, residual_BD: torch.Tensor, sparse_features_BF: torch.Tensor, latent_z_BF: torch.Tensor):
         """
-        FIXED auxiliary loss computation using actual sparse features.
+        Auxiliary loss computation using actual sparse features.
         
         Args:
             residual_BD: Reconstruction residual (x - x_hat)
@@ -866,7 +853,7 @@ class VSAETopKTrainer(SAETrainer):
         if self.dead_features > 0:
             k_aux = min(self.top_k_aux, self.dead_features)
 
-            # Select auxiliary features from the FULL latent space, not just positive values
+            # Select auxiliary features from the full latent space
             # This allows dead features to potentially be resurrected with negative values
             auxk_latents = torch.where(dead_features[None], torch.abs(latent_z_BF), -torch.inf)
 
@@ -880,7 +867,7 @@ class VSAETopKTrainer(SAETrainer):
             auxk_buffer_BF = torch.zeros_like(latent_z_BF)
             auxk_acts_BF = auxk_buffer_BF.scatter_(dim=-1, index=auxk_indices, src=auxk_original_vals)
 
-            # Decode auxiliary features directly (without bias to match gradient computation)
+            # Decode auxiliary features directly
             x_reconstruct_aux = self.ae.decoder(auxk_acts_BF)
             l2_loss_aux = (
                 (residual_BD.float() - x_reconstruct_aux.float()).pow(2).sum(dim=-1).mean()
@@ -900,13 +887,7 @@ class VSAETopKTrainer(SAETrainer):
         
     def loss(self, x: torch.Tensor, step: int, logging: bool = False):
         """
-        COMPLETELY FIXED loss computation with proper VAE + Top-K architecture.
-        
-        Key improvements:
-        - Uses actual latent variables for KL computation
-        - Clean separation of VAE and sparsity components
-        - Proper auxiliary loss on sparse features
-        - Enhanced diagnostics for both VAE and sparsity components
+        Loss computation with proper VAE + Top-K architecture.
         
         The loss includes:
         1. Reconstruction error (MSE) 
@@ -922,7 +903,7 @@ class VSAETopKTrainer(SAETrainer):
         # Ensure input matches model dtype
         x = x.to(dtype=self.ae.encoder.weight.dtype)
 
-        # FIXED: Use the new cleaner encode method
+        # Use the cleaner encode method
         sparse_features, latent_z, mu, log_var, top_indices, selected_vals = self.ae.encode(
             x, return_topk=True, training=self.ae.training
         )
@@ -936,11 +917,11 @@ class VSAETopKTrainer(SAETrainer):
         # Update the effective L0 (should be exactly K)
         self.effective_l0 = self.ae.k.item()
         
-        # FIXED: KL divergence loss using actual latent variables
+        # KL divergence loss using actual latent variables
         kl_loss = self._compute_kl_loss(latent_z, mu, log_var)
         kl_loss = kl_loss.to(dtype=original_dtype)
         
-        # FIXED: Auxiliary loss using sparse features and full latent space
+        # Auxiliary loss using sparse features and full latent space
         auxk_loss = self.get_auxiliary_loss(residual.detach(), sparse_features, latent_z) if self.training_config.auxk_alpha > 0 else 0
         
         # Total loss with proper scaling
@@ -987,7 +968,7 @@ class VSAETopKTrainer(SAETrainer):
             )
         
     def update(self, step: int, activations: torch.Tensor):
-        """FIXED training update with improved stability and cleaner architecture."""
+        """Training update with improved stability and clean architecture."""
         activations = activations.to(self.device)
         
         # Initialize decoder bias with geometric median on first step
@@ -1052,15 +1033,14 @@ class VSAETopKTrainer(SAETrainer):
             'wandb_name': self.wandb_name,
             'submodule_name': self.submodule_name,
             'seed': self.seed,
-            # Architecture notes
-            'architecture_version': 'fixed_vae_topk_v2',
-            'fixes_applied': [
+            # Architecture metadata
+            'architecture_version': 'vae_topk_v2',
+            'key_features': [
                 'unconstrained_latent_space',
                 'topk_on_absolute_values', 
                 'proper_kl_computation',
                 'clean_vae_sparsity_separation',
-                'fixed_auxiliary_loss',
-                'removed_threshold_mechanism',
+                'auxiliary_loss_mechanism',
                 'enhanced_gradient_flow'
             ]
         }

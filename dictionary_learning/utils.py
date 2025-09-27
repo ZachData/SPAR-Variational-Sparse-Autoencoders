@@ -18,6 +18,7 @@ def hf_dataset_to_generator(dataset_name, split="train", streaming=False, return
 
     def gen():
         for x in iter(dataset):
+            # print(x)
             if return_tokens:
                 if "tokens" in x:
                     # print({k: type(v) for k, v in x.items()})
