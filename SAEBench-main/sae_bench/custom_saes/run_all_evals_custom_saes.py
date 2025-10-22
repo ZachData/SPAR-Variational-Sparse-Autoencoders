@@ -200,14 +200,19 @@ def load_your_trained_saes(experiments_dir: str = "../../../experiments") -> lis
     
     # List of your trained models (update these names to match your actual trained models)
     model_names = [
-        'VSAETopK_pythia70m_d8192_k64_lr0.0008_kl1.0_aux0_fixed_var',
-        'VSAETopK_pythia70m_d8192_k128_lr0.0008_kl1.0_aux0_fixed_var',
-        'VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var',
-        'VSAETopK_pythia70m_d8192_k512_lr0.0008_kl1.0_aux0_fixed_var',
-        'TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto',
-        'TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto',
-        'TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto',
-        'TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto',
+        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_2.0_lr_auto',
+        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.5_lr_auto',
+        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.1_lr_auto',
+        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.0_lr_auto',
+        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.01_lr_auto',
+        # 'VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.5_aux2_fixed_var', #best was kl 0.1, aux 1/2
+        # 'VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.5_aux2_fixed_var',
+        # 'VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.5_aux2_fixed_var',
+        # 'VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.5_aux2_fixed_var',
+        # 'TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto',
+        # 'TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto',
+        # 'TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto',
+        # 'TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto',
     ]
     
     for model_name in model_names:

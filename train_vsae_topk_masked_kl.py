@@ -2,7 +2,7 @@
 Enhanced training script for VSAETopK with sweep functionality and optimized configurations.
 
 Key improvements:
-- Hyperparameter sweep support using BaseSweepRunner
+# - Hyperparameter sweep support using BaseSweepRunner
 - Multiple configuration presets including 10GB GPU optimized settings
 - Enhanced evaluation and logging
 - Better memory management and error handling
@@ -20,15 +20,13 @@ from typing import Optional, Dict, Any
 import multiprocessing
 
 from transformer_lens import HookedTransformer
-from dictionary_learning.base_sweep import BaseSweepRunner
+# from dictionary_learning.base_sweep import BaseSweepRunner
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
 
-# Import our VSAETopK implementations
-from dictionary_learning.trainers.vsae_topk import (
-    VSAETopK, 
+from dictionary_learning.trainers.vsae_topk_masked_kl import (
     VSAETopKTrainer,
     VSAETopKConfig,
     VSAETopKTrainingConfig
@@ -76,7 +74,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "TinyStories"
+    wandb_project: str = "vsae_topk_masked"
     
     # System configuration
     device: str = "cuda"
@@ -142,7 +140,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'vsae_topk_training.log'),
+                logging.FileHandler(log_dir / 'vsae_topk_masked_kl_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -241,16 +239,16 @@ class ExperimentRunner:
             "lm_name": self.config.model_name,
             "wandb_name": self.get_experiment_name(),
             "submodule_name": self.config.hook_name,
-            "seed": self.config.seed,
+            # "seed": self.config.seed,
         }
         
-        # Add threshold parameters if the trainer accepts them
-        if hasattr(VSAETopKTrainer, '__init__'):
-            # Add threshold parameters as separate config items
-            trainer_config.update({
-                "threshold_beta": self.config.threshold_beta,
-                "threshold_start_step": self.config.threshold_start_step,
-            })
+        # # Add threshold parameters if the trainer accepts them
+        # if hasattr(VSAETopKTrainer, '__init__'):
+        #     # Add threshold parameters as separate config items
+        #     trainer_config.update({
+        #         "threshold_beta": self.config.threshold_beta,
+        #         "threshold_start_step": self.config.threshold_start_step,
+        #     })
         
         return trainer_config
 
@@ -272,13 +270,13 @@ class ExperimentRunner:
         clean_model_name = self.clean_model_name_for_path(self.config.model_name)
         
         k_value = int(self.config.k_fraction * self.config.dict_size_multiple * 512)  # Assuming d_mlp=2048 for gelu-1l
-        var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
+        # var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
         
         return (
-            f"VSAETopK_{clean_model_name}_"
+            f"MaskedVSAETopK_{clean_model_name}_"
             f"d{int(self.config.dict_size_multiple * 512)}_"
             f"k{k_value}_lr{self.config.lr}_kl{self.config.kl_coeff}_"
-            f"aux{self.config.auxk_alpha}{var_suffix}"
+            f"aux{self.config.auxk_alpha}"
         )
         
     def get_save_directory(self) -> Path:
@@ -336,7 +334,7 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "vsae_topk",
+                    "experiment_type": "vsae_topk_masked_kl",
                     "dict_size_multiple": self.config.dict_size_multiple,
                     "k_fraction": self.config.k_fraction,
                     "var_flag": self.config.var_flag,
@@ -366,11 +364,19 @@ class ExperimentRunner:
         self.logger.info("Evaluating trained model...")
         
         try:
-            # Load the trained model
             from dictionary_learning.utils import load_dictionary
+            import json
             
             model_path = save_dir / "trainer_0"
             vsae, config = load_dictionary(str(model_path), device=self.config.device)
+            
+            # CRITICAL: Scale biases back down since buffer normalizes activations
+            # The saved model has biases scaled UP by norm_factor to work with unnormalized data
+            # But our buffer divides by norm_factor, so we need to undo the bias scaling
+            norm_factor = config.get('norm_factor', None)
+            if norm_factor is not None and hasattr(vsae, 'scale_biases'):
+                self.logger.info(f"Scaling biases by 1/{norm_factor:.4f} for evaluation with normalized activations")
+                vsae.scale_biases(1.0 / norm_factor)
             
             # Run evaluation
             eval_results = evaluate(
@@ -382,157 +388,65 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            # Add VSAETopK-specific diagnostics if possible
+            # Add VSAETopK-specific diagnostics
             try:
-                # Get a sample batch for TopK diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
-                if hasattr(vsae, 'get_topk_diagnostics'):
-                    topk_diagnostics = vsae.get_topk_diagnostics(sample_batch.to(self.config.device))
+                # Normalize if needed
+                if norm_factor is not None:
+                    sample_batch = sample_batch / norm_factor
                     
-                    # Add to eval results
+                sample_batch = sample_batch.to(self.config.device)
+                
+                if hasattr(vsae, 'get_topk_analysis'):
+                    topk_diagnostics = vsae.get_topk_analysis(sample_batch)
                     for key, value in topk_diagnostics.items():
-                        eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
+                        eval_results[f"final_{key}"] = value if not torch.is_tensor(value) else value.item()
+                
+                if hasattr(vsae, 'get_kl_diagnostics'):
+                    kl_diagnostics = vsae.get_kl_diagnostics(sample_batch)
+                    for key, value in kl_diagnostics.items():
+                        eval_results[f"final_{key}"] = value if not torch.is_tensor(value) else value.item()
                         
             except Exception as e:
-                self.logger.warning(f"Could not compute TopK diagnostics: {e}")
+                self.logger.warning(f"Could not compute TopK/KL diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
             for metric, value in eval_results.items():
-                if not torch.isnan(torch.tensor(value)) and not torch.isinf(torch.tensor(value)):
-                    self.logger.info(f"  {metric}: {value:.4f}")
+                if isinstance(value, (int, float)):
+                    if not (math.isnan(value) or math.isinf(value)):
+                        self.logger.info(f"  {metric}: {value:.4f}")
+                    else:
+                        self.logger.warning(f"  {metric}: {value} (invalid)")
                 else:
-                    self.logger.warning(f"  {metric}: {value} (invalid)")
-                
+                    self.logger.info(f"  {metric}: {value}")
+            
             # Save evaluation results
             eval_path = save_dir / "evaluation_results.json"
-            import json
+            json_results = {}
+            for k, v in eval_results.items():
+                if torch.is_tensor(v):
+                    json_results[k] = v.item()
+                elif isinstance(v, (int, float)):
+                    json_results[k] = float(v)
+                else:
+                    json_results[k] = str(v)
+            
             with open(eval_path, 'w') as f:
-                # Convert any tensors to floats for JSON serialization
-                json_results = {}
-                for k, v in eval_results.items():
-                    if torch.is_tensor(v):
-                        json_results[k] = v.item()
-                    else:
-                        json_results[k] = float(v) if isinstance(v, (int, float)) else str(v)
                 json.dump(json_results, f, indent=2)
-                
+            
+            self.logger.info(f"Saved evaluation results to {eval_path}")
+            
             return eval_results
             
         except Exception as e:
             self.logger.error(f"Evaluation failed: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return {}
-
-
-class VSAETopKSweepRunner(BaseSweepRunner):
-    """
-    Hyperparameter sweep runner for VSAETopK trainer.
-    
-    Optimizes TopK-specific parameters like k_fraction and auxk_alpha.
-    """
-    
-    def __init__(self, wandb_entity: str):
-        """Initialize VSAETopK sweep runner."""
-        super().__init__(trainer_name="vsae-topk", wandb_entity=wandb_entity)
-    
-    def get_sweep_config(self) -> dict:
-        """
-        Define the wandb sweep configuration for VSAETopK.
-        
-        Focuses on TopK-specific parameters.
-        """
-        return {
-            'method': 'bayes',
-            'metric': {
-                'goal': 'minimize', 
-                'name': 'mse_loss'
-            },
-            'parameters': {
-                # Learning rate: log-uniform distribution
-                'lr': {
-                    'distribution': 'log_uniform_values',
-                    'min': 1e-5,
-                    'max': 1e-2
-                },
-                # KL coefficient: uniform distribution
-                'kl_coeff': {
-                    'distribution': 'uniform',
-                    'min': 100.0,
-                    'max': 1000.0
-                },
-                # K fraction: what fraction of dictionary to keep active
-                'k_fraction': {
-                    'distribution': 'uniform',
-                    'min': 0.05,  # 5% of dictionary
-                    'max': 0.15   # 15% of dictionary
-                },
-                # Auxiliary TopK loss coefficient
-                'auxk_alpha': {
-                    'distribution': 'log_uniform_values',
-                    'min': 1/64,  # 0.015625
-                    'max': 1/8    # 0.125
-                },
-                # Dictionary size multiplier: discrete choices
-                'dict_size_multiple': {
-                    'values': [4.0, 8.0]
-                },
-                # Variance flag: discrete choice
-                'var_flag': {
-                    'values': [0, 1]
-                },
-                # Note: Removed threshold_beta for now - may not be supported in current implementation
-            }
-        }
-    
-    def get_run_name(self, sweep_params: dict) -> str:
-        """
-        Generate descriptive run name from sweep parameters.
-        """
-        lr_str = f"{sweep_params['lr']:.1e}".replace('-0', '-')
-        kl_str = f"{int(sweep_params['kl_coeff'])}"
-        k_str = f"k{sweep_params['k_fraction']:.3f}"
-        aux_str = f"aux{sweep_params['auxk_alpha']:.3f}"
-        dict_str = f"{sweep_params['dict_size_multiple']:.0f}x"
-        var_str = f"var{sweep_params['var_flag']}"
-        
-        return f"TOPK_lr{lr_str}_kl{kl_str}_{k_str}_{aux_str}_d{dict_str}_{var_str}"
-    
-    def create_experiment_config(self, sweep_params: dict) -> ExperimentConfig:
-        """
-        Create an ExperimentConfig from wandb sweep parameters.
-        """
-        # Start with the quick test config
-        config = create_quick_test_config()
-        
-        # Override with sweep parameters
-        config.lr = sweep_params['lr']
-        config.kl_coeff = sweep_params['kl_coeff']
-        config.k_fraction = sweep_params['k_fraction']
-        config.auxk_alpha = sweep_params['auxk_alpha']
-        config.dict_size_multiple = sweep_params['dict_size_multiple']
-        config.var_flag = sweep_params['var_flag']
-        # Note: threshold_beta removed from sweep for now
-        
-        # Adjust settings for sweep runs
-        config.total_steps = 15000  # Moderate length for sweep
-        config.checkpoint_steps = ()
-        config.log_steps = 250
-        
-        # Smaller buffer for memory efficiency
-        config.n_ctxs = 1000
-        config.refresh_batch_size = 16
-        config.out_batch_size = 256
-        
-        # Use fixed project name for sweeps
-        config.wandb_project = "vsae-topk-sweeps"
-        config.save_dir = "./temp_sweep_run"
-        config.use_wandb = False  # Sweep handles wandb
-        
-        return config
-
 
 def create_quick_test_config() -> ExperimentConfig:
     """Create a configuration for quick testing."""
@@ -575,8 +489,8 @@ def create_full_config() -> ExperimentConfig:
         # Training parameters optimized for 10GB GPU
         total_steps=10000,
         lr=8e-4,
-        kl_coeff=0.5,
-        auxk_alpha=1/2,
+        kl_coeff=1.0,
+        auxk_alpha=1/32,
         
         # Model settings
         var_flag=0,  # Fixed variance for memory efficiency
@@ -608,12 +522,7 @@ def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="VSAETopK Training and Hyperparameter Sweeps")
-    parser.add_argument(
-        "--sweep", 
-        action="store_true", 
-        help="Run hyperparameter sweep instead of single training"
-    )
+    parser = argparse.ArgumentParser(description="VSAETopK Training")
     parser.add_argument(
         "--config", 
         choices=[
@@ -630,16 +539,6 @@ def main():
         help="WandB entity/username for sweep logging"
     )
     args = parser.parse_args()
-    
-    if args.sweep:
-        # Run hyperparameter sweep
-        print("Starting hyperparameter sweep for VSAETopK...")
-        print(f"Project: vsae-topk-sweeps")
-        print(f"Entity: {args.wandb_entity}")
-        
-        sweep_runner = VSAETopKSweepRunner(wandb_entity=args.wandb_entity)
-        sweep_runner.run_sweep()
-        return
     
     # Regular single training run
     config_functions = {
@@ -679,10 +578,8 @@ def main():
 
 
 # Usage examples:
-# python train_vsae_topk.py --config quick_test
-# python train_vsae_topk.py   
-        
-# python train_vsae_topk.py --sweep --wandb-entity your-username
+# python train_vsae_topk_masked_kl.py --config quick_test
+# python train_vsae_topk_masked_kl.py   
 
 
 if __name__ == "__main__":

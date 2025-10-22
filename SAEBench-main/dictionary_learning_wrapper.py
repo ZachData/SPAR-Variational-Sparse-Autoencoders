@@ -29,7 +29,7 @@ class DictionaryLearningSAEWrapper(BaseSAE):
         
         # Check if required files exist
         # ae_path = self.model_path / "ae.pt"``
-        ae_path = self.model_path / "ae_10000.pt"
+        ae_path = self.model_path / "ae.pt"
         config_path = self.model_path / "config.json"
         
         if not ae_path.exists():

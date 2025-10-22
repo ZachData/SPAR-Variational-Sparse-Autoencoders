@@ -23,7 +23,7 @@ from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.top_k import TopKTrainer, AutoEncoderTopK, TopKConfig, TopKTrainingConfig
+from dictionary_learning.trainers.top_k_with_feature_penalty import TopKTrainer, AutoEncoderTopK, TopKConfig, TopKTrainingConfig #changed! loss term added!
 
 
 @dataclass
@@ -41,6 +41,7 @@ class ExperimentConfig:
     lr: Optional[float] = None  # Auto-computed if None
     warmup_steps: Optional[int] = None  # Will be auto-computed if None
     auxk_alpha: float = 1/32  # Dead feature resurrection coefficient
+    # feature_penalty_alpha: float = 0.01  # L2 penalty on features (KL-style)
     threshold_beta: float = 0.999  # Threshold EMA coefficient
     threshold_start_step: int = 1000  # When to start threshold updates
     
@@ -58,7 +59,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "TinyStories"
+    wandb_project: str = "top_k_with_kl_penalty"
     
     # System configuration
     device: str = "cuda"
@@ -143,9 +144,9 @@ class ExperimentRunner:
         
         # Set up data generator
         data_gen = hf_dataset_to_generator(
-            "roneneldan/TinyStories",
+            "NeelNanda/c4-code-tokenized-2b",
             split="train",
-            return_tokens=False
+            return_tokens=True
         )
         
         # Create activation buffer
@@ -191,6 +192,7 @@ class ExperimentRunner:
             steps=self.config.total_steps,
             lr=self.config.lr,  # Will be auto-computed if None
             auxk_alpha=self.config.auxk_alpha,
+            # feature_penalty_alpha=self.config.feature_penalty_alpha,
             threshold_beta=self.config.threshold_beta,
             threshold_start_step=self.config.threshold_start_step,
             warmup_steps=warmup_steps,  # Explicitly override the problematic default
@@ -227,9 +229,10 @@ class ExperimentRunner:
         lr_str = f"_lr{self.config.lr}" if self.config.lr else "_lr_auto"
         
         return (
-            f"TopK_SAE_{clean_model_name}_"
+            f"TopK_KL_{clean_model_name}_"
             f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_model=512 for gelu-1l
-            f"k{self.config.k}_auxk{self.config.auxk_alpha}"
+            f"k{self.config.k}_auxk{self.config.auxk_alpha}_"
+            f"lossadd_0.01"
             f"{lr_str}"
         )
         
@@ -489,6 +492,7 @@ def create_quick_test_config() -> ExperimentConfig:
         # Test parameters
         total_steps=1000,
         warmup_steps=50,  # Explicitly set for quick test
+        # feature_penalty_alpha=0.01,
         threshold_start_step=100,  # Also reduce this for quick test
         checkpoint_steps=list(),
         log_steps=50,
@@ -517,9 +521,10 @@ def create_full_config() -> ExperimentConfig:
         k=64,
         
         # Training parameters optimized for 10GB GPU
-        total_steps=10001,
+        total_steps=10000,
         lr=None,  # Auto-computed
-        auxk_alpha=1/32,
+        auxk_alpha=1/2,
+        # feature_penalty_alpha=0.0, #DELETE or set to 0 after kl test
         threshold_beta=0.999,
         threshold_start_step=500,
         

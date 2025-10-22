@@ -550,8 +550,10 @@ class TopKTrainer(SAETrainer):
         auxk_loss = t.tensor(0.0, device=x.device)
         if self.training_config.auxk_alpha > 0:
             auxk_loss = self.get_auxiliary_loss(e.detach(), post_relu_acts_BF)
+        
+        activation_cost = 0.01 * post_relu_acts_BF.pow(2).sum(dim=-1).mean() #added loss term
 
-        total_loss = l2_loss + self.training_config.auxk_alpha * auxk_loss
+        total_loss = l2_loss + self.training_config.auxk_alpha * auxk_loss + activation_cost
 
         if not logging:
             return total_loss

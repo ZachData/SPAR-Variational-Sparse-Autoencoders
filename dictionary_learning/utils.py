@@ -18,10 +18,8 @@ def hf_dataset_to_generator(dataset_name, split="train", streaming=False, return
 
     def gen():
         for x in iter(dataset):
-            # print(x)
             if return_tokens:
                 if "tokens" in x:
-                    # print({k: type(v) for k, v in x.items()})
                     yield {"tokens": x["tokens"]}
                 else:
                     raise KeyError("'tokens' not found.")
@@ -347,6 +345,32 @@ def load_dictionary(base_path: str, device: str) -> tuple:
         
         k = config["trainer"]["k"]
         dictionary = VSAETopK.from_pretrained(ae_path, device=device)
+    elif dict_class == "VSAETopKMasked":
+        from .trainers.vsae_topk_masked_kl import VSAETopK, VSAETopKConfig
+        
+        trainer_config = config["trainer"]
+        activation_dim = trainer_config.get("activation_dim")
+        dict_size = trainer_config.get("dict_size")
+        k = trainer_config.get("k")
+        var_flag = trainer_config.get("var_flag", 0)
+        use_april_update_mode = trainer_config.get("use_april_update_mode", True)
+        log_var_init = trainer_config.get("log_var_init", -2.0)
+        
+        vsae_config = VSAETopKConfig(
+            activation_dim=activation_dim,
+            dict_size=dict_size,
+            k=k,
+            var_flag=var_flag,
+            use_april_update_mode=use_april_update_mode,
+            log_var_init=log_var_init,
+            device=device
+        )
+        
+        dictionary = VSAETopK.from_pretrained(
+            ae_path, 
+            config=vsae_config,
+            device=device
+        )
     elif dict_class == "VSAEPriorsGaussian":
         from .trainers.vsae_priors import VSAEPriorsGaussian, VSAEPriorsConfig
         

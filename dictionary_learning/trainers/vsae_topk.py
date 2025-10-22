@@ -628,7 +628,7 @@ class VSAETopKTrainingConfig:
     warmup_steps: Optional[int] = None
     sparsity_warmup_steps: Optional[int] = None  # For any actual sparsity penalties (unused in this model)
     decay_start: Optional[int] = None
-    dead_feature_threshold: int = 10_000_000  # Steps before considering a feature "dead"
+    dead_feature_threshold: int = 1_000  # Steps before considering a feature "dead"
     gradient_clip_norm: float = 1.0
     
     def __post_init__(self):
@@ -840,7 +840,7 @@ class VSAETopKTrainer(SAETrainer):
         
         Args:
             residual_BD: Reconstruction residual (x - x_hat)
-            sparse_features_BF: The sparse features being used for reconstruction
+            sparse_features_BF: The sparse features being used for reconstructionz
             latent_z_BF: The full latent variables (before Top-K selection)
         """
         # Update dead feature tracking based on sparse features (what's actually being used)
