@@ -51,6 +51,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+tests/
 
 # Translations
 *.mo
@@ -170,12 +171,16 @@ nohup.out
 
 # trained model folders
 trained*/
-wandb/
+analysis_scripts/
+comprehensive_histogram_analysis/
 experiments/
 feature_degeneracy_analysis/
 gaussianity_analysis/
 latent_analysis/
 logs/
 online_gaussianity_analysis/
+sae_vis/__pycache__/
+SAEBench-main/sae_bench/custom_saes/eval_results/
+SAEBench-main/sae_bench/custom_saes/saebench_plots/
 similarity_analysis/
- 
+wandb/

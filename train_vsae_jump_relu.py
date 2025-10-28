@@ -1,12 +1,13 @@
 """
-Training script for robust Top-K SAE implementation.
+Enhanced training script for VSAEJumpReLU with sweep functionality and optimized configurations.
 
 Key features:
-- Robust configuration management
-- Enhanced error handling
-- Geometric median initialization
-- Dead feature resurrection
-- Adaptive threshold mechanism
+- Hyperparameter sweep support using wandb
+- Multiple configuration presets including 10GB GPU optimized settings
+- Command line interface for easy experiment management
+- Enhanced evaluation with detailed diagnostics
+- Memory efficient configurations
+- Robust error handling and logging
 """
 
 import torch
@@ -19,31 +20,48 @@ from typing import Optional, Dict, Any
 import multiprocessing
 
 from transformer_lens import HookedTransformer
+from dictionary_learning.base_sweep import BaseSweepRunner
 from dictionary_learning.buffer import TransformerLensActivationBuffer
 from dictionary_learning.utils import hf_dataset_to_generator
 from dictionary_learning.training import trainSAE
 from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.top_k_with_feature_penalty import TopKTrainer, AutoEncoderTopK, TopKConfig, TopKTrainingConfig #changed! loss term added!
+
+# Import our improved implementations
+from dictionary_learning.trainers.vsae_jump_relu import (
+    VSAEJumpReLU,
+    VSAEJumpReLUTrainer,
+    VSAEJumpReLUConfig,
+    VSAEJumpReLUTrainingConfig
+)
 
 
 @dataclass
 class ExperimentConfig:
-    """Configuration for the entire Top-K SAE experiment."""
+    """Configuration for the entire experiment with enhanced support for different scenarios."""
     # Model configuration
     model_name: str = "gelu-1l"
     layer: int = 0
-    hook_name: str = "blocks.0.hook_resid_post"
+    hook_name: str = "blocks.0.mlp.hook_post"
     dict_size_multiple: float = 4.0
-    k: int = 32  # Top-K sparsity level
+    
+    # VSAEJumpReLU specific configuration
+    var_flag: int = 1  # 0: fixed variance, 1: learned variance
+    threshold: float = 0.001  # Threshold parameter for JumpReLU
+    use_april_update_mode: bool = True
     
     # Training configuration
     total_steps: int = 10000
-    lr: Optional[float] = None  # Auto-computed if None
-    warmup_steps: Optional[int] = None  # Will be auto-computed if None
-    auxk_alpha: float = 1/32  # Dead feature resurrection coefficient
-    # feature_penalty_alpha: float = 0.01  # L2 penalty on features (KL-style)
-    threshold_beta: float = 0.999  # Threshold EMA coefficient
-    threshold_start_step: int = 1000  # When to start threshold updates
+    lr: float = 5e-4
+    kl_coeff: float = 500.0
+    aux_weight: float = 0.1
+    kl_warmup_steps: Optional[int] = None
+    gradient_clip_norm: float = 1.0
+    target_l0: float = 20.0
+    
+    # Schedule configuration
+    warmup_steps: Optional[int] = None
+    sparsity_warmup_steps: Optional[int] = None
+    decay_start: Optional[int] = None
     
     # Buffer configuration
     n_ctxs: int = 3000
@@ -59,7 +77,7 @@ class ExperimentConfig:
     # WandB configuration
     use_wandb: bool = True
     wandb_entity: str = "zachdata"
-    wandb_project: str = "top_k_with_kl_penalty"
+    wandb_project: str = "vsae-jumprelu-fewerdeadfeatures"
     
     # System configuration
     device: str = "cuda"
@@ -70,6 +88,23 @@ class ExperimentConfig:
     # Evaluation configuration
     eval_batch_size: int = 64
     eval_n_batches: int = 10
+    
+    def __post_init__(self):
+        """Set derived configuration values."""
+        # Set default step values based on total steps
+        if self.warmup_steps is None:
+            self.warmup_steps = max(200, int(0.02 * self.total_steps))
+        if self.sparsity_warmup_steps is None:
+            self.sparsity_warmup_steps = int(0.05 * self.total_steps)
+        
+        # Set decay start with proper constraints
+        min_decay_start = max(self.warmup_steps, self.sparsity_warmup_steps) + 1
+        default_decay_start = int(0.8 * self.total_steps)
+        
+        if default_decay_start <= max(self.warmup_steps, self.sparsity_warmup_steps):
+            self.decay_start = None  # Disable decay
+        elif self.decay_start is None or self.decay_start < min_decay_start:
+            self.decay_start = default_decay_start
     
     def get_torch_dtype(self) -> torch.dtype:
         """Convert string dtype to torch dtype."""
@@ -95,7 +130,7 @@ class ExperimentConfig:
 
 
 class ExperimentRunner:
-    """Manages the entire Top-K SAE training experiment."""
+    """Manages the entire training experiment with enhanced evaluation and diagnostics."""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
@@ -111,7 +146,7 @@ class ExperimentRunner:
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_dir / 'topk_training.log'),
+                logging.FileHandler(log_dir / 'vsae_jumprelu_training.log'),
                 logging.StreamHandler()
             ]
         )
@@ -135,7 +170,7 @@ class ExperimentRunner:
             device=self.config.device
         )
         
-        self.logger.info(f"Model loaded. d_model: {model.cfg.d_model}") # was model.cfg.d_mlp
+        self.logger.info(f"Model loaded. model.cfg.d_model: {model.cfg.d_model}")
         return model
         
     def create_buffer(self, model: HookedTransformer) -> TransformerLensActivationBuffer:
@@ -164,76 +199,67 @@ class ExperimentRunner:
         
         return buffer
         
-    def create_model_config(self, model: HookedTransformer) -> TopKConfig:
+    def create_model_config(self, model: HookedTransformer) -> VSAEJumpReLUConfig:
         """Create model configuration from experiment config."""
-        dict_size = int(self.config.dict_size_multiple * model.cfg.d_model)
+        dict_size = int(self.config.dict_size_multiple * model.cfg.d_mlp)
         
-        return TopKConfig(
+        return VSAEJumpReLUConfig(
             activation_dim=model.cfg.d_model,
             dict_size=dict_size,
-            k=self.config.k,
+            var_flag=self.config.var_flag,
+            threshold=self.config.threshold,
+            use_april_update_mode=self.config.use_april_update_mode,
             dtype=self.config.get_torch_dtype(),
-            device=self.config.get_device(),
+            device=self.config.get_device()
         )
         
-    def create_training_config(self) -> TopKTrainingConfig:
-        """Create training configuration from experiment config."""
-        # Use explicit warmup_steps from config, or calculate reasonable default
-        if self.config.warmup_steps is not None:
-            warmup_steps = self.config.warmup_steps
-        else:
-            # For short training runs, use smaller warmup
-            if self.config.total_steps <= 2000:
-                warmup_steps = max(50, int(0.05 * self.config.total_steps))
-            else:
-                warmup_steps = max(200, int(0.02 * self.config.total_steps))
-        
-        return TopKTrainingConfig(
+    def create_training_config(self) -> VSAEJumpReLUTrainingConfig:
+        return VSAEJumpReLUTrainingConfig(
             steps=self.config.total_steps,
-            lr=self.config.lr,  # Will be auto-computed if None
-            auxk_alpha=self.config.auxk_alpha,
-            # feature_penalty_alpha=self.config.feature_penalty_alpha,
-            threshold_beta=self.config.threshold_beta,
-            threshold_start_step=self.config.threshold_start_step,
-            warmup_steps=warmup_steps,  # Explicitly override the problematic default
+            lr=self.config.lr,
+            kl_coeff=self.config.kl_coeff,
+            aux_weight=self.config.aux_weight,
+            kl_warmup_steps=self.config.kl_warmup_steps,
+            gradient_clip_norm=self.config.gradient_clip_norm,
+            warmup_steps=self.config.warmup_steps,
+            sparsity_warmup_steps=self.config.sparsity_warmup_steps,
+            decay_start=self.config.decay_start,
         )
         
-    def create_trainer_config(self, model_config: TopKConfig, training_config: TopKTrainingConfig) -> Dict[str, Any]:
+    def create_trainer_config(self, model_config: VSAEJumpReLUConfig, training_config: VSAEJumpReLUTrainingConfig) -> Dict[str, Any]:
         """Create trainer configuration for the training loop."""
         return {
-            "trainer": TopKTrainer,
+            "trainer": VSAEJumpReLUTrainer,
             "model_config": model_config,
             "training_config": training_config,
             "layer": self.config.layer,
             "lm_name": self.config.model_name,
-            "wandb_name": self.get_experiment_name(),
             "submodule_name": self.config.hook_name,
+            "wandb_name": self.get_experiment_name(),
             "seed": self.config.seed,
         }
         
-    def clean_model_name_for_path(self, model_name: str) -> str:
-        """Clean model name for use in file paths."""
-        # Remove organization prefix (everything before and including the last '/')
-        if '/' in model_name:
-            model_name = model_name.split('/')[-1]
-        
-        # Remove or replace problematic characters
-        model_name = model_name.replace('-deduped', '')
-        model_name = model_name.replace('-', '')  # Remove hyphens if desired
-        
-        return model_name
-
     def get_experiment_name(self) -> str:
-        """Generate a descriptive experiment name."""
-        clean_model_name = self.clean_model_name_for_path(self.config.model_name)
-        lr_str = f"_lr{self.config.lr}" if self.config.lr else "_lr_auto"
+        """
+        Generate a descriptive experiment name safe for filesystems.
+        
+        Format: VSAEJumpReLU_{model}_d{dict}x_lr{lr}_kl{kl}_l0c{l0c}_tl0{tl0}_th{th}_{var}
+        No periods, dashes, or special characters that could cause filesystem issues.
+        """
+        var_suffix = "_learnedvar" if self.config.var_flag == 1 else "_fixedvar"
+        
+        # Make numbers filesystem-safe (no periods)
+        lr_str = f"{self.config.lr:.1e}".replace('-', '').replace('.', '')  # 5e-04 -> 5e04
+        kl_str = f"{int(self.config.kl_coeff)}"
+        aux_weight_str = f"{int(self.config.aux_weight)}"  # 1.0 -> 1
+        tl0_str = f"{int(self.config.target_l0)}"
+        th_str = f"{self.config.threshold:.1e}".replace('-', '').replace('.', '')  # 1e-03 -> 1e03
+        dict_str = f"{int(self.config.dict_size_multiple)}"  # 4.0 -> 4
         
         return (
-            f"TopK_KL_{clean_model_name}_"
-            f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_model=512 for gelu-1l
-            f"k{self.config.k}_auxk{self.config.auxk_alpha}_"
-            f"lossadd_0.01"
-            f"{lr_str}"
+            f"VSAEJumpReLU_{self.config.model_name}_"
+            f"d{dict_str}x_lr{lr_str}_kl{kl_str}_"
+            f"aux{aux_weight_str}_tl0{tl0_str}_th{th_str}{var_suffix}"
         )
         
     def get_save_directory(self) -> Path:
@@ -248,6 +274,7 @@ class ExperimentRunner:
         
         import json
         with open(config_path, 'w') as f:
+            # Convert config to dict, handling special types
             config_dict = asdict(self.config)
             json.dump(config_dict, f, indent=2, default=str)
             
@@ -266,8 +293,8 @@ class ExperimentRunner:
         return exists
         
     def run_training(self) -> Dict[str, float]:
-        """Run the complete Top-K SAE training experiment."""
-        self.logger.info("Starting Top-K SAE training experiment")
+        """Run the complete training experiment."""
+        self.logger.info("Starting VSAEJumpReLU training experiment")
         self.logger.info(f"Configuration: {self.config}")
         
         start_time = time.time()
@@ -292,17 +319,11 @@ class ExperimentRunner:
             self.logger.info(f"Model config: {model_config}")
             self.logger.info(f"Training config: {training_config}")
             self.logger.info(f"Dictionary size: {model_config.dict_size}")
-            self.logger.info(f"Top-K sparsity: {model_config.k}")
-            self.logger.info(f"Auxiliary alpha: {training_config.auxk_alpha}")
-            
-            # Auto-compute LR if not provided
-            if training_config.lr is None:
-                scale = model_config.dict_size / (2**14)
-                auto_lr = 2e-4 / (scale**0.5)
-                self.logger.info(f"Auto-computed learning rate: {auto_lr:.2e}")
+            self.logger.info(f"Target L0: {self.config.target_l0}")
+            self.logger.info(f"Threshold: {self.config.threshold}")
             
             # Run training
-            self.logger.info("Starting Top-K SAE training...")
+            self.logger.info("Starting training...")
             trainSAE(
                 data=buffer,
                 trainer_configs=[trainer_config],
@@ -318,18 +339,11 @@ class ExperimentRunner:
                 wandb_project=self.config.wandb_project,
                 run_cfg={
                     "model_type": self.config.model_name,
-                    "experiment_type": "top_k_sae",
+                    "experiment_type": "vsae_jumprelu",
                     "dict_size_multiple": self.config.dict_size_multiple,
-                    "k": self.config.k,
-                    "auxk_alpha": self.config.auxk_alpha,
-                    "threshold_beta": self.config.threshold_beta,
-                    "features": [
-                        "geometric_median_initialization",
-                        "dead_feature_resurrection",
-                        "adaptive_threshold",
-                        "unit_norm_decoder_constraint",
-                        "auto_lr_scaling"
-                    ],
+                    "var_flag": self.config.var_flag,
+                    "threshold": self.config.threshold,
+                    "target_l0": self.config.target_l0,
                     **asdict(self.config)
                 }
             )
@@ -351,77 +365,19 @@ class ExperimentRunner:
                 torch.cuda.empty_cache()
                 
     def evaluate_model(self, save_dir: Path, buffer: TransformerLensActivationBuffer) -> Dict[str, float]:
-        """Evaluate the trained Top-K SAE model with enhanced error handling."""
-        self.logger.info("Evaluating trained Top-K SAE model...")
+        """Evaluate the trained model with enhanced diagnostics."""
+        self.logger.info("Evaluating trained model...")
         
         try:
-            # Check if the model files exist
+            # Load the trained model
+            from dictionary_learning.utils import load_dictionary
+            
             model_path = save_dir / "trainer_0"
-            ae_path = model_path / "ae.pt"
-            config_path = model_path / "config.json"
+            vsae, config = load_dictionary(str(model_path), device=self.config.device)
             
-            if not ae_path.exists():
-                self.logger.error(f"Model file not found: {ae_path}")
-                return {}
-                
-            if not config_path.exists():
-                self.logger.error(f"Config file not found: {config_path}")
-                return {}
-                
-            self.logger.info(f"Loading model from: {model_path}")
-            
-            # Try to load the model with enhanced error handling
-            try:
-                from dictionary_learning.utils import load_dictionary
-                topk_sae, config = load_dictionary(str(model_path), device=self.config.device)
-                self.logger.info(f"Successfully loaded model of type: {type(topk_sae)}")
-                
-            except Exception as load_error:
-                self.logger.error(f"Failed to load model with load_dictionary: {load_error}")
-                self.logger.info("Attempting direct loading...")
-                
-                # Try direct loading as fallback
-                try:
-                    from dictionary_learning.trainers.top_k import AutoEncoderTopK, TopKConfig
-                    import json
-                    
-                    # Load config manually
-                    with open(config_path, 'r') as f:
-                        saved_config = json.load(f)
-                        
-                    trainer_config = saved_config["trainer"]
-                    self.logger.info(f"Trainer config keys: {list(trainer_config.keys())}")
-                    
-                    # Create TopKConfig
-                    model_config = TopKConfig(
-                        activation_dim=trainer_config["activation_dim"],
-                        dict_size=trainer_config["dict_size"],
-                        k=trainer_config["k"],
-                        device=self.config.get_device()
-                    )
-                    
-                    # Load model directly
-                    topk_sae = AutoEncoderTopK.from_pretrained(
-                        str(ae_path),
-                        config=model_config,
-                        device=self.config.device
-                    )
-                    
-                    self.logger.info(f"Successfully loaded model directly: {type(topk_sae)}")
-                    
-                except Exception as direct_error:
-                    self.logger.error(f"Direct loading also failed: {direct_error}")
-                    return {}
-            
-            # Verify the model is properly loaded
-            if topk_sae is None:
-                self.logger.error("Model loading returned None")
-                return {}
-                
             # Run evaluation
-            self.logger.info("Starting model evaluation...")
             eval_results = evaluate(
-                dictionary=topk_sae,
+                dictionary=vsae,
                 activations=buffer,
                 batch_size=self.config.eval_batch_size,
                 max_len=self.config.ctx_len,
@@ -429,26 +385,29 @@ class ExperimentRunner:
                 n_batches=self.config.eval_n_batches
             )
             
-            self.logger.info(f"Evaluation completed successfully. Results: {len(eval_results)} metrics")
-            
-            # Add Top-K specific diagnostics
+            # Add VSAEJumpReLU-specific diagnostics if possible
             try:
-                # Get a sample batch for sparsity diagnostics
+                # Get a sample batch for additional diagnostics
                 sample_batch = next(iter(buffer))
                 if len(sample_batch) > self.config.eval_batch_size:
                     sample_batch = sample_batch[:self.config.eval_batch_size]
                 
-                sparsity_diagnostics = topk_sae.get_sparsity_diagnostics(sample_batch.to(self.config.device))
-                
-                # Add to eval results
-                for key, value in sparsity_diagnostics.items():
-                    eval_results[f"final_{key}"] = value.item() if torch.is_tensor(value) else value
+                # Forward pass to get features
+                with torch.no_grad():
+                    sample_batch = sample_batch.to(self.config.device)
+                    _, features = vsae(sample_batch, output_features=True)
                     
-                # Add threshold information
-                eval_results["final_threshold"] = topk_sae.threshold.item() if topk_sae.threshold >= 0 else -1
+                    # Compute L0 statistics
+                    l0_per_sample = (features != 0).float().sum(dim=-1)
+                    eval_results.update({
+                        "actual_l0_mean": l0_per_sample.mean().item(),
+                        "actual_l0_std": l0_per_sample.std().item(),
+                        "target_l0": self.config.target_l0,
+                        "l0_target_ratio": l0_per_sample.mean().item() / self.config.target_l0,
+                    })
                     
             except Exception as e:
-                self.logger.warning(f"Could not compute sparsity diagnostics: {e}")
+                self.logger.warning(f"Could not compute additional diagnostics: {e}")
             
             # Log results
             self.logger.info("Evaluation Results:")
@@ -462,6 +421,7 @@ class ExperimentRunner:
             eval_path = save_dir / "evaluation_results.json"
             import json
             with open(eval_path, 'w') as f:
+                # Convert any tensors to floats for JSON serialization
                 json_results = {}
                 for k, v in eval_results.items():
                     if torch.is_tensor(v):
@@ -470,14 +430,128 @@ class ExperimentRunner:
                         json_results[k] = float(v) if isinstance(v, (int, float)) else str(v)
                 json.dump(json_results, f, indent=2)
                 
-            self.logger.info(f"Saved evaluation results to {eval_path}")
             return eval_results
             
         except Exception as e:
-            self.logger.error(f"Evaluation failed with error: {e}")
-            import traceback
-            self.logger.error(f"Full traceback: {traceback.format_exc()}")
+            self.logger.error(f"Evaluation failed: {e}")
             return {}
+
+
+class VSAEJumpReLUSweepRunner(BaseSweepRunner):
+    """
+    Hyperparameter sweep runner for VSAEJumpReLU trainer.
+    
+    Optimizes key parameters including KL coefficient, L0 coefficient, target L0,
+    learning rate, threshold, and variance learning.
+    """
+    
+    def __init__(self, wandb_entity: str):
+        """Initialize VSAEJumpReLU sweep runner."""
+        super().__init__(trainer_name="vsae-jumprelu", wandb_entity=wandb_entity)
+    
+    def get_sweep_config(self) -> dict:
+        """
+        Define the wandb sweep configuration for VSAEJumpReLU.
+        """
+        return {
+            'method': 'bayes',
+            'metric': {
+                'goal': 'minimize', 
+                'name': 'mse_loss'
+            },
+            'parameters': {
+                # Learning rate: log-uniform distribution
+                'lr': {
+                    'distribution': 'log_uniform_values',
+                    'min': 1e-5,
+                    'max': 1e-2
+                },
+                # KL coefficient: uniform distribution
+                'kl_coeff': {
+                    'distribution': 'uniform',
+                    'min': 100.0,
+                    'max': 1000.0
+                },
+                # L0 coefficient: log-uniform distribution
+                'l0_coeff': {
+                    'distribution': 'log_uniform_values',
+                    'min': 0.1,
+                    'max': 10.0
+                },
+                # Target L0: discrete choices
+                'target_l0': {
+                    'values': [10.0, 20.0, 30.0, 50.0]
+                },
+                # Threshold: log-uniform distribution
+                'threshold': {
+                    'distribution': 'log_uniform_values',
+                    'min': 1e-4,
+                    'max': 1e-2
+                },
+                # Dictionary size multiplier: discrete choices
+                'dict_size_multiple': {
+                    'values': [4.0, 8.0]
+                },
+                # Variance flag: discrete choice
+                'var_flag': {
+                    'values': [0, 1]
+                }
+            }
+        }
+    
+    def get_run_name(self, sweep_params: dict) -> str:
+        """
+        Generate descriptive run name from sweep parameters.
+        Safe for filesystems - no periods, dashes, or special characters.
+        
+        Format: JumpReLU_lr{lr}_kl{kl}_l0c{l0c}_tl0{tl0}_th{th}_d{dict}x_v{var}
+        Examples:
+        - lr=5e-4 -> lr5e04
+        - l0_coeff=1.5 -> l0c15 (multiply by 10)
+        - threshold=1e-3 -> th1e03
+        """
+        lr_str = f"{sweep_params['lr']:.1e}".replace('-', '').replace('.', '')  # 5e-04 -> 5e04
+        kl_str = f"{int(sweep_params['kl_coeff'])}"
+        l0_str = f"{int(sweep_params['l0_coeff'] * 10)}"  # 1.0 -> 10, 0.5 -> 5
+        target_l0_str = f"{int(sweep_params['target_l0'])}"
+        th_str = f"{sweep_params['threshold']:.1e}".replace('-', '').replace('.', '')  # 1e-03 -> 1e03
+        dict_str = f"{int(sweep_params['dict_size_multiple'])}"  # 4.0 -> 4
+        var_str = f"v{sweep_params['var_flag']}"
+        
+        return f"JumpReLU_lr{lr_str}_kl{kl_str}_l0c{l0_str}_tl0{target_l0_str}_th{th_str}_d{dict_str}x_{var_str}"
+    
+    def create_experiment_config(self, sweep_params: dict) -> ExperimentConfig:
+        """
+        Create an ExperimentConfig from wandb sweep parameters.
+        """
+        # Start with the quick test config
+        config = create_quick_test_config()
+        
+        # Override with sweep parameters
+        config.lr = sweep_params['lr']
+        config.kl_coeff = sweep_params['kl_coeff']
+        config.l0_coeff = sweep_params['l0_coeff']
+        config.target_l0 = sweep_params['target_l0']
+        config.threshold = sweep_params['threshold']
+        config.dict_size_multiple = sweep_params['dict_size_multiple']
+        config.var_flag = sweep_params['var_flag']
+        
+        # Adjust settings for sweep runs
+        config.total_steps = 15000  # Longer to see convergence
+        config.checkpoint_steps = ()
+        config.log_steps = 250
+        
+        # Smaller buffer for memory efficiency
+        config.n_ctxs = 1000
+        config.refresh_batch_size = 16
+        config.out_batch_size = 256
+        
+        # Use fixed project name for sweeps
+        config.wandb_project = "vsae-jumprelu-sweeps"
+        config.save_dir = "./temp_sweep_run"
+        config.use_wandb = False  # Sweep handles wandb
+        
+        return config
 
 
 def create_quick_test_config() -> ExperimentConfig:
@@ -485,17 +559,19 @@ def create_quick_test_config() -> ExperimentConfig:
     return ExperimentConfig(
         model_name="gelu-1l",
         layer=0,
-        hook_name="blocks.0.hook_resid_post",
+        hook_name="blocks.0.mlp.hook_post",
         dict_size_multiple=4.0,
-        k=32,
         
         # Test parameters
         total_steps=1000,
-        warmup_steps=50,  # Explicitly set for quick test
-        # feature_penalty_alpha=0.01,
-        threshold_start_step=100,  # Also reduce this for quick test
         checkpoint_steps=list(),
         log_steps=50,
+        
+        # VSAEJumpReLU specific
+        var_flag=1,
+        threshold=0.001,
+        l0_coeff=1.0,
+        target_l0=20.0,
         
         # Small buffer for testing
         n_ctxs=500,
@@ -511,60 +587,89 @@ def create_quick_test_config() -> ExperimentConfig:
         seed=42,
     )
 
+
 def create_full_config() -> ExperimentConfig:
-    """Create a configuration optimized for 10GB GPU memory - VERY conservative to avoid slowdowns."""
+    """Create a configuration for full training - memory efficient."""
     return ExperimentConfig(
         model_name = "EleutherAI/pythia-70m-deduped",  # Changed from "gelu-1l"
         layer = 3,  # Changed from 0 - typical layers for pythia-70m are 3,4
         hook_name = "blocks.3.hook_resid_post",  # Updated to match layer
         dict_size_multiple=16.0,
-        k=64,
         
-        # Training parameters optimized for 10GB GPU
+        # Full training parameters
         total_steps=10000,
-        lr=None,  # Auto-computed
-        auxk_alpha=1/2,
-        # feature_penalty_alpha=0.0, #DELETE or set to 0 after kl test
-        threshold_beta=0.999,
-        threshold_start_step=500,
+        lr=5e-4,
+        kl_coeff=1,
+        aux_weight=0.1,  # NEW - replaces l0_coeff
+        kl_warmup_steps=1000,  # NEW - or None for auto (10% of steps)
+        gradient_clip_norm=1.0,  # NEW
+        target_l0=512.0,
+        threshold=0.001,
         
-        # OPTIMIZED buffer settings for consistent speed
-        n_ctxs=2500,     # Reduced to prevent memory pressure
+        # Model settings
+        var_flag=0,
+        use_april_update_mode=True,
+        
+        # GPU memory optimized buffer settings
+        n_ctxs=2500,           
         ctx_len=128,
-        refresh_batch_size=12,  # Smaller batches for consistent memory usage
-        out_batch_size=192,     # Smaller output batches
+        refresh_batch_size=12, 
+        out_batch_size=192,    
         
         # Checkpointing
         checkpoint_steps=(10000,),
-        log_steps=1000,  # More frequent logging to monitor performance
+        log_steps=1000,
         
-        # Evaluation - smaller to reduce memory spikes
-        eval_batch_size=24,
-        eval_n_batches=4,
+        # Evaluation - faster and more memory efficient
+        eval_batch_size=24,  # Smaller eval batches
+        eval_n_batches=6,    # Fewer eval batches
         
-        # System settings
+        # System settings for performance
         device="cuda" if torch.cuda.is_available() else "cpu",
-        dtype="bfloat16",
+        dtype="bfloat16",    # Memory efficient
         autocast_dtype="bfloat16",
         seed=42,
     )
+
 
 def main():
     """Main training function with multiple configuration options."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Top-K SAE Training")
+    parser = argparse.ArgumentParser(description="VSAEJumpReLU Training and Hyperparameter Sweeps")
+    parser.add_argument(
+        "--sweep", 
+        action="store_true", 
+        help="Run hyperparameter sweep instead of single training"
+    )
     parser.add_argument(
         "--config", 
         choices=[
             "quick_test", 
             "full", 
-        ],
+        ], 
         default="full",
-        help="Configuration preset for training",
-        )
+        help="Configuration preset for single training runs"
+    )
+    parser.add_argument(
+        "--wandb-entity",
+        type=str,
+        default="zachdata",
+        help="WandB entity/username for sweep logging"
+    )
     args = parser.parse_args()
     
+    if args.sweep:
+        # Run hyperparameter sweep
+        print("Starting hyperparameter sweep for VSAEJumpReLU...")
+        print(f"Project: vsae-jumprelu-sweeps")
+        print(f"Entity: {args.wandb_entity}")
+        
+        sweep_runner = VSAEJumpReLUSweepRunner(wandb_entity=args.wandb_entity)
+        sweep_runner.run_sweep()
+        return
+    
+    # Regular single training run
     config_functions = {
         "quick_test": create_quick_test_config,
         "full": create_full_config,
@@ -583,11 +688,11 @@ def main():
             if metric in results:
                 print(f"{metric:<25} | {results[metric]:.4f}")
                 
-        # Show Top-K specific metrics
-        topk_metrics = [k for k in results.keys() if "threshold" in k.lower() or "effective_l0" in k.lower()]
-        if topk_metrics:
-            print("\nTop-K Specific Metrics:")
-            for metric in topk_metrics:
+        # Show L0-specific diagnostics if available
+        l0_metrics = [k for k in results.keys() if "l0" in k.lower()]
+        if l0_metrics:
+            print("\nL0 Diagnostics:")
+            for metric in l0_metrics:
                 if metric in results:
                     print(f"{metric:<25} | {results[metric]:.4f}")
                 
@@ -603,8 +708,10 @@ def main():
 
 
 # Usage examples:
-# python train_topk.py --config quick_test
-# python train_topk.py
+# python train-vsae-jump-relu.py
+# python train-vsae-jump-relu.py --config quick_test
+# python train-vsae-jump-relu.py --sweep --wandb-entity your-username
+
 
 if __name__ == "__main__":
     # Set multiprocessing start method for compatibility

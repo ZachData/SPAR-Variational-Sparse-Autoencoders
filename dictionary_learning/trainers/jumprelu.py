@@ -406,7 +406,7 @@ class JumpReluTrainingConfig:
     sparsity_warmup_steps: Optional[int] = None
     decay_start: Optional[int] = None
     gradient_clip_norm: float = 1.0
-    dead_feature_threshold: int = 10_000_000
+    dead_feature_threshold: int = 10_000
     
     def __post_init__(self):
         """Set derived configuration values with proper bounds checking."""
