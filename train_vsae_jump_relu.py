@@ -600,11 +600,11 @@ def create_full_config() -> ExperimentConfig:
         total_steps=10000,
         lr=5e-4,
         kl_coeff=1,
-        aux_weight=0.1,  # NEW - replaces l0_coeff
-        kl_warmup_steps=1000,  # NEW - or None for auto (10% of steps)
-        gradient_clip_norm=1.0,  # NEW
-        target_l0=512.0,
-        threshold=0.001,
+        aux_weight=25,
+        kl_warmup_steps=None,  # None for auto (10% of steps)
+        gradient_clip_norm=1.0,
+        target_l0=64.0,
+        threshold=0.016, # 512=0.05, 256=0.08, 128=0.011, 64=0.016
         
         # Model settings
         var_flag=0,
