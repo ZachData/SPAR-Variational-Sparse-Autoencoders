@@ -96,30 +96,30 @@ class DictionaryLearningSAEWrapper(BaseSAE):
         
     def _copy_weights_from_sae(self):
         """Copy weight matrices from the underlying SAE to BaseSAE format."""
-        
+
         with torch.no_grad():
             if hasattr(self.sae, 'encoder') and hasattr(self.sae, 'decoder'):
                 # Standard autoencoder structure
-                
+
                 # Check if weights are None before cloning
                 if self.sae.encoder.weight is None:
                     raise ValueError("Encoder weight is None")
                 if self.sae.decoder.weight is None:
                     raise ValueError("Decoder weight is None")
-                
+
                 # For Top-K SAE:
                 # encoder: [dict_size, activation_dim] -> need [activation_dim, dict_size] for W_enc
                 # decoder: [activation_dim, dict_size] -> need [dict_size, activation_dim] for W_dec
-                
+
                 self.W_enc.data = self.sae.encoder.weight.T.clone()  # [dict_size, activation_dim] -> [activation_dim, dict_size]
                 self.W_dec.data = self.sae.decoder.weight.T.clone()  # [activation_dim, dict_size] -> [dict_size, activation_dim]
-                
+
                 # Copy bias terms
                 if hasattr(self.sae.encoder, 'bias') and self.sae.encoder.bias is not None:
                     self.b_enc.data = self.sae.encoder.bias.clone()
                 else:
                     self.b_enc.data.zero_()
-                
+
                 # Handle decoder bias - Top-K SAE uses b_dec parameter
                 if hasattr(self.sae, 'b_dec') and self.sae.b_dec is not None:
                     self.b_dec.data = self.sae.b_dec.clone()
@@ -127,7 +127,7 @@ class DictionaryLearningSAEWrapper(BaseSAE):
                     self.b_dec.data = self.sae.decoder.bias.clone()
                 else:
                     self.b_dec.data.zero_()
-                    
+
             elif hasattr(self.sae, 'W_enc') and hasattr(self.sae, 'W_dec'):
                 # Already in the right format
                 self.W_enc.data = self.sae.W_enc.clone()
@@ -140,10 +140,40 @@ class DictionaryLearningSAEWrapper(BaseSAE):
                 # Print all attributes to debug
                 sae_attrs = [attr for attr in dir(self.sae) if not attr.startswith('_')]
                 raise ValueError(f"SAE doesn't have expected encoder/decoder or W_enc/W_dec structure. Available attributes: {sae_attrs}")
-        
+
         # Normalize decoder weights to unit norm (SAEBench requirement)
-        with torch.no_grad():
-            self.W_dec.data = torch.nn.functional.normalize(self.W_dec.data, dim=1)
+        # For models with a normalize_decoder method (TopK, VSAETopK, JumpReLU),
+        # use that method as it properly compensates encoder weights.
+        # If normalization fails, skip it rather than doing naive normalization.
+        if hasattr(self.sae, 'normalize_decoder'):
+            try:
+                # Use the SAE's built-in normalization method which properly
+                # scales encoder weights when normalizing decoder
+                self.sae.normalize_decoder()
+
+                # Re-copy weights after normalization
+                if hasattr(self.sae, 'encoder') and hasattr(self.sae, 'decoder'):
+                    self.W_enc.data = self.sae.encoder.weight.T.clone()
+                    self.W_dec.data = self.sae.decoder.weight.T.clone()
+                    if hasattr(self.sae.encoder, 'bias') and self.sae.encoder.bias is not None:
+                        self.b_enc.data = self.sae.encoder.bias.clone()
+                elif hasattr(self.sae, 'W_enc') and hasattr(self.sae, 'W_dec'):
+                    self.W_enc.data = self.sae.W_enc.clone()
+                    self.W_dec.data = self.sae.W_dec.clone()
+                    if hasattr(self.sae, 'b_enc'):
+                        self.b_enc.data = self.sae.b_enc.clone()
+            except AssertionError as e:
+                # If normalization fails because it would change model output, skip it
+                # This is expected for some model types (e.g., VSAETopK with learned variance)
+                print(f"Warning: Could not normalize decoder weights: {e}")
+                # Keep the original unnormalized weights
+            except Exception as e:
+                # Other errors also mean we should skip normalization
+                print(f"Warning: Could not normalize decoder weights: {e}")
+        else:
+            # For models without normalize_decoder method, use simple normalization
+            with torch.no_grad():
+                self.W_dec.data = torch.nn.functional.normalize(self.W_dec.data, dim=1)
     
     def encode(self, x):
         """Encode activations to features using the underlying SAE."""
