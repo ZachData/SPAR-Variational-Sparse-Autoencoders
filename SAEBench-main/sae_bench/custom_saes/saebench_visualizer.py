@@ -689,47 +689,57 @@ def create_detailed_table(df, save_path='saebench_plots'):
 
 # Example usage for Pythia-70M trained models:
 if __name__ == "__main__":
-    # Updated file paths for your Pythia-70M trained models
     json_files = [
         # Core evaluation files 
-        r'eval_results\core\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\core\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\core\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\core\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\core\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\core\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\core\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\core\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        r'eval_results\core\vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl0512_th50e03_fixedvar_custom_sae_eval_results.json',
+        r'eval_results\core\vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl0256_th80e03_fixedvar_custom_sae_eval_results.json',
+        r'eval_results\core\vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl0128_th11e02_fixedvar_custom_sae_eval_results.json',
+        r'eval_results\core\vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl064_th16e02_fixedvar_custom_sae_eval_results.json',
+        r'eval_results\core\jumprelu-pythia-70m-deduped_d8192_lr0.0005_l064.0_bw0.001_sp1.0_custom_sae_eval_results.json',
+        r'eval_results\core\jumprelu-pythia-70m-deduped_d8192_lr0.0005_l0128.0_bw0.001_sp1.0_custom_sae_eval_results.json',
+        r'eval_results\core\jumprelu-pythia-70m-deduped_d8192_lr0.0005_l0256.0_bw0.001_sp1.0_custom_sae_eval_results.json',
+        r'eval_results\core\jumprelu-pythia-70m-deduped_d8192_lr0.0005_l0356.0_bw0.001_sp1.0_custom_sae_eval_results.json',
+
+
+        # # Core evaluation files 
+        # r'eval_results\core\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\core\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\core\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\core\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\core\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\core\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\core\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\core\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
         
-        # SCR evaluation files
-        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # # SCR evaluation files
+        # r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\scr\scr\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\scr\scr\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
         
-        # Sparse probing evaluation files
-        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # # Sparse probing evaluation files
+        # r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\sparse_probing\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\sparse_probing\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
         
-        # TPP evaluation files
-        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
-        r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # # TPP evaluation files
+        # r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\tpp\tpp\VSAETopK_pythia70m_d8192_k64_lr0.0008_kl0.1_aux0.5_fixed_var_custom_sae_eval_results.json',
+        # r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto_custom_sae_eval_results.json',
+        # r'eval_results\tpp\tpp\TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto_custom_sae_eval_results.json',
     ]
     
     # Load and process results

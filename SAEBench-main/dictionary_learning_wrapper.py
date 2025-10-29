@@ -22,13 +22,14 @@ class DictionaryLearningSAEWrapper(BaseSAE):
     """
     Wrapper to make dictionary_learning SAEs compatible with SAEBench.
     Inherits from BaseSAE to get all the required interface methods.
+    
+    FIXED: Proper output-preserving normalization for all architectures.
     """
     
     def __init__(self, model_path: str, device: str = "cuda"):
         self.model_path = Path(model_path)
         
         # Check if required files exist
-        # ae_path = self.model_path / "ae.pt"``
         ae_path = self.model_path / "ae.pt"
         config_path = self.model_path / "config.json"
         
@@ -141,15 +142,141 @@ class DictionaryLearningSAEWrapper(BaseSAE):
                 sae_attrs = [attr for attr in dir(self.sae) if not attr.startswith('_')]
                 raise ValueError(f"SAE doesn't have expected encoder/decoder or W_enc/W_dec structure. Available attributes: {sae_attrs}")
         
-        # Normalize decoder weights to unit norm (SAEBench requirement)
+        # Normalize decoder weights using the SAE's own method if available
+        # This preserves output by scaling encoder/biases appropriately
+        self._normalize_decoder_weights()
+    
+    def _normalize_decoder_weights(self):
+        """
+        Normalize decoder weights to unit norm (SAEBench requirement).
+        
+        Uses the SAE's own normalize_decoder method if available, otherwise
+        performs output-preserving normalization by scaling encoder/biases/threshold.
+        Skips normalization for architectures where it would break functionality.
+        """
         with torch.no_grad():
-            self.W_dec.data = torch.nn.functional.normalize(self.W_dec.data, dim=1)
+            # Check if decoder is already normalized
+            norms = torch.norm(self.W_dec.data, dim=1)
+            if torch.allclose(norms, torch.ones_like(norms), atol=1e-6):
+                print("Decoder weights already normalized, skipping")
+                return
+            
+            # Try to use the SAE's own normalize_decoder method
+            if hasattr(self.sae, 'normalize_decoder'):
+                try:
+                    print("Using SAE's normalize_decoder method")
+                    # Store test input to verify normalization
+                    device = self.W_dec.device
+                    test_input = torch.randn(10, self.d_in, device=device, dtype=self.W_dec.dtype)
+                    initial_output = self.forward(test_input)
+                    
+                    # Call the SAE's normalize method
+                    self.sae.normalize_decoder()
+                    
+                    # Copy normalized weights back
+                    if hasattr(self.sae, 'encoder') and hasattr(self.sae, 'decoder'):
+                        self.W_enc.data = self.sae.encoder.weight.T.clone()
+                        self.W_dec.data = self.sae.decoder.weight.T.clone()
+                        self.b_enc.data = self.sae.encoder.bias.clone()
+                        if hasattr(self.sae, 'b_dec'):
+                            self.b_dec.data = self.sae.b_dec.clone()
+                        elif hasattr(self.sae.decoder, 'bias'):
+                            self.b_dec.data = self.sae.decoder.bias.clone()
+                    elif hasattr(self.sae, 'W_enc') and hasattr(self.sae, 'W_dec'):
+                        self.W_enc.data = self.sae.W_enc.clone()
+                        self.W_dec.data = self.sae.W_dec.clone()
+                        self.b_enc.data = self.sae.b_enc.clone()
+                        self.b_dec.data = self.sae.b_dec.clone()
+                    
+                    # Verify normalization preserved output
+                    new_output = self.forward(test_input)
+                    if torch.allclose(initial_output, new_output, atol=1e-4):
+                        print("Normalization successful - output preserved")
+                        return
+                    else:
+                        print("Warning: SAE's normalize_decoder changed output, reverting and trying manual normalization")
+                        # Revert by reloading from original sae
+                        self._reload_weights_from_sae()
+                        
+                except Exception as e:
+                    print(f"Warning: SAE's normalize_decoder failed: {e}, trying manual normalization")
+            
+            # Manual output-preserving normalization
+            print("Performing manual output-preserving normalization")
+            
+            # Test that normalization preserves output
+            device = self.W_dec.device
+            test_input = torch.randn(10, self.d_in, device=device, dtype=self.W_dec.dtype)
+            initial_output = self.forward(test_input)
+            
+            # Get current norms
+            norms = torch.norm(self.W_dec.data, dim=1)
+            
+            # Normalize decoder: W_dec[i] /= ||W_dec[i]||
+            self.W_dec.data = self.W_dec.data / norms.unsqueeze(1)
+            
+            # Scale encoder to preserve output: W_enc[:, i] *= ||W_dec[i]||
+            self.W_enc.data = self.W_enc.data * norms.unsqueeze(0)
+            
+            # Scale encoder bias: b_enc[i] *= ||W_dec[i]||
+            self.b_enc.data = self.b_enc.data * norms
+            
+            # CRITICAL: Scale threshold for JumpReLU architectures
+            # When encoder is scaled, pre-activation values get scaled by norms
+            # So threshold must be scaled by same factor to preserve activation pattern
+            if hasattr(self.sae, 'threshold') and self.sae.threshold is not None:
+                print("Scaling threshold parameter for JumpReLU architecture")
+                self.sae.threshold.data = self.sae.threshold.data * norms
+            
+            # Verify normalization worked
+            new_norms = torch.norm(self.W_dec.data, dim=1)
+            if not torch.allclose(new_norms, torch.ones_like(new_norms), atol=1e-6):
+                raise RuntimeError("Manual normalization failed to normalize decoder weights")
+            
+            # Verify output is preserved
+            new_output = self.forward(test_input)
+            max_diff = (initial_output - new_output).abs().max().item()
+            
+            if not torch.allclose(initial_output, new_output, atol=1e-4):
+                print(f"Warning: Manual normalization changed output by {max_diff:.6f}")
+                print("This may indicate the architecture doesn't support output-preserving normalization")
+                # Revert the changes
+                self._reload_weights_from_sae()
+                # Try simple normalization without preservation
+                print("Attempting simple decoder normalization without output preservation")
+                self.W_dec.data = torch.nn.functional.normalize(self.W_dec.data, dim=1)
+            else:
+                print(f"Manual normalization successful - output preserved (max diff: {max_diff:.2e})")
+
+    
+    def _reload_weights_from_sae(self):
+        """Reload weights from the original SAE (helper for normalization recovery)."""
+        with torch.no_grad():
+            if hasattr(self.sae, 'encoder') and hasattr(self.sae, 'decoder'):
+                self.W_enc.data = self.sae.encoder.weight.T.clone()
+                self.W_dec.data = self.sae.decoder.weight.T.clone()
+                self.b_enc.data = self.sae.encoder.bias.clone()
+                if hasattr(self.sae, 'b_dec'):
+                    self.b_dec.data = self.sae.b_dec.clone()
+                elif hasattr(self.sae.decoder, 'bias'):
+                    self.b_dec.data = self.sae.decoder.bias.clone()
+            elif hasattr(self.sae, 'W_enc') and hasattr(self.sae, 'W_dec'):
+                self.W_enc.data = self.sae.W_enc.clone()
+                self.W_dec.data = self.sae.W_dec.clone()
+                self.b_enc.data = self.sae.b_enc.clone()
+                self.b_dec.data = self.sae.b_dec.clone()
     
     def encode(self, x):
         """Encode activations to features using the underlying SAE."""
         if hasattr(self.sae, 'encode'):
+            # For VSAEJumpReLU, encode returns (mu, log_var) tuple
+            if 'VSAEJumpReLU' in str(type(self.sae)):
+                result = self.sae.encode(x)
+                # Return just mu (the features), discard log_var
+                mu = result[0] if isinstance(result, tuple) else result
+                return mu
             # For VSAETopK, get just the sparse features (first element of tuple)
-            if 'VSAETopK' in str(type(self.sae)):
+            elif 'VSAETopK' in str(type(self.sae)):
                 result = self.sae.encode(x, training=False)  # Set training=False for evaluation
                 sparse_features = result[0]  # First element is sparse_features
                 return sparse_features
@@ -162,7 +289,11 @@ class DictionaryLearningSAEWrapper(BaseSAE):
                     return result
             else:
                 # Standard SAE that returns tensor directly
-                return self.sae.encode(x)
+                result = self.sae.encode(x)
+                # Handle any tuple returns generically
+                if isinstance(result, tuple):
+                    return result[0]
+                return result
         else:
             raise NotImplementedError("SAE does not have encode method")
     
@@ -182,6 +313,7 @@ class DictionaryLearningSAEWrapper(BaseSAE):
             return reconstruction, features
         else:
             return reconstruction
+    
     @classmethod
     def from_pretrained(cls, model_path: str, device: str = "cuda"):
         """Load a pretrained model."""

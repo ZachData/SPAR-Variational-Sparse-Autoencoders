@@ -200,11 +200,6 @@ def load_your_trained_saes(experiments_dir: str = "../../../experiments") -> lis
     
     # List of your trained models (update these names to match your actual trained models)
     model_names = [
-        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_2.0_lr_auto',
-        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.5_lr_auto',
-        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.1_lr_auto',
-        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.0_lr_auto',
-        'TopK_KL_pythia70m_d8192_k64_auxk0.5_lossadd_0.01_lr_auto',
         # 'VSAETopK_pythia70m_d8192_k512_lr0.0008_kl0.5_aux2_fixed_var', #best was kl 0.1, aux 1/2
         # 'VSAETopK_pythia70m_d8192_k256_lr0.0008_kl0.5_aux2_fixed_var',
         # 'VSAETopK_pythia70m_d8192_k128_lr0.0008_kl0.5_aux2_fixed_var',
@@ -212,7 +207,16 @@ def load_your_trained_saes(experiments_dir: str = "../../../experiments") -> lis
         # 'TopK_SAE_pythia70m_d8192_k64_auxk0.03125_lr_auto',
         # 'TopK_SAE_pythia70m_d8192_k128_auxk0.03125_lr_auto',
         # 'TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto',
-        # 'TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto',
+        # 'TopK_SAE_pythia70m_d8192_k512_auxk0.03125_lr_auto','
+
+        'vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl064_th16e02_fixedvar',
+        'vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl0128_th11e02_fixedvar',
+        'vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl0256_th80e03_fixedvar',
+        'vsaejumprelu_pythia-70m-deduped_d16x_lr50e04_kl1_aux25_tl0512_th50e03_fixedvar',
+        'jumprelu-pythia-70m-deduped_d8192_lr0.0005_l0356.0_bw0.001_sp1.0',
+        'jumprelu-pythia-70m-deduped_d8192_lr0.0005_l0256.0_bw0.001_sp1.0',
+        'jumprelu-pythia-70m-deduped_d8192_lr0.0005_l0128.0_bw0.001_sp1.0',
+        'jumprelu-pythia-70m-deduped_d8192_lr0.0005_l064.0_bw0.001_sp1.0',
     ]
     
     for model_name in model_names:
