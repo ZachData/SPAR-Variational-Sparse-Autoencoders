@@ -184,3 +184,9 @@ SAEBench-main/sae_bench/custom_saes/eval_results/
 SAEBench-main/sae_bench/custom_saes/saebench_plots/
 similarity_analysis/
 wandb/
+# workshop paper build artifacts
+workshop/*.aux
+workshop/*.log
+workshop/*.out
+workshop/*.bbl
+workshop/*.blg
