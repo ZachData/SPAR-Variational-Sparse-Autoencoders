@@ -205,3 +205,40 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def kappa_sweep(
+    kappa_values: tuple[float, ...] = (0.2, 0.3, 0.4, 0.5, 0.6, 0.7),
+    n_per_group: int = 5,
+    alpha: float = 0.1,
+    n_trials: int = 4000,
+) -> None:
+    """Choose kappa: maximise power subject to keeping Type-I under alpha.
+
+    kappa must be fixed BEFORE looking at any real result, so this is decided on
+    simulation alone. Two competing effects: smaller kappa extracts more evidence
+    from a small p-value (e = kappa * p^(kappa-1) grows as p -> 0), but also
+    punishes a failed falsification harder (e = kappa at p = 1). The worst case
+    for Type-I is maximally redundant tests, so that is what we check against.
+    """
+    print(f"{'kappa':>7} {'TypeI(worst)':>13} | " + " ".join(
+        f"{f'pow d={d}':>9}" for d in (1.0, 1.5, 2.0)))
+    print("-" * 52)
+    for kappa in kappa_values:
+        # Worst case for validity: 5 fully redundant tests on the same runs.
+        worst, se = type_i_error(
+            n_per_group, 5, rho=1.0, n_trials=n_trials, alpha=alpha, kappa=kappa
+        )
+        powers = [
+            power_curve(
+                d, n_per_group_values=(n_per_group,), n_trials=n_trials // 2,
+                alpha=alpha, kappa=kappa,
+            )[0].power
+            for d in (1.0, 1.5, 2.0)
+        ]
+        flag = "" if worst <= alpha + 2 * se else "  INVALID"
+        print(
+            f"{kappa:>7.1f} {worst:>13.4f} | "
+            + " ".join(f"{p:>9.2f}" for p in powers)
+            + flag
+        )

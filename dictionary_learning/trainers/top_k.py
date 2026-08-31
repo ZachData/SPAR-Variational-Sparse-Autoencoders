@@ -111,6 +111,14 @@ class TopKTrainingConfig:
     threshold_start_step: int = 1000  # When to start threshold updates
     gradient_clip_norm: float = 1.0
     dead_feature_threshold: int = 1_000  # Steps before considering feature dead  #changed! was 10k
+    # Optional L2 penalty on the full pre-TopK activation vector, added as
+    #     activation_penalty * 0.5 * ||f||^2
+    # This mirrors the fixed-variance vSAE's KL term exactly: with sigma = 1 the KL
+    # reduces to 0.5 * ||mu||^2 and is applied to ALL dictionary entries, including
+    # those TopK did not select. Enabling it turns this trainer into the control arm
+    # for the degeneracy claim (E1 in PROJECT.md).
+    # Defaults to 0.0, which leaves the loss bit-identical to before.
+    activation_penalty: float = 0.0
     
     def __post_init__(self):
         """Set derived configuration values."""
@@ -551,7 +559,19 @@ class TopKTrainer(SAETrainer):
         if self.training_config.auxk_alpha > 0:
             auxk_loss = self.get_auxiliary_loss(e.detach(), post_relu_acts_BF)
 
-        total_loss = l2_loss + self.training_config.auxk_alpha * auxk_loss
+        # Penalise the full pre-TopK activation vector, matching the vSAE's KL,
+        # which also penalises unselected features. Using post_relu_acts_BF rather
+        # than f is the whole point: penalising only the selected features would be
+        # the masked variant (E3), not the degeneracy control.
+        activation_penalty_loss = t.tensor(0.0, device=x.device)
+        if self.training_config.activation_penalty > 0:
+            activation_penalty_loss = 0.5 * post_relu_acts_BF.pow(2).sum(dim=-1).mean()
+
+        total_loss = (
+            l2_loss
+            + self.training_config.auxk_alpha * auxk_loss
+            + self.training_config.activation_penalty * activation_penalty_loss
+        )
 
         if not logging:
             return total_loss
@@ -562,6 +582,11 @@ class TopKTrainer(SAETrainer):
                 {
                     "l2_loss": l2_loss.item(),
                     "auxk_loss": auxk_loss.item() if t.is_tensor(auxk_loss) else auxk_loss,
+                    "activation_penalty_loss": (
+                        activation_penalty_loss.item()
+                        if t.is_tensor(activation_penalty_loss)
+                        else activation_penalty_loss
+                    ),
                     "loss": total_loss.item(),
                     "effective_l0": self.effective_l0,
                     "dead_features": self.dead_features,

@@ -215,10 +215,21 @@ permitted only if reported as exploratory and excluded from the evidence product
   bearing. **Recommendation: (a) first.** The statistical contribution stands
   alone, E0 is meaningful either way, and (b) can be layered on once the fixed
   battery has established the error rates it should be compared against.
-- **α and κ.** Currently α=0.1, κ=0.5 (POPPER's defaults). κ=0.3 extracts more
-  evidence from small p-values and would relax the seed budget; it must be fixed
-  before looking at results. Worth re-running the power table under κ=0.3 first —
-  given how conservative the independent case turned out, there may be free power
-  available here.
+- ~~**α and κ.**~~ **RESOLVED: α = 0.1, κ = 0.3**, pre-registered. The κ sweep
+  (`kappa_sweep()` in `falsification/simulate.py`) measured worst-case Type-I
+  (5 fully redundant tests) against power at 5 seeds/group:
+
+  | κ | Type-I (worst) | power d=1.0 | d=1.5 | d=2.0 |
+  |---|---|---|---|---|
+  | 0.2 | 0.066 | 0.27 | 0.63 | 0.90 |
+  | **0.3** | **0.086** | **0.29** | **0.66** | **0.92** |
+  | 0.4 | 0.095 | 0.27 | 0.63 | 0.91 |
+  | 0.5 | 0.095 | 0.19 | 0.53 | 0.85 |
+  | 0.7 | 0.061 | 0.01 | 0.08 | 0.27 |
+
+  κ=0.3 maximises power while staying under α. Against the previous κ=0.5 this is
+  free: power at d=1.5 rises 0.53 → 0.66 at 5 seeds, 0.73 → 0.82 at 6. The power
+  table in "What the simulation settled" is κ=0.5 and is superseded by the κ=0.3
+  table in `RUNBOOK.md`.
 - **Equivalence margin for E1.** Needs to be pre-specified. What difference in live
   fraction would we consider a real departure from degeneracy?
