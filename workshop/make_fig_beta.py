@@ -57,7 +57,14 @@ for ax in axes:
     ax.spines[["top", "right"]].set_visible(False)
 
 fig.tight_layout()
-fig.savefig("workshop/figs/beta_sweep.pdf", bbox_inches="tight")
+# Omit the PDF CreationDate so regenerating the figure is byte-reproducible.
+# Without this, matplotlib stamps the current time into the PDF and the file
+# shows as modified on every run even when the plot is identical.
+fig.savefig(
+    "workshop/figs/beta_sweep.pdf",
+    bbox_inches="tight",
+    metadata={"CreationDate": None},
+)
 fig.savefig("workshop/figs/beta_sweep.png", dpi=180, bbox_inches="tight")
 
 print(f"{'beta':>10} {'live':>6} {'%alive':>8} {'mean_act':>9} {'max_act':>8}")
