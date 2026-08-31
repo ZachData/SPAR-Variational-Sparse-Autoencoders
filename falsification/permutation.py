@@ -21,6 +21,7 @@ be used for architecture-level claims unless you explicitly acknowledge the scop
 
 from __future__ import annotations
 
+from functools import lru_cache
 from itertools import combinations
 from math import comb
 from typing import Callable, Literal, Sequence
@@ -39,6 +40,21 @@ def _one_sided_count(observed: float, null_stats: np.ndarray, alternative: Alter
     if alternative == "less":
         return int(np.sum(null_stats <= observed))
     return int(np.sum(np.abs(null_stats) >= abs(observed)))
+
+
+@lru_cache(maxsize=64)
+def _assignment_masks(n_total: int, n_a: int) -> np.ndarray:
+    """All C(n_total, n_a) group-A indicator rows, as a float matrix.
+
+    Cached because the same (n_total, n_a) recurs across every test in a study,
+    and because building it dominates the cost of an exact permutation test.
+    Multiplying this matrix by the pooled values yields every group-A sum in one
+    BLAS call instead of a Python loop over combinations.
+    """
+    masks = np.zeros((comb(n_total, n_a), n_total), dtype=float)
+    for i, idx in enumerate(combinations(range(n_total), n_a)):
+        masks[i, list(idx)] = 1.0
+    return masks
 
 
 def seed_permutation_test(
@@ -73,22 +89,39 @@ def seed_permutation_test(
 
     pooled = np.concatenate([a, b])
     n_a, n_total = len(a), len(pooled)
-    observed = a.mean() - b.mean()
 
     n_assignments = comb(n_total, n_a)
     exact = n_assignments <= _EXACT_ENUMERATION_LIMIT
 
     if exact:
-        null_stats = np.empty(n_assignments, dtype=float)
         total_sum = pooled.sum()
-        for i, idx in enumerate(combinations(range(n_total), n_a)):
-            sum_a = pooled[list(idx)].sum()
-            null_stats[i] = sum_a / n_a - (total_sum - sum_a) / (n_total - n_a)
-        count = _one_sided_count(observed, null_stats, alternative)
-        # Exact enumeration includes the observed assignment, so this is already valid.
+
+        def _stat(sum_a: float) -> float:
+            return sum_a / n_a - (total_sum - sum_a) / (n_total - n_a)
+
+        # The observed statistic MUST be computed by the same arithmetic as the
+        # null statistics. Computing it as a.mean() - b.mean() is mathematically
+        # identical but can differ in the last ULP, so the observed assignment
+        # fails its own >= comparison, the count comes out 0, and p = 0 maps to an
+        # infinite e-value -- i.e. automatic validation of a false hypothesis.
+        observed = _stat(pooled[:n_a].sum())
+        null_stats = _stat(_assignment_masks(n_total, n_a) @ pooled)
+
+        # Belt and braces: a scale-aware tolerance, so ties are counted as ties.
+        tol = 1e-12 * max(1.0, float(np.abs(null_stats).max()))
+        if alternative == "greater":
+            count = int(np.sum(null_stats >= observed - tol))
+        elif alternative == "less":
+            count = int(np.sum(null_stats <= observed + tol))
+        else:
+            count = int(np.sum(np.abs(null_stats) >= abs(observed) - tol))
+
+        # Exact enumeration includes the observed assignment, so count >= 1 and
+        # this is a valid p-value as-is.
         p_value = count / n_assignments
         n_draws = n_assignments
     else:
+        observed = a.mean() - b.mean()
         rng = np.random.default_rng(seed)
         null_stats = np.empty(n_perm, dtype=float)
         for i in range(n_perm):
