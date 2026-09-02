@@ -67,54 +67,58 @@ dictionary. Everything else is implemented and tested.
 
 ---
 
-## 2. Seeded training arms
+## 2. Seeded training arms — one command
 
-Configs are **hardcoded** in `create_full_config()`. There are no CLI flags for
-model, beta, or seed — edit the function, run, repeat per seed.
+`run_overnight.sh` drives everything. It is safe to interrupt and re-run:
+completed runs are skipped via their `RUN_COMPLETE.json` marker.
 
-Shared base for every arm (the existing sweep point, so results are comparable):
-
-```python
-model_name = "gelu-1l"
-layer = 0
-hook_name = "blocks.0.hook_resid_post"
-dict_size_multiple = 4.0      # d = 2048
-k_fraction = 0.125            # k = 256
-total_steps = 10000
-lr = 8e-4
-auxk_alpha = 1/32
-var_flag = 0
-seed = <1..6>                 # THE ONLY FIELD THAT CHANGES WITHIN AN ARM
-```
-
-### E0 — baseline, 10 seeds (`training_scripts/train_topk.py`)
-Identical config, seeds 1–10. Doubles as the baseline arm for E1–E3.
 ```bash
-for s in 1 2 3 4 5 6 7 8 9 10; do
-  # edit seed = $s in create_full_config(), then:
-  python training_scripts/train_topk.py --config full
-done
+./run_overnight.sh --dry-run          # review the plan; no GPU needed
+nohup ./run_overnight.sh --hours 10 > sweep.out 2>&1 &
 ```
 
-### E1 — degeneracy control, 6 seeds (`training_scripts/train_topk.py`)
-Same as E0 plus `activation_penalty = 1.0` (newly added to `TopKTrainingConfig`;
-defaults to 0.0 so every other arm is unaffected).
+Monitor:
+```bash
+tail -f logs/sweep_*/sweep.log
+column -t logs/sweep_*/summary.tsv
+```
 
-**Verify on the first run before launching all six:** confirm
-`activation_penalty_loss` appears in the logged losses and is non-zero. If it is
-absent or zero, the penalty is not wired through and the arm is worthless.
+It gates on framework tests, arm-config validation and preflight before touching
+the GPU; runs arms in priority order so the most valuable work finishes first;
+refuses to start a run that cannot fit the remaining budget; and logs and skips
+individual failures rather than aborting.
 
-### E2 — is it variational at all?, 6 seeds (`training_scripts/train_vsae_topk.py`)
-Base config plus `kl_coeff = 1.0`, `var_flag = 1`. Checkpoints should be named
-`_learned_var`, not `_fixed_var` — if they say `fixed_var`, the flag did not take.
-Also record the learned sigma (`get_kl_diagnostics` logs `variance_mean`).
+**Do NOT edit `create_full_config()` by hand.** That was the old workflow and it
+cannot be automated. Worse, `get_experiment_name()` omits the seed, so running
+seeds that way makes every seed of an arm overwrite the previous one and you end
+up with a single checkpoint. `falsification/run_arm.py` gives each run its own
+`save_dir`; use it, or `run_overnight.sh` which calls it.
 
-### E3 — masked-KL, 6 seeds (`training_scripts/train_vsae_topk_masked_kl.py`)
-Base config plus `kl_coeff = 1.0`. **Confounded as-is:** this trainer omits the
-`F.relu(mu)` that `vsae_topk.py` applies. Either patch one to match the other
-first, or report the comparison as confounded. Do not skip this decision.
+Single arm at a time, if you prefer manual control:
+```bash
+python falsification/run_arm.py --check                      # validate all arms, no torch
+python falsification/run_arm.py --arm baseline --seed 1 --dry-run
+python falsification/run_arm.py --arm baseline --seed 1
+```
 
----
+Arms, in the priority order the sweep uses:
+
+| arm | script | what it is |
+|---|---|---|
+| `baseline` | `train_topk.py` | clean TopK, `activation_penalty=0.0` (E0) |
+| `e2_learned_var` | `train_vsae_topk.py` | `var_flag=1` — the genuinely variational model (E2) |
+| `e1_penalty` | `train_topk.py` | TopK + L2 penalty matched to the vSAE beta (E1) |
+| `e1_vsae_ref` | `train_vsae_topk.py` | fixed-variance vSAE that E1 should reproduce |
+| `e3_masked_kl` | `train_vsae_topk_masked_kl.py` | masked-KL (E3) — **confounded, see below** |
+
+**Verify the first `e1_penalty` run before trusting the arm:** confirm
+`activation_cost` appears in the logged losses and is non-zero. If it is absent or
+zero the penalty is not reaching the trainer and the arm is worthless.
+
+**E3 is confounded as it stands.** `vsae_topk_masked_kl.py` omits the `F.relu(mu)`
+that `vsae_topk.py` applies, so a masked-vs-unmasked comparison mixes the KL mask
+with the ReLU. It is last in priority for that reason. Patch one trainer to match
+the other before drawing any conclusion from it.
 
 ## 3. Measure every checkpoint
 

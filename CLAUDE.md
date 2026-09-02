@@ -55,11 +55,16 @@ from sae_vis histograms; 1,474/7,379 from the 1M-sample analysis). Prefer the
 
 ## Environment
 
-- **Remote Claude Code sessions have no GPU and no torch.** `nvidia-smi` and
-  `import torch` both fail. Training and any checkpoint-loading analysis must run
-  on the user's local RTX 3080 (10GB). Work that can be done remotely: reading
-  code, the `falsification/` package, analysis of the committed
-  `comprehensive_summary_*.json` files, figure generation, writing.
+- **Two environments, and it matters which you are in.** Run
+  `python falsification/preflight.py` to find out.
+  - *Remote/web sessions* have no GPU and no torch; `nvidia-smi` and
+    `import torch` both fail. Available work: reading code, the `falsification/`
+    package, analysis of committed `comprehensive_summary_*.json` files, figure
+    generation, writing.
+  - *Local sessions* on the RTX 3080 (10GB) can train. Use `./run_overnight.sh`
+    for sweeps and `falsification/run_arm.py` for single runs; never hand-edit
+    `create_full_config()`, because `get_experiment_name()` omits the seed and
+    seeds will silently overwrite one another.
 - `numpy`, `scipy`, `matplotlib`, `pytest` install cleanly with pip when needed.
 - Training targets bfloat16 on 10GB; buffer settings in the training scripts are
   tuned for that and are easy to OOM if raised.
