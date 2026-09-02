@@ -57,16 +57,37 @@ def main() -> int:
         check(f"falsification.{module} importable", spec is not None)
 
     print("\nDegeneracy control (E1) wiring")
-    top_k = (REPO / "dictionary_learning/trainers/top_k.py").read_text()
+    # NOTE: train_topk.py imports top_k_with_feature_penalty, NOT top_k. Checking
+    # the wrong file here previously reported green while the arm was unrunnable.
+    trainer = (
+        REPO / "dictionary_learning/trainers/top_k_with_feature_penalty.py"
+    ).read_text()
+    script = (REPO / "training_scripts/train_topk.py").read_text()
     check(
-        "TopK trainer exposes activation_penalty",
-        "activation_penalty: float = 0.0" in top_k,
+        "penalty trainer exposes activation_penalty",
+        "activation_penalty: float = 0.0" in trainer,
         "E1 has no control arm without it",
     )
     check(
+        "penalty is configurable, not hardcoded",
+        "0.01 * post_relu_acts_BF.pow(2)" not in trainer,
+        "a hardcoded penalty makes a clean baseline impossible",
+    )
+    check(
         "penalty applies to pre-TopK activations",
-        "activation_penalty > 0" in top_k and "post_relu_acts_BF.pow(2)" in top_k,
+        "self.training_config.activation_penalty" in trainer
+        and "post_relu_acts_BF.pow(2)" in trainer,
         "must penalise unselected features to mirror the vSAE KL",
+    )
+    check(
+        "train_topk.py passes activation_penalty through",
+        "activation_penalty=self.config.activation_penalty" in script,
+        "the field exists but never reaches the trainer",
+    )
+    check(
+        "train_topk.py imports the penalty trainer",
+        "top_k_with_feature_penalty import" in script,
+        "arm would train the wrong module",
     )
 
     print("\nKnown landmines")
