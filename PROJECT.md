@@ -182,11 +182,33 @@ directly. **Beware the confound in landmine 2**: that trainer omits the `F.relu(
 that `vsae_topk.py` applies, so either patch one to match the other or report the
 comparison as confounded.
 
-### E4 — Size-matched SCR/TPP control. No training.
-Restrict the trained baseline dictionary to a random subset matching the vSAE's
-live count, recompute SCR/TPP, repeat ≥1000 times → `subsample_null_test`. Turns
-the preprint's excluded tests into admissible ones by controlling the confounder.
-Cheapest high-value experiment available; do it first.
+### E4 — Size-matched SCR/TPP control. No training. Implemented in `falsification/size_control.py`.
+Measure SCR/TPP as a **function of dictionary size** for the baseline SAE, then
+ask where the vSAE's score falls on that curve.
+
+**The originally-planned version of this experiment was wrong, in the dangerous
+direction.** It proposed restricting the baseline to a *random* subset matching
+the vSAE's live count. But a random 18% subset of a dictionary trained to work as
+a whole reconstructs badly, while the vSAE's 1474 features were learned together.
+The vSAE beats that null trivially — so the test was rigged in its favour and
+would have manufactured a positive result for the very hypothesis it exists to
+check. `test_random_subset_null_would_falsely_confirm_the_hypothesis` demonstrates
+this concretely: a vSAE with zero genuine advantage still clears the random null.
+
+The correct reference is the baseline's **top-N most-used features** — its best
+foot forward, and the strongest thing size alone can buy. Clearing that bar is the
+demanding test; beating the random curve means nothing. Report both to bracket the
+answer.
+
+Sweep N over a grid, score each restricted dictionary, and place the vSAE's score
+on the resulting curve. If it sits on or below the top-usage curve at N = 1474,
+the advantage is explained by size, and the preprint's SCR/TPP reading collapses.
+This also produces the figure that makes the argument visually, which a single
+p-value would not.
+
+Still to write: the SAEBench-side scorer that turns a kept-index set into an SCR
+score. Everything around it is implemented and tested against synthetic scorers
+with known ground truth.
 
 **Budget:** ~28 training runs. At 20–40 min each on the 3080, roughly 10–19 hours,
 parallelisable across days. E4 needs no training and should start immediately.

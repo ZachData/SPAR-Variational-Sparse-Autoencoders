@@ -34,8 +34,10 @@ Do not start training until pre-flight prints `Pre-flight clear.`
 The cheapest high-value experiment: it needs existing checkpoints, not new runs,
 and it converts the preprint's two excluded results into admissible evidence.
 
-Restrict the trained baseline dictionary to a random subset matching the vSAE's
-live-feature count (1474 of 8192), recompute SCR and TPP, repeat >= 1000 times.
+Measure SCR/TPP as a function of dictionary size for the baseline, then place the
+vSAE's score on that curve. **Do not use a random size-matched subset as the
+reference** — it is a weak null that the vSAE beats trivially, manufacturing a
+false positive. The reference is the baseline's top-N most-used features.
 
 ```bash
 python analysis_scripts/online_histogram_analyzer.py \
@@ -43,16 +45,25 @@ python analysis_scripts/online_histogram_analyzer.py \
   --n-samples 1000000 --no-individual
 ```
 
-Then feed the resulting null distribution to `subsample_null_test`:
+Then build the size-response curve and read off the verdict:
 
 ```python
-from falsification.permutation import subsample_null_test
-res = subsample_null_test(observed_score=VSAE_SCR, baseline_scores_subsampled=SUBSAMPLE_SCORES)
-print(res["p_value"], res["p_floor"])
+from falsification.size_control import size_response_curve, verdict
+
+# usage_counts: per-feature selection counts from the baseline's
+# comprehensive_summary_*.json. scorer(keep_indices) -> SCR score, which is the
+# one piece still to write: it masks the dictionary and calls SAEBench.
+points = size_response_curve(
+    usage_counts, scorer, n_grid=(500, 1000, 1474, 3000, 5000, 7379), n_draws=20
+)
+print(verdict(observed_score=VSAE_SCR, observed_n=1474, points=points))
 ```
 
-**Note:** the subsampling harness itself is not written yet — it is the one piece
-of E4 still to build. Tell me and I will write it; it needs no GPU to develop.
+`mask_dictionary()` handles the weight masking (note encoder rows and decoder
+columns index features on *different* axes — it requires you to say which).
+
+**Still to write:** the `scorer` closure that calls SAEBench on a masked
+dictionary. Everything else is implemented and tested.
 
 ---
 
