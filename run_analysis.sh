@@ -39,8 +39,21 @@ while IFS= read -r marker; do
   CKPT=$(dirname "$AE")                         # the trainer_0/ that load_dictionary needs
   NAME=$(echo "$RUN" | tr '/' '_')
 
-  if (( ! FORCE )) && compgen -G "$RUN/*/comprehensive_summary_*.json" >/dev/null; then
-    log "  skip (already analysed): $RUN"; skipped=$((skipped+1)); continue
+  # Skip only if the summary is NEWER than the checkpoint it describes. A plain
+  # existence check is a trap: retraining an arm (e.g. e1_vsae_ref after the
+  # use_april_update_mode fix) leaves the previous generation's summary sitting
+  # next to the new ae.pt, and every downstream table would then silently mix
+  # measurements of checkpoints that no longer exist with ones that do. Comparing
+  # mtimes re-analyses exactly what changed and nothing else -- which matters,
+  # because --force costs ~6.5 min x every run on disk.
+  if (( ! FORCE )); then
+    SUMMARY=$(ls -t "$RUN"/*/comprehensive_summary_*.json 2>/dev/null | head -1)
+    if [[ -n "$SUMMARY" ]]; then
+      if [[ "$SUMMARY" -nt "$AE" ]]; then
+        log "  skip (already analysed): $RUN"; skipped=$((skipped+1)); continue
+      fi
+      log "  STALE summary (older than ae.pt), re-analysing: $RUN"
+    fi
   fi
 
   START=$(date +%s)

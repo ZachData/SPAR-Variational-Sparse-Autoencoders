@@ -307,3 +307,56 @@ This is what makes E2 answerable at all. `kl_coeff` is not a shared scale across
 total — so the original "matched beta" arm compared two different interventions and
 posterior-collapsed in all six seeds. Without a beta that trains, E2 measures
 nothing.
+
+
+---
+
+## Stage-1 pilot result: no beta in the grid gives a working variational SAE
+
+Run 2026-09-03, one seed (101) per beta at `var_flag=1`. Baseline mean FVE is
+0.900335; the pre-registered rule wanted the largest beta within 0.02 of it.
+
+| beta | 1e-4 | 1e-3 | 1e-2 | 1e-1 | 1 |
+|---|---|---|---|---|---|
+| `frac_variance_explained` | 0.4581 | 0.2843 | 0.1367 | 0.0004 | 0.0001 |
+| within 0.02 of baseline? | no | no | no | no | no |
+
+**Nothing qualified, so the rule took its fallback branch and selected beta = 1e-4.**
+That is the rule working as written, and the fallback is why it was written — but
+the more important output of stage 1 is not the beta, it is the column of noes.
+
+**What this changes about E2.** The pilot was designed on the hypothesis that
+beta = 1.0 was simply too large once sampling was switched on, and that a smaller
+beta would recover a healthy model. It does not. FVE degrades monotonically across
+four orders of magnitude and never comes close to baseline; even the smallest beta
+tried reconstructs at **half** the baseline's FVE. So the reconstruction failure at
+`var_flag=1` is not a beta-tuning problem within this grid. The candidate
+explanation that survives is that the sampling itself — not the weight on the KL —
+is what the model cannot absorb, which is a claim about the architecture rather
+than about a hyperparameter.
+
+**Consequence for stage 2, stated before the confirmatory runs are read.** The
+confirmatory arm at 1e-4 characterises a model at FVE ~0.46, not a healthy one.
+Live-feature metrics on it therefore carry the same reconstruction-collapse caveat
+recorded for the beta=1.0 runs in FINDINGS item 6: a dictionary whose features
+carry little information can read as "fully alive" while reconstructing poorly, so
+liveness on this arm is **not** validity-preserving on its own and any E2 test
+keyed on it belongs in `confounders_uncontrolled`. Stage 2 is still worth running —
+it establishes across-seed reproducibility of the degradation at the best available
+beta, which one pilot seed cannot — but it is not a comparison of two healthy
+models and must not be reported as one.
+
+**Two follow-ups that are the author's call, flagged and NOT taken.** Both would be
+changes to the design made after seeing a result, so neither is something to do
+quietly:
+
+* **Extend the grid downward** (1e-5, 1e-6). The trend is monotone, so a smaller
+  beta may qualify. This is a legitimate question but it is a *new* pre-registration,
+  not a continuation of this one, and it must be declared as such.
+* **Run `var_flag=1, kl_coeff=0` as a diagnostic control.** One run, ~1 minute.
+  With sampling on and the KL entirely off, it separates "the reparameterisation
+  destroys reconstruction" from "the KL destroys reconstruction" — the exact
+  ambiguity the pilot leaves open, and the thing that decides whether the E2 story
+  is about the architecture or about a penalty. It is a control rather than a
+  selection step, so it does not contaminate the confirmatory arm; it is still an
+  arm that was not pre-registered.

@@ -148,6 +148,31 @@ for _beta in E2_PILOT_BETAS:
     }
 del _beta
 
+# Stage 2. This value was produced by select_e2_beta.py applying the rule above to
+# the stage-1 pilot on 2026-09-03; it is written here literally so the confirmatory
+# arm is reproducible without re-running the pilot, and the derivation is in
+# logs/e2_pilot_*/pilot.log. Do not hand-edit it -- re-run the pilot and the
+# selector if the grid or the rule changes.
+#
+# It came from the FALLBACK branch, and that is the pilot's actual finding: NO beta
+# in {1e-4 ... 1} put a var_flag=1 model within 0.02 FVE of baseline (0.900). The
+# grid is monotone and never gets close --
+#
+#   beta   1e-4     1e-3     1e-2     1e-1     1
+#   FVE    0.4581   0.2843   0.1367   0.0004   0.0001
+#
+# -- so at 1e-4 the confirmatory arm characterises a model reconstructing at HALF
+# the baseline's FVE, not a healthy one. Any E2 result must be read in that light,
+# and a liveness metric on this arm should carry the same reconstruction-collapse
+# caveat the pilot's beta=1.0 runs did (FINDINGS_2026-09-02.md item 6).
+E2_SELECTED_BETA = 1e-4
+
+ARMS["e2_confirm"] = {
+    "script": "train_vsae_topk.py",
+    "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": E2_SELECTED_BETA,
+                  "var_flag": 1},
+}
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.
