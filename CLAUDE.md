@@ -59,13 +59,20 @@ two different dead-feature numbers from two different measurements (1,227/6,970
 from sae_vis histograms; 1,474/7,379 from the 1M-sample analysis). Prefer the
 1M-sample numbers and say which measurement you used.
 
-**Two floor functions report the wrong bound.** `permutation.min_p_floor` and
-`evalues.min_attainable_p` have the one-sided and two-sided branches swapped, so a
-one-sided `seed_permutation_test` can return a p-value *below* its own reported
-`p_floor`. Decisions are unaffected (they use the real p-value), but the power and
-seed-count tables in `PROJECT.md` and `RUNBOOK.md` are 2x pessimistic. Unfixed
-because it touches pre-registered power accounting; pinned by a strict `xfail`.
-See `falsification/FINDINGS_2026-09-02.md`.
+**Two p-value floors are combinatorial, and both have bitten.** `min_p_floor` /
+`min_attainable_p` once had their one-sided and two-sided branches swapped; that is
+**fixed** (F1), and the `xfail` that pinned it is now a positive test. What remains
+is not a bug but a property to plan around:
+
+* The **seed** floor is `2/C(2n,n)` two-sided. 6 seeds/group cannot beat 3.07 sigma
+  however large the effect; 13 seeds/group is the first n reaching 5 sigma.
+* Above `_EXACT_ENUMERATION_LIMIT` (200k assignments) the test silently falls back
+  to **Monte Carlo**, whose floor is `1/(n_perm+1)`. The 100k default caps evidence
+  at 4.42 sigma *regardless of effect size*. Pass a larger `n_perm` (it is
+  vectorised; 4M draws take ~1s) whenever n > 8 per group.
+
+A p-value sitting exactly at one of these floors means **the design ran out, not the
+evidence**. Check `result["exact"]` and `result["p_floor"]` before reporting.
 
 **`frac_recovered = 0.0` in a summary file usually means an OOM, not a result.**
 `loss_recovered()` OOMs at the default eval batch size on a 10GB card, the failure
@@ -101,15 +108,27 @@ python falsification/worked_example.py
 # Regenerate the beta dose-response figure from committed JSONs
 python workshop/make_fig_beta.py     # if the workshop/ docs are present
 
-# Training (LOCAL GPU ONLY). Configs are hardcoded in create_full_config();
-# there are no CLI flags for model/beta/seed -- edit the function.
-python training_scripts/train_vsae_topk.py --config full
-python training_scripts/train_topk.py --config full
+# Training (LOCAL GPU ONLY). Use run_arm.py -- do NOT hand-edit
+# create_full_config(); get_experiment_name() omits the seed, so seeds
+# written that way silently overwrite one another.
+python falsification/run_arm.py --check              # validate all arms, no torch
+python falsification/run_arm.py --arm baseline --seed 1
+./run_overnight.sh --hours 10                        # the seeded arms
+./run_e2_pilot.sh                                    # E2 stage 1 + selection rule
 
-# Feature-usage measurement after a run
-python analysis_scripts/online_histogram_analyzer.py \
-  --model-path <checkpoint_dir> --n-samples 1000000 --no-individual
+# Feature-usage measurement. run_analysis.sh handles the per-seed output dir
+# (the analyzer names outputs after the checkpoint dir, which omits the seed)
+# and re-analyses only checkpoints whose summary is older than their ae.pt.
+./run_analysis.sh
+./run_analysis.sh --force                            # ~1.2 min x every run on disk
+
+# Cross-arm tables and the E1 comparison across its confound generations
+python falsification/report_summaries.py --table
+python falsification/compare_e1.py --ref current|aprilmode|klwarmup
 ```
+
+**Read `HANDOFF.md` first.** It carries current state, what is established, and the
+prioritised next steps.
 
 ## Conventions
 
