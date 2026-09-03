@@ -31,12 +31,12 @@ effect sizes. Confirmatory arms run with fresh seeds.
 | F9a | `from_pretrained` for the masked-KL class | claude (review) | done | **DONE — review wanted** |
 | F10a | Masked-KL `evaluate_model()` died on missing `dict_class` | claude | mins | **DONE** |
 | F10b | Masked-KL script never imported `math` | claude | mins | **DONE** |
-| F9b | Resolve the `F.relu(mu)` mismatch — which trainer moves? | **author** | — | **DECISION NEEDED** |
-| F6 | E2 beta-selection rule for the `var_flag=1` regime | **author** | 2-stage | **DECISION NEEDED** |
-| F8b | Pre-register the sparsity-relative liveness threshold | **author** | — | **DECISION NEEDED** |
+| F9b | Resolve the `F.relu(mu)` mismatch — which trainer moves? | author | — | **DECIDED — neither; run both as arms** |
+| F6 | E2 beta-selection rule for the `var_flag=1` regime | author | 2-stage | **DECIDED — two-stage, rule fixed in code** |
+| F8b | Pre-register the sparsity-relative liveness threshold | author | — | **DECIDED — both, as a sensitivity pair** |
 | F9c | Verify masked-KL loader through the real analyzer | claude | done | **DONE** (6/6, 0 failures) |
-| F7c | Match the bias parameterisation in E1 (`use_april_update_mode`) | **author** | 45 min | **DECISION NEEDED** |
-| — | Confirmatory battery, fresh seeds | after above | ~3.75 h | BLOCKED on the 4 decisions |
+| F7c | Match the bias parameterisation in E1 (`use_april_update_mode`) | author | 45 min | **DECIDED — match it (False)** |
+| — | Confirmatory battery, fresh seeds | claude | ~4.5 h | READY — all four decisions taken |
 
 ---
 
@@ -157,7 +157,7 @@ The two options, for the record:
 Until one is chosen, E1 carries `confounders_uncontrolled=("kl_warmup_steps",)` and
 is excluded from the evidence product.
 
-### F7c — match the bias parameterisation? (new, from F7b's result)
+### F7c — match the bias parameterisation? **DECIDED 2026-09-03: match it**
 With the schedule matched, E1's arms still differ at d = 39-129. The loss functions
 were then shown to be **numerically identical** (511.895264 both, six decimals), so
 the difference is architectural, and it is the bias form:
@@ -173,14 +173,14 @@ less exercised of the two, so it wants a canary run before committing all six
 seeds. Until this is settled E1 carries
 `confounders_uncontrolled=("use_april_update_mode",)`.
 
-### F9b — which trainer moves for `F.relu(mu)`?
+### F9b — which trainer moves for `F.relu(mu)`? **DECIDED 2026-09-03: neither**
 `vsae_topk.py` applies it, `vsae_topk_masked_kl.py` does not, and the preprint's
 equations show no ReLU. Patching the masked trainer to add it matches the
 released code; removing it from `vsae_topk.py` matches the paper. These give
 different experiments. Not guessable from the code — it depends which claim E3 is
 meant to test.
 
-### F6 — E2's beta-selection rule
+### F6 — E2's beta-selection rule **DECIDED 2026-09-03: two-stage, as proposed**
 `kl_coeff` is not a shared scale across `var_flag`: at 0 the KL is `0.5‖mu‖²`; at 1
 the variance term contributes ~220 of a ~225 total loss. A single "matched beta"
 point compares two different interventions, and at beta=1.0 the model
@@ -193,7 +193,7 @@ looked at:
    0.02 of baseline"*.
 3. 6 confirmatory seeds at the selected beta, seeds **disjoint** from the pilot.
 
-### F8b — the liveness threshold
+### F8b — the liveness threshold **DECIDED 2026-09-03: pre-register both**
 `features_used` saturates because mean selection frequency is exactly `k/d = 0.125`
 by construction. That is knowable a priori, so re-specifying the metric on sparsity
 arithmetic is legitimate — but the threshold must be fixed now, before it is
@@ -226,3 +226,84 @@ python falsification/report_summaries.py --table
 | `training_scripts/train_vsae_topk_masked_kl.py` | same |
 
 Nothing is committed; all of it is working-tree on `claude/falsification-framework`.
+
+
+---
+
+## The four decisions, taken 2026-09-03
+
+All four are applied in code. What each one changed, and what it costs:
+
+### F7c — match the bias parameterisation (applied)
+
+`"use_april_update_mode": False` added to `e1_vsae_ref` in `run_arm.py`. The vSAE
+now subtracts `self.bias` before encoding, matching
+`top_k_with_feature_penalty`'s `relu(encoder(x - b_dec))` form. This is the last
+known difference between E1's two arms: with it matched, and the warmup already
+matched under F7b, the arms differ in *nothing* the degeneracy claim does not
+assert to be irrelevant. If they still differ, that is a real result about the
+claim rather than an artifact of two implementations.
+
+The non-april path is the less exercised of the two, so it gets a canary seed
+before all six are committed. The pre-correction runs are preserved under
+`archive/e1_vsae_ref_aprilmode/`, so — as with the warmup — the size of this
+confound stays measurable rather than merely asserted.
+
+### F9b — run the ReLU as a factor, not a nuisance (applied)
+
+Neither trainer moves. `relu_mu` is now a flag on the masked-KL model, its
+training config, and `load_dictionary`, defaulting to `False` so every existing
+checkpoint behaves exactly as before. E3 becomes two arms:
+
+* `e3_masked_kl` — no ReLU, matching the **preprint's equations**
+* `e3_masked_kl_relu` — ReLU, matching the **released `vsae_topk.py` code**, and
+  therefore the like-for-like comparison against `e1_vsae_ref`
+
+This costs one extra arm (6 runs, ~6 min training + ~40 min analysis) and buys the
+thing neither single arm could give: the ReLU's contribution is *measured* rather
+than assumed away. The disagreement between preprint and code was never resolvable
+from the code — it depends on which claim E3 tests — so the design stops trying to
+resolve it and estimates it instead.
+
+`relu_mu` changes no parameter shape, so unlike `var_flag` it cannot be recovered
+from a state dict. `config.json` is the only record of which arm a checkpoint
+belongs to, which is why it is written into the trainer's `config` property and
+read back in `utils.load_dictionary`. The checkpoint name also carries a `_relu`
+suffix, since the analyzer names its outputs from that string.
+
+### F8b — pre-register both thresholds (applied)
+
+`PREREGISTERED_LIVENESS_THRESHOLDS = (0.1, 0.5)` in `report_summaries.py`, with
+the rule stated at the definition: **a result counts as robust only if it holds at
+both, and a disagreement between them is itself the finding**, not something to be
+resolved by picking the more convenient cut.
+
+No single cut is principled, and choosing one after seeing which separated the arms
+would be precisely the selection effect this framework exists to catch. Reporting
+both costs two numbers per test and forecloses that move entirely.
+
+The legitimacy argument, stated plainly so it can be checked: the thresholds were
+fixed *after* the pilot showed `features_used` was degenerate, but they are derived
+from the **arithmetic of the design** — TopK selects exactly k of d features per
+sample, so mean selection frequency is exactly `k/d`, knowable before any run — and
+never from observed effect sizes. The confirmatory battery uses fresh seeds
+regardless.
+
+### F6 — two-stage beta selection for E2 (applied)
+
+Five pilot arms `e2_beta_pilot_{1e-4 … 1}` at `var_flag=1`, one seed each
+(seed 101). The selection rule is written into `run_arm.py` **before** any pilot
+result exists:
+
+> select the largest beta whose `frac_variance_explained` is within 0.02 of the
+> baseline arm's mean FVE; if none qualifies, select the smallest beta tried.
+
+Stage 2 trains 6 confirmatory seeds at the selected beta using seeds 1–6, disjoint
+from the pilot's 101, so **no checkpoint contributes to both selection and
+inference**. Cost: 5 pilot runs (~5 min) plus the confirmatory 6.
+
+This is what makes E2 answerable at all. `kl_coeff` is not a shared scale across
+`var_flag` — at 0 the KL is `0.5‖mu‖²`, at 1 the variance term is ~220 of a ~225
+total — so the original "matched beta" arm compared two different interventions and
+posterior-collapsed in all six seeds. Without a beta that trains, E2 measures
+nothing.

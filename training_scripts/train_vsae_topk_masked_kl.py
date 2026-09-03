@@ -49,6 +49,12 @@ class ExperimentConfig:
     # Model-specific config
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
+    # Apply relu to mu after the encoder. trainers/vsae_topk.py does this
+    # unconditionally and this trainer never did, so E3 confounded the KL mask with
+    # the ReLU (CLAUDE.md landmine 2). The preprint shows no ReLU and the released
+    # code has one; rather than declare either correct, both are run as arms
+    # (e3_masked_kl and e3_masked_kl_relu in falsification/run_arm.py).
+    relu_mu: bool = False
     threshold_beta: float = 0.999
     threshold_start_step: Optional[int] = None
     
@@ -216,6 +222,7 @@ class ExperimentRunner:
             k=k,
             var_flag=self.config.var_flag,
             use_april_update_mode=self.config.use_april_update_mode,
+            relu_mu=self.config.relu_mu,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )
@@ -285,7 +292,7 @@ class ExperimentRunner:
         # var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
         
         return (
-            f"MaskedVSAETopK_{clean_model_name}_"
+            f"MaskedVSAETopK{'_relu' if self.config.relu_mu else ''}_{clean_model_name}_"
             f"d{int(self.config.dict_size_multiple * 512)}_"
             f"k{k_value}_lr{self.config.lr}_kl{self.config.kl_coeff}_"
             f"aux{self.config.auxk_alpha}"
@@ -507,6 +514,7 @@ def create_full_config() -> ExperimentConfig:
         # Model settings
         var_flag=0,  # Fixed variance for memory efficiency
         use_april_update_mode=True,
+        relu_mu=False,
         threshold_beta=0.999,
         
         # OPTIMIZED buffer settings for consistent speed

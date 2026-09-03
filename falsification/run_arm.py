@@ -85,18 +85,68 @@ ARMS: dict[str, dict[str, Any]] = {
     # recorded as item 7 in FINDINGS_2026-09-02.md. The pre-correction runs are kept
     # under archive/e1_vsae_ref_klwarmup1000/ so the size of that confound stays
     # measurable.
+    #
+    # use_april_update_mode=False is the second half of the same story. With the
+    # warmup matched, the two arms' losses were shown numerically identical
+    # (511.895264 both, six decimals) yet the checkpoints still differed at
+    # d = 39-129. The residual is architectural: top_k_with_feature_penalty
+    # centres its input on a tied pre-bias (`relu(encoder(x - b_dec))`), while
+    # vsae_topk in april mode has no pre-bias at all and an untied decoder.bias.
+    # That changes what the encoder sees and therefore which features fire --
+    # exactly the construct E1 measures. False makes vsae_topk subtract
+    # self.bias pre-encoder, matching the TopK form (REMEDIATION.md F7c).
     "e1_vsae_ref": {
         "script": "train_vsae_topk.py",
         "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
-                      "kl_warmup_steps": 0},
+                      "kl_warmup_steps": 0, "use_april_update_mode": False},
     },
-    # E3: masked-KL. NOTE: that trainer omits the F.relu(mu) applied by vsae_topk.py,
-    # so this comparison is confounded until one is patched to match the other.
+    # E3: masked-KL, run as a 2-level factor rather than a confound. The masked
+    # trainer omits the F.relu(mu) that vsae_topk.py applies unconditionally, so a
+    # single E3 arm cannot separate "masking the KL did this" from "the ReLU did
+    # this" (CLAUDE.md landmine 2). The preprint's equations show no ReLU and the
+    # released code has one; neither is obviously the intended architecture, so
+    # both are run and the ReLU's contribution is measured instead of assumed
+    # (REMEDIATION.md F9b). e3_masked_kl_relu is the arm that matches vsae_topk.py
+    # and is therefore the like-for-like comparison against e1_vsae_ref; plain
+    # e3_masked_kl matches the preprint's equations.
     "e3_masked_kl": {
         "script": "train_vsae_topk_masked_kl.py",
-        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0},
+        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
+                      "relu_mu": False},
+    },
+    "e3_masked_kl_relu": {
+        "script": "train_vsae_topk_masked_kl.py",
+        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
+                      "relu_mu": True},
     },
 }
+
+# E2 beta pilot: kl_coeff is NOT a shared scale across var_flag. At var_flag=0 the
+# KL reduces to 0.5*||mu||^2, a mild L2 penalty; at var_flag=1 the variance term
+# enters and contributes ~220 of a ~225 total loss. So "matched beta" compares two
+# different interventions, and at beta=1.0 the model posterior-collapses in all six
+# seeds (mu -> 1e-3, FVE = 0.0001) -- E2 as first run cannot distinguish "a
+# variational SAE degenerates" from "beta=1.0 is far too large once sampling is on".
+#
+# Stage 1 is ONE seed per beta, used only to locate a workable beta. The selection
+# rule is fixed here, BEFORE the pilot is looked at:
+#
+#   select the LARGEST beta whose frac_variance_explained is within 0.02 of the
+#   baseline arm's mean FVE; if none qualifies, select the smallest beta tried.
+#
+# Stage 2 then trains 6 confirmatory seeds at the selected beta with seeds DISJOINT
+# from the pilot's (the pilot uses seed 101; confirmatory uses 1-6), so no
+# checkpoint contributes to both selection and inference (REMEDIATION.md F6).
+E2_PILOT_BETAS = (1e-4, 1e-3, 1e-2, 1e-1, 1.0)
+E2_PILOT_SEED = 101
+E2_SELECTION_FVE_MARGIN = 0.02
+
+for _beta in E2_PILOT_BETAS:
+    ARMS[f"e2_beta_pilot_{_beta:g}"] = {
+        "script": "train_vsae_topk.py",
+        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": _beta, "var_flag": 1},
+    }
+del _beta
 
 
 def config_fields_static(script: str) -> set[str]:

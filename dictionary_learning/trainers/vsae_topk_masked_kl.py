@@ -19,6 +19,14 @@ class VSAETopKConfig:
     k: int
     var_flag: int = 0
     use_april_update_mode: bool = True
+    # Whether to apply relu to mu after the encoder. trainers/vsae_topk.py applies
+    # it unconditionally; this trainer never did, so any E3 comparison between them
+    # confounded the KL mask with the ReLU (CLAUDE.md landmine 2). The preprint's
+    # equations show no ReLU, the released vsae_topk.py code has one, and the two
+    # are different experiments -- so it is a flag and both are run as arms rather
+    # than one being silently declared correct. Default False preserves every
+    # existing masked-KL checkpoint's behaviour.
+    relu_mu: bool = False
     log_var_init: float = -2.0
     dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
@@ -43,6 +51,7 @@ class VSAETopK(nn.Module):
         self.k = nn.Parameter(torch.tensor(config.k), requires_grad=False)
         self.var_flag = config.var_flag
         self.use_april_update_mode = config.use_april_update_mode
+        self.relu_mu = config.relu_mu
         
         device = config.get_device()
         dtype = config.dtype
@@ -122,6 +131,10 @@ class VSAETopK(nn.Module):
         
         # Encode to latent distribution parameters
         mu = self.encoder(x_processed)
+        if self.relu_mu:
+            # Matches trainers/vsae_topk.py:253. Off by default; see relu_mu on
+            # VSAETopKConfig for why this is a flag rather than a fixed choice.
+            mu = torch.relu(mu)
         
         log_var = None
         if self.var_flag == 1:
@@ -181,6 +194,7 @@ class VSAETopK(nn.Module):
         device: Optional[torch.device] = None,
         normalize_decoder: bool = False,
         var_flag: Optional[int] = None,
+        relu_mu: bool = False,
     ) -> 'VSAETopK':
         """Load a checkpoint saved by this trainer.
 
@@ -225,6 +239,10 @@ class VSAETopK(nn.Module):
                 k=k,
                 var_flag=var_flag,
                 use_april_update_mode=use_april_update_mode,
+                # NOT detectable from the state dict -- relu_mu changes no
+                # parameter shape, only the forward pass. Callers that care must
+                # pass it; load_dictionary() reads it from config.json.
+                relu_mu=relu_mu,
                 dtype=dtype or state_dict["encoder.weight"].dtype,
                 device=device,
             )
@@ -392,6 +410,7 @@ class VSAETopKTrainer:
         k: Optional[int] = None,
         var_flag: Optional[int] = None,
         use_april_update_mode: Optional[bool] = None,
+        relu_mu: Optional[bool] = None,
         device: Optional[str] = None,
         steps: Optional[int] = None,
         lr: Optional[float] = None,
@@ -413,6 +432,7 @@ class VSAETopKTrainer:
                 k=k,
                 var_flag=var_flag or 0,
                 use_april_update_mode=use_april_update_mode if use_april_update_mode is not None else True,
+                relu_mu=relu_mu if relu_mu is not None else False,
                 device=device_obj
             )
         
@@ -502,6 +522,9 @@ class VSAETopKTrainer:
             'k': self.model_config.k,
             'var_flag': self.model_config.var_flag,
             'use_april_update_mode': self.model_config.use_april_update_mode,
+            # Load-bearing: relu_mu is invisible in the state dict, so config.json
+            # is the only record of which E3 arm a checkpoint belongs to.
+            'relu_mu': self.model_config.relu_mu,
             'steps': self.training_config.steps,
             'lr': self.training_config.lr,
             'kl_coeff': self.training_config.kl_coeff,

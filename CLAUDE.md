@@ -33,6 +33,12 @@ variational, stochastic, or as testing a posterior.
 **`vsae_topk.py` applies `F.relu(mu)`; `vsae_topk_masked_kl.py` does not.** The
 two trainers therefore differ by more than the KL mask. Any comparison between
 them confounds the mask with the ReLU. The preprint's equations show no ReLU.
+The masked trainer now carries a `relu_mu` flag (default `False`, so every
+existing checkpoint is unchanged), and E3 runs as two arms — `e3_masked_kl`
+(no ReLU, matching the preprint) and `e3_masked_kl_relu` (ReLU, matching the
+released code) — so the ReLU's contribution is measured rather than assumed.
+`relu_mu` changes no parameter shape and so **cannot be recovered from a state
+dict**; `config.json` is the only record of which arm a checkpoint belongs to.
 
 **The baseline had AuxK on and the vSAE had it off.** The headline Pythia
 comparison is `auxk0.03125` (baseline) against `aux0` (vSAE). AuxK is the standard

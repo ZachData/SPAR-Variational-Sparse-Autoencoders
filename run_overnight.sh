@@ -15,7 +15,14 @@ DRY_RUN=0
 SEEDS=(1 2 3 4 5 6)
 # Priority order. If the budget runs out, later arms are simply not started, so
 # the most valuable work is always the work that completes.
-ARMS=(baseline e2_learned_var e1_penalty e1_vsae_ref e3_masked_kl)
+# e3_masked_kl_relu is the ReLU arm of the E3 factor: vsae_topk.py applies
+# F.relu(mu) and the masked trainer does not, so one arm alone confounds the KL
+# mask with the ReLU. Both are run and the difference between them IS the ReLU's
+# contribution (REMEDIATION.md F9b).
+#
+# The E2 beta pilot is deliberately NOT here. It is stage 1 of a two-stage design
+# and runs at seed 101, disjoint from these; see ./run_e2_pilot.sh.
+ARMS=(baseline e2_learned_var e1_penalty e1_vsae_ref e3_masked_kl e3_masked_kl_relu)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

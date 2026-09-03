@@ -109,16 +109,39 @@ Arms, in the priority order the sweep uses:
 | `e2_learned_var` | `train_vsae_topk.py` | `var_flag=1` — the genuinely variational model (E2) |
 | `e1_penalty` | `train_topk.py` | TopK + L2 penalty matched to the vSAE beta (E1) |
 | `e1_vsae_ref` | `train_vsae_topk.py` | fixed-variance vSAE that E1 should reproduce |
-| `e3_masked_kl` | `train_vsae_topk_masked_kl.py` | masked-KL (E3) — **confounded, see below** |
+| `e3_masked_kl` | `train_vsae_topk_masked_kl.py` | masked-KL, **no** ReLU — matches the preprint (E3) |
+| `e3_masked_kl_relu` | `train_vsae_topk_masked_kl.py` | masked-KL **with** ReLU — matches the released code (E3) |
+| `e2_beta_pilot_*` | `train_vsae_topk.py` | E2 stage-1 beta pilot, `var_flag=1`, one seed each |
 
 **Verify the first `e1_penalty` run before trusting the arm:** confirm
 `activation_cost` appears in the logged losses and is non-zero. If it is absent or
 zero the penalty is not reaching the trainer and the arm is worthless.
 
-**E3 is confounded as it stands.** `vsae_topk_masked_kl.py` omits the `F.relu(mu)`
-that `vsae_topk.py` applies, so a masked-vs-unmasked comparison mixes the KL mask
-with the ReLU. It is last in priority for that reason. Patch one trainer to match
-the other before drawing any conclusion from it.
+**E3's ReLU is a factor, not a confound (resolved 2026-09-03).**
+`vsae_topk_masked_kl.py` omits the `F.relu(mu)` that `vsae_topk.py` applies, so a
+single masked-vs-unmasked arm mixes the KL mask with the ReLU. The preprint's
+equations show no ReLU and the released code has one, and which is "correct"
+depends on what E3 is meant to test — so neither trainer was changed. Instead
+`relu_mu` is a flag and both arms are run. `e3_masked_kl_relu` is the
+like-for-like comparison against `e1_vsae_ref`; plain `e3_masked_kl` matches the
+preprint. Report both; the difference between them *is* the ReLU's contribution.
+
+**E2 needs its beta pilot before its confirmatory seeds.** `kl_coeff` is not a
+shared scale across `var_flag`: at 0 the KL is `0.5‖mu‖²`, at 1 the variance term
+contributes ~220 of a ~225 total loss, and at beta=1.0 the model posterior-collapses
+in all six seeds (mu → 1e-3, FVE = 0.0001). Stage 1 is one seed per beta:
+
+```bash
+for b in 0.0001 0.001 0.01 0.1 1; do
+  python falsification/run_arm.py --arm "e2_beta_pilot_$b" --seed 101
+done
+```
+
+The selection rule is fixed in `run_arm.py` **before** any pilot result exists:
+*the largest beta whose `frac_variance_explained` is within 0.02 of the baseline
+arm's mean FVE; if none qualifies, the smallest beta tried.* Stage 2 then runs 6
+confirmatory seeds (1–6) at the selected beta — **disjoint from the pilot's seed
+101**, so no checkpoint contributes to both selection and inference.
 
 ## 3. Measure every checkpoint
 

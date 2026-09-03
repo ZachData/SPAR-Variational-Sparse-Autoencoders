@@ -5,14 +5,20 @@ Compares `e1_penalty` (TopK + activation_penalty=1.0) against `e1_vsae_ref`
 0.5*||mu||^2, so under the degeneracy (CLAUDE.md landmine 1) the two should be
 indistinguishable.
 
-Both arms now apply their penalty at constant full strength from step 0
-(`kl_warmup_steps=0`). Before that fix the vSAE ramped its KL over the first 1000
-steps while the penalty arm did not, so the comparison differed in the schedule of
-the quantity it was supposed to hold fixed. Pass --archive to score the
-pre-correction runs and see how much that confound was worth.
+Two confounds have been removed from this comparison in turn, and each
+pre-correction generation is archived so its cost stays measurable rather than
+merely asserted. Use --ref to score any of the three:
+
+  current   both arms apply their penalty at constant full strength from step 0
+            AND share the TopK bias form (`use_april_update_mode=False`)
+  aprilmode schedule-matched, but the vSAE still had no pre-bias and an untied
+            decoder.bias while the penalty arm centred its input on a tied b_dec
+  klwarmup  neither matched: the vSAE ramped its KL over the first 1000 steps
+            while the penalty arm applied its penalty flat from step 0
 
     python falsification/compare_e1.py
-    python falsification/compare_e1.py --archive
+    python falsification/compare_e1.py --ref aprilmode
+    python falsification/compare_e1.py --ref klwarmup
 """
 
 from __future__ import annotations
@@ -32,6 +38,22 @@ from falsification.permutation import seed_permutation_test  # noqa: E402
 from falsification.report_summaries import liveness  # noqa: E402
 
 EVAL_KEYS = ("frac_variance_explained", "frac_recovered", "frac_alive")
+
+# Each generation of the vSAE arm, newest first, with the confound it still carries.
+REF_ARMS = {
+    "current": (
+        "experiments/e1_vsae_ref",
+        "schedule- AND parameterisation-matched (no known confound)",
+    ),
+    "aprilmode": (
+        "archive/e1_vsae_ref_aprilmode",
+        "use_april_update_mode=True (PRE-CORRECTION: bias form unmatched)",
+    ),
+    "klwarmup": (
+        "archive/e1_vsae_ref_klwarmup1000",
+        "kl_warmup_steps=1000 (PRE-CORRECTION: schedule unmatched too)",
+    ),
+}
 
 
 def _by_seed(root: Path, pattern: str):
@@ -58,16 +80,18 @@ def arm_values(root: Path):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--ref", default="current",
+                    choices=sorted(REF_ARMS),
+                    help="which generation of the vSAE arm to score")
     ap.add_argument("--archive", action="store_true",
-                    help="score the pre-correction (kl_warmup_steps=1000) vSAE runs")
+                    help=argparse.SUPPRESS)  # back-compat: == --ref klwarmup
     args = ap.parse_args()
 
-    pen = REPO / "experiments" / "e1_penalty"
-    ref = (REPO / "archive" / "e1_vsae_ref_klwarmup1000") if args.archive \
-        else (REPO / "experiments" / "e1_vsae_ref")
+    which = "klwarmup" if args.archive else args.ref
+    rel, label = REF_ARMS[which]
 
-    label = "kl_warmup_steps=1000 (PRE-CORRECTION, confounded)" if args.archive \
-        else "kl_warmup_steps=0 (schedule-matched)"
+    pen = REPO / "experiments" / "e1_penalty"
+    ref = REPO / rel
     print(f"E1: e1_penalty  vs  e1_vsae_ref  [{label}]")
     print("Degeneracy predicts: indistinguishable.\n")
 

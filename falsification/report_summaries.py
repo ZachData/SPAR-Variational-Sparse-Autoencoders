@@ -17,6 +17,27 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
+# Pre-registered 2026-09-03, replacing `features_used`, which saturates at d=2048.
+#
+# A feature is DEAD if it is selected in fewer than `rel * (k/d)` of samples.
+# Defined relative to the design's own sparsity, so the same rule transfers between
+# d=2048 and d=8192 -- which `features_used` does not, and is why the preprint's
+# d=8192 numbers never exposed the saturation.
+#
+# BOTH thresholds are pre-registered and BOTH are reported, as a sensitivity pair.
+# No single cut is principled here, and picking one after seeing that it separated
+# the arms would be the exact selection effect this framework exists to prevent.
+# A falsification test is recorded as robust only if it holds at both; if the two
+# disagree, that disagreement IS the result and gets reported as such rather than
+# resolved by choosing the more convenient one (REMEDIATION.md F8b).
+#
+# Legitimacy note, stated plainly: these were fixed AFTER the pilot showed
+# `features_used` was degenerate, but on the *arithmetic* of the design (TopK makes
+# mean selection frequency exactly k/d, knowable a priori), never on observed
+# effect sizes. The confirmatory battery runs on fresh seeds regardless.
+PREREGISTERED_LIVENESS_THRESHOLDS = (0.1, 0.5)
+
+
 def liveness(summary_path: Path) -> dict | None:
     """Liveness statistics computed from EXACT per-feature selection counts.
 
@@ -66,7 +87,7 @@ def liveness(summary_path: Path) -> dict | None:
         "never": float(np.mean(counts == 0)),
         "expected_freq": expected,
     }
-    for rel in (0.1, 0.5):
+    for rel in PREREGISTERED_LIVENESS_THRESHOLDS:
         out[f"below_{rel}x"] = float(np.mean(freq < rel * expected))
     return out
 
@@ -142,8 +163,10 @@ def main() -> int:
               "  '<0.1x k/d' and '<0.5x k/d' are computed from exact per-feature\n"
               "  counts (feature_selection_counts in the .npz), are defined relative\n"
               "  to the design's own sparsity so they transfer across dictionary\n"
-              "  sizes, and do discriminate. See REMEDIATION.md F8b -- the threshold\n"
-              "  must be pre-registered before these are used as a falsification test.")
+              "  sizes, and do discriminate. Both thresholds are PRE-REGISTERED\n"
+              "  (2026-09-03) and both are reported as a sensitivity pair: a result\n"
+              "  counts as robust only if it holds at both, and a disagreement\n"
+              "  between them is itself the finding. See REMEDIATION.md F8b.")
 
     # features_used is sample-size dependent; comparability requires one value.
     sizes = {r[6] for r in rows if r[6] is not None}
