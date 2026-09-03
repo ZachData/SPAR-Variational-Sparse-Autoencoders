@@ -98,6 +98,20 @@ class VSAETopKConfig:
     k: int
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
+    # Column norm the tied encoder/decoder weights are initialised to.
+    #
+    # This trainer has always used 0.1; top_k.py calls set_decoder_norm_to_unit_norm
+    # and so uses 1.0. That is a 10x difference in initial decoder scale between the
+    # two arms of E1, and initial scale shapes which features win the TopK
+    # competition early in training -- i.e. exactly the feature-usage distribution
+    # E1's liveness metric measures. It is the last identified difference between
+    # arms whose LOSSES are numerically identical (511.895264 both, six decimals).
+    #
+    # Default 0.1 preserves every existing checkpoint's behaviour. E1 runs it as a
+    # 2-level factor (e1_vsae_ref at 0.1, e1_vsae_ref_unitinit at 1.0) so the init's
+    # contribution is measured rather than assumed, the same way relu_mu is handled
+    # in vsae_topk_masked_kl.py.
+    decoder_init_scale: float = 0.1
     dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
     log_var_init: float = -2.0  # Initialize log_var around exp(-2) ≈ 0.135 variance
@@ -192,7 +206,7 @@ class VSAETopK(Dictionary, nn.Module):
             dtype=dtype,
             device=device
         )
-        w = w / w.norm(dim=0, keepdim=True) * 0.1
+        w = w / w.norm(dim=0, keepdim=True) * self.config.decoder_init_scale
         
         with torch.no_grad():
             # Set encoder and decoder weights (tied)
@@ -710,6 +724,7 @@ class VSAETopKTrainer(SAETrainer):
         auxk_alpha: Optional[float] = None,
         var_flag: Optional[int] = None,
         use_april_update_mode: Optional[bool] = None,
+        decoder_init_scale: Optional[float] = None,
         device: Optional[str] = None,
         **kwargs  # Catch any other parameters
     ):
@@ -727,6 +742,7 @@ class VSAETopKTrainer(SAETrainer):
                 k=k,
                 var_flag=var_flag or 0,
                 use_april_update_mode=use_april_update_mode if use_april_update_mode is not None else True,
+                decoder_init_scale=decoder_init_scale if decoder_init_scale is not None else 0.1,
                 device=device_obj
             )
         
@@ -1013,6 +1029,9 @@ class VSAETopKTrainer(SAETrainer):
             'k': self.model_config.k,
             'var_flag': self.model_config.var_flag,
             'use_april_update_mode': self.model_config.use_april_update_mode,
+            # Init scale is not recoverable from trained weights; config.json is the
+            # only record of which E1 init arm a checkpoint belongs to.
+            'decoder_init_scale': self.model_config.decoder_init_scale,
             'log_var_init': self.model_config.log_var_init,
             'dtype': str(self.model_config.dtype),
             'device': str(self.model_config.device),

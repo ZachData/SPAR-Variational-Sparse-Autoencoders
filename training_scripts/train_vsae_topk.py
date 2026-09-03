@@ -48,6 +48,11 @@ class ExperimentConfig:
     # Model-specific config
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
+    # Column norm the tied encoder/decoder are initialised to. 0.1 is this trainer's
+    # historical value; top_k.py uses 1.0 via set_decoder_norm_to_unit_norm, so E1's
+    # two arms started 10x apart in decoder scale. Run as a factor, not silently
+    # matched -- see decoder_init_scale on VSAETopKConfig.
+    decoder_init_scale: float = 0.1
     threshold_beta: float = 0.999
     threshold_start_step: Optional[int] = None
     
@@ -215,6 +220,7 @@ class ExperimentRunner:
             k=k,
             var_flag=self.config.var_flag,
             use_april_update_mode=self.config.use_april_update_mode,
+            decoder_init_scale=self.config.decoder_init_scale,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )

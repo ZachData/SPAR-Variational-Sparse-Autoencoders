@@ -100,6 +100,26 @@ ARMS: dict[str, dict[str, Any]] = {
         "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
                       "kl_warmup_steps": 0, "use_april_update_mode": False},
     },
+    # E1 init factor. With the warmup and the bias form matched, the two E1 arms
+    # still differed -- and the liveness metric disagreed ACROSS ITS TWO
+    # PRE-REGISTERED THRESHOLDS in direction (d = -2.5 at 0.1x k/d, +14.0 at 0.5x),
+    # which a location shift cannot produce. The usage distributions differ in
+    # shape, and the last identified cause is initial decoder scale: top_k.py calls
+    # set_decoder_norm_to_unit_norm (norm 1.0) while vsae_topk.py used 0.1.
+    #
+    # Rather than silently match it, this arm is e1_vsae_ref with the TopK init.
+    # Keeping BOTH means the init's contribution is measured, and it preserves
+    # e1_vsae_ref's comparability with the E2/E3 arms, which all still use 0.1.
+    # (An earlier note blamed threshold_start_step, 500 vs 1000. That was WRONG:
+    # the threshold path is only reached via encode(use_threshold=True), which
+    # only batch_top_k.py uses -- the analyzer and both training loops leave it
+    # False, so the field is inert here.)
+    "e1_vsae_ref_unitinit": {
+        "script": "train_vsae_topk.py",
+        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
+                      "kl_warmup_steps": 0, "use_april_update_mode": False,
+                      "decoder_init_scale": 1.0},
+    },
     # E3: masked-KL, run as a 2-level factor rather than a confound. The masked
     # trainer omits the F.relu(mu) that vsae_topk.py applies unconditionally, so a
     # single E3 arm cannot separate "masking the KL did this" from "the ReLU did
