@@ -173,6 +173,40 @@ ARMS["e2_confirm"] = {
                   "var_flag": 1},
 }
 
+# E2 diagnostic control: sampling ON, KL entirely OFF.
+#
+# The stage-1 pilot showed FVE degrading monotonically across four orders of
+# magnitude of beta (0.4581 at 1e-4 down to 0.0001 at 1) and never reaching
+# baseline's 0.9003. Two very different mechanisms fit that curve equally well and
+# the pilot cannot separate them:
+#
+#   (a) the KL penalty destroys reconstruction, and 1e-4 is still too strong;
+#   (b) the reparameterisation destroys reconstruction, and beta is close to
+#       irrelevant -- the curve is the KL merely adding insult to injury.
+#
+# beta = 0 with var_flag = 1 is the one configuration that tells them apart,
+# because it is the only point where sampling is on and the KL contributes exactly
+# zero to the loss. If FVE recovers toward baseline, (a); if it stays near the
+# pilot's 0.46, (b) -- and E2's story is about the architecture, not a penalty.
+#
+# Read the learned variance too, not just FVE. With no KL there is nothing pushing
+# the posterior toward the prior, so the model is free to drive sigma to ~0 and
+# make itself deterministic. If it does, that is itself the answer: the model
+# escapes sampling the moment it is allowed to, which is (b) stated more sharply.
+#
+# Six seeds, not one. This control exists to attribute a cause to the ARCHITECTURE,
+# and the repo's own rule (CLAUDE.md, "Unit of analysis") is that an
+# architecture-level claim needs a permutation test over training seeds. One seed
+# would produce a number that cannot be tested. Six costs ~6 minutes.
+#
+# NOT pre-registered: proposed and run on 2026-09-03 after the stage-1 pilot was
+# read. It is a control rather than a selection step, so it does not contaminate
+# e2_confirm -- but it is exploratory and must be reported as such.
+ARMS["e2_sampling_only"] = {
+    "script": "train_vsae_topk.py",
+    "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 0.0, "var_flag": 1},
+}
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.
