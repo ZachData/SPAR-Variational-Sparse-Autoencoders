@@ -45,6 +45,16 @@ BASE = dict(
     refresh_batch_size=12,
     out_batch_size=192,
     use_wandb=False,          # unattended: never block on a wandb login prompt
+    # Evaluation-only, and it matters. loss_recovered() tokenises eval_batch_size raw
+    # texts and runs a full-vocabulary cross-entropy over them; at the default 24 that
+    # asks for ~2.9GB on a 10GB card already holding ~6.7GB of activation buffer, so it
+    # OOMs, is swallowed by an except-and-continue, and silently reports loss_original,
+    # loss_reconstructed and loss_zero as NaN with frac_recovered = 0.0. Every committed
+    # run in this repo shows that signature. 2x48 evaluates the same 96 sequences and
+    # fits, recovering frac_recovered ~0.93. Identical for every arm, so cross-arm
+    # comparability is unaffected.
+    eval_batch_size=2,
+    eval_n_batches=48,
 )
 
 # Arms in priority order. Each names the training script and its overrides.
@@ -67,9 +77,18 @@ ARMS: dict[str, dict[str, Any]] = {
         "overrides": {**BASE, "k": 256, "activation_penalty": 1.0},
     },
     # E1 reference: the fixed-variance vSAE that E1 should reproduce.
+    # kl_warmup_steps=0 is load-bearing. The trainer defaults it to int(0.1*steps)
+    # = 1000, ramping kl_scale 0 -> 1 over the first 10% of training, while
+    # top_k_with_feature_penalty applies its activation_cost at full strength from
+    # step 0. Leaving the default made a nominally "matched beta" comparison differ
+    # in the schedule of the very quantity being matched, which is the confound
+    # recorded as item 7 in FINDINGS_2026-09-02.md. The pre-correction runs are kept
+    # under archive/e1_vsae_ref_klwarmup1000/ so the size of that confound stays
+    # measurable.
     "e1_vsae_ref": {
         "script": "train_vsae_topk.py",
-        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0},
+        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
+                      "kl_warmup_steps": 0},
     },
     # E3: masked-KL. NOTE: that trainer omits the F.relu(mu) applied by vsae_topk.py,
     # so this comparison is confounded until one is patched to match the other.

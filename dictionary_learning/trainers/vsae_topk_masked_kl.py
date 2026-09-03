@@ -172,6 +172,77 @@ class VSAETopK(nn.Module):
             return x_hat, sparse_features
         return x_hat
     
+    @classmethod
+    def from_pretrained(
+        cls,
+        path: str,
+        config: Optional['VSAETopKConfig'] = None,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+        normalize_decoder: bool = False,
+        var_flag: Optional[int] = None,
+    ) -> 'VSAETopK':
+        """Load a checkpoint saved by this trainer.
+
+        This class had no loader, so `utils.load_dictionary`'s "VSAETopKMasked"
+        branch -- which calls exactly this method -- raised AttributeError and no
+        masked-KL checkpoint could be read back
+        (falsification/FINDINGS_2026-09-02.md, item 9).
+
+        Deliberately NOT a copy of `vsae_topk.VSAETopK.from_pretrained`: that one
+        defaults `normalize_decoder=True`, which rescales the decoder on load. For
+        analysing a trained checkpoint we want exactly the weights that were saved,
+        so the default here is False. Pass True only if you specifically want the
+        rescaling.
+
+        Shapes and flags are read from the state dict rather than trusted from
+        config.json, because that file was itself missing fields for this trainer.
+        """
+        checkpoint = torch.load(path, map_location=device or "cpu", weights_only=False)
+        state_dict = (
+            checkpoint if isinstance(checkpoint, dict)
+            else checkpoint.get("state_dict", checkpoint)
+        )
+        if "encoder.weight" not in state_dict:
+            raise ValueError(
+                f"{path} has no 'encoder.weight'; keys are {sorted(state_dict)}"
+            )
+
+        if config is None:
+            dict_size, activation_dim = state_dict["encoder.weight"].shape
+            # april-update mode keeps the pre-bias on the decoder; standard mode
+            # keeps a separate `bias` parameter. Detect rather than assume.
+            use_april_update_mode = "decoder.bias" in state_dict
+            if var_flag is None:
+                var_flag = 1 if "var_encoder.weight" in state_dict else 0
+            if "k" in state_dict:
+                k = int(state_dict["k"].item())
+            else:
+                raise ValueError(f"{path} has no 'k' entry; cannot infer sparsity")
+            config = VSAETopKConfig(
+                activation_dim=int(activation_dim),
+                dict_size=int(dict_size),
+                k=k,
+                var_flag=var_flag,
+                use_april_update_mode=use_april_update_mode,
+                dtype=dtype or state_dict["encoder.weight"].dtype,
+                device=device,
+            )
+
+        model = cls(config)
+        model.load_state_dict(state_dict)
+
+        if normalize_decoder:
+            with torch.no_grad():
+                norms = model.decoder.weight.norm(dim=0, keepdim=True)
+                model.decoder.weight.div_(norms.clamp(min=1e-8))
+
+        if dtype is not None:
+            model = model.to(dtype=dtype)
+        if device is not None:
+            model = model.to(device)
+        return model
+
     def get_kl_diagnostics(self, x: torch.Tensor) -> Dict[str, float]:
         """Get detailed KL divergence diagnostics."""
         with torch.no_grad():
@@ -413,6 +484,19 @@ class VSAETopKTrainer:
     def config(self):
         """Return config dict for wandb logging."""
         return {
+            # dict_class is what load_dictionary() dispatches on. Without it every
+            # checkpoint from this trainer is unloadable (KeyError: 'dict_class').
+            # It MUST be VSAETopKMasked, not VSAETopK: the latter resolves to
+            # trainers/vsae_topk.py, which applies F.relu(mu) that this trainer
+            # omits -- so the wrong value silently loads the wrong architecture.
+            'dict_class': 'VSAETopKMasked',
+            'trainer_class': 'VSAETopKTrainer',
+            # The analyzer reads these to rebuild the activation buffer, and
+            # defaults submodule_name to blocks.0.mlp.hook_post when it is absent --
+            # a different hook than these runs use, silently analysed as if correct.
+            'layer': self.layer,
+            'lm_name': self.lm_name,
+            'submodule_name': self.submodule_name,
             'activation_dim': self.model_config.activation_dim,
             'dict_size': self.model_config.dict_size,
             'k': self.model_config.k,

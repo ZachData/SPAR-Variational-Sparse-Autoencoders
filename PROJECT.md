@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Stage | Reframing after the workshop deadline was dropped |
-| Framework | `falsification/` implemented, 23 tests green, Type-I control verified |
+| Framework | `falsification/` implemented, 93 tests green, Type-I control verified |
 | Blocking | Seeded training runs (local GPU only) |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
@@ -61,18 +61,39 @@ wrong in print.
 The unit of analysis for an architecture claim is the training run. That makes an
 exact permutation test the natural instrument, and its floor is brutal:
 
-| seeds/group | distinct splits | min attainable p | e-value (κ=0.5) |
-|---|---|---|---|
-| 3 | 10 | 1.0e-01 | 1.58 |
-| 4 | 35 | 2.9e-02 | 2.96 |
-| 5 | 126 | 7.9e-03 | 5.61 |
-| 6 | 462 | 2.2e-03 | 10.75 |
-| 8 | 6,435 | 1.6e-04 | 40.11 |
+**Corrected 2026-09-02.** The figures below previously used a floor function whose
+one-sided and two-sided branches were swapped, making every one-sided floor 2x too
+pessimistic (`falsification/FINDINGS_2026-09-02.md`, item 1). Corrected values, for
+the one-sided tests this design actually uses:
 
-Validation at α=0.1 needs aggregate E ≥ 10. So **5 seeds per group cannot validate
-on a single test no matter how large the effect** — it maxes out at e=5.61. Either
-6 seeds for one test, or 5 seeds with two independent tests
-(`seeds_required()` computes this).
+| seeds/group | assignments C(2n,n) | min attainable p | e (κ=0.5) | e (κ=0.3) |
+|---|---|---|---|---|
+| 3 | 20 | 5.0e-02 | 2.24 | 2.44 |
+| 4 | 70 | 1.4e-02 | 4.18 | 5.87 |
+| 5 | 252 | 4.0e-03 | 7.94 | **14.39** |
+| 6 | 924 | 1.1e-03 | 15.20 | 35.73 |
+| 8 | 12,870 | 7.8e-05 | 56.72 | 225.85 |
+
+Validation at α=0.1 needs aggregate E ≥ 10.
+
+**The old claim that "5 seeds per group cannot validate on a single test no matter
+how large the effect" no longer holds at the pre-registered κ.** It was computed at
+κ=0.5 from the inverted floor (e = 5.61). Corrected, 5 seeds gives e = 7.94 at
+κ=0.5 — still short — but **e = 14.39 at κ=0.3, which validates**. Since κ=0.3 is
+the pre-registered value, `seeds_required(alpha=0.1, kappa=0.3, n_tests=1)` now
+returns **5**, not 6.
+
+This does not change the direction of the project's advice, only its arithmetic:
+replication across seeds is still what buys evidence, and a single-run-per-condition
+sweep still cannot validate. The power tables elsewhere in this file and in
+RUNBOOK.md are simulation-derived and use real permutation p-values, not the floor,
+so they are unaffected by the correction.
+
+**The measured cost of a run has since changed the planning picture more than any
+of this.** At ~1 min/run on the 3080 (30 runs in 27 min, 2026-09-02), seeds are no
+longer the binding constraint at all — 6 seeds/arm already delivers 2-3.6x the
+required evidence. The binding cost is the 1M-sample feature-usage analysis at
+~6.5 min/checkpoint, i.e. 6.5x the cost of the training run it measures.
 
 The same arithmetic applies to the preprint's cleanest result. Its β dose-response
 is monotone over six orders of magnitude, yet with one run per condition the exact

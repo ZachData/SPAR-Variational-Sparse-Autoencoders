@@ -190,3 +190,5 @@ workshop/*.log
 workshop/*.out
 workshop/*.bbl
 workshop/*.blg
+archive/
+sweep.out

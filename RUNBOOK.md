@@ -123,14 +123,40 @@ the other before drawing any conclusion from it.
 ## 3. Measure every checkpoint
 
 ```bash
-for ckpt in experiments/*/; do
-  python analysis_scripts/online_histogram_analyzer.py \
-    --model-path "$ckpt" --n-samples 1000000 --no-individual
-done
+./run_analysis.sh            # every completed run; skips ones already analysed
+./run_analysis.sh --force    # re-analyse regardless
 ```
 
 Live-feature count is `feature_usage_summary.features_used` in each emitted
 `comprehensive_summary_*.json`.
+
+**Do not use the plain `for ckpt in experiments/*/` loop that used to be here.** It
+was wrong in three ways (`falsification/FINDINGS_2026-09-02.md`, item 0), and the
+first was silent:
+
+1. The analyzer writes to `<output-dir>/<model_name>/`, and `model_name` comes from
+   the checkpoint directory, which `get_experiment_name()` builds **without the
+   seed**. Every seed of an arm therefore resolves to the same output path, so with
+   the default `--output-dir` each seed overwrote the last and you were left with
+   one summary per arm instead of six. This is the landmine from `CLAUDE.md`
+   resurfacing at the one step where `run_arm.py`'s per-seed `save_dir` does not
+   protect you. Pass `--output-dir` per seed.
+2. `--model-path` must be the `trainer_0/` directory that actually holds `ae.pt`
+   and `config.json`, not its parent.
+3. The script needed a `sys.path` bootstrap to import `dictionary_learning` when
+   invoked from the repo root (now added), and `seaborn` must be installed.
+
+Single checkpoint, if you need one by hand:
+
+```bash
+python analysis_scripts/online_histogram_analyzer.py \
+  --model-path experiments/<arm>/seed<N>/<ckpt>/trainer_0 \
+  --output-dir experiments/<arm>/seed<N> \
+  --n-samples 1000000 --no-individual
+```
+
+`--n-samples 1000000` for every checkpoint without exception: `features_used` is
+sample-size dependent and cross-arm comparability depends on it.
 
 ---
 

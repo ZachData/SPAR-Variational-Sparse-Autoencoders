@@ -53,6 +53,20 @@ two different dead-feature numbers from two different measurements (1,227/6,970
 from sae_vis histograms; 1,474/7,379 from the 1M-sample analysis). Prefer the
 1M-sample numbers and say which measurement you used.
 
+**Two floor functions report the wrong bound.** `permutation.min_p_floor` and
+`evalues.min_attainable_p` have the one-sided and two-sided branches swapped, so a
+one-sided `seed_permutation_test` can return a p-value *below* its own reported
+`p_floor`. Decisions are unaffected (they use the real p-value), but the power and
+seed-count tables in `PROJECT.md` and `RUNBOOK.md` are 2x pessimistic. Unfixed
+because it touches pre-registered power accounting; pinned by a strict `xfail`.
+See `falsification/FINDINGS_2026-09-02.md`.
+
+**`frac_recovered = 0.0` in a summary file usually means an OOM, not a result.**
+`loss_recovered()` OOMs at the default eval batch size on a 10GB card, the failure
+is swallowed by an `except ... continue`, and the run reports success with the
+cross-entropy metrics written as NaN. Every committed checkpoint shows that
+signature. `falsification/run_arm.py` now evaluates at batch 2 x 48, which fixes it.
+
 ## Environment
 
 - **Two environments, and it matters which you are in.** Run

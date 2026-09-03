@@ -13,6 +13,9 @@ Key improvements:
 import torch
 import os
 import time
+import math          # used by evaluate_model()'s NaN/inf guard; its absence made
+                     # every evaluation die with NameError after the metrics were
+                     # already computed, so no evaluation_results.json was written
 import logging
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -58,6 +61,14 @@ class ExperimentConfig:
     # Schedule configuration
     warmup_steps: Optional[int] = None
     sparsity_warmup_steps: Optional[int] = None
+    # Linear ramp applied to the KL term: total_loss multiplies kl_coeff by
+    # kl_scale = step/kl_warmup_steps until the ramp completes. None keeps the
+    # trainer default of int(0.1 * steps) = 1000 at 10k steps. Set 0 for no ramp.
+    # This matters for E1: the TopK activation penalty has no equivalent ramp, so
+    # leaving this at its default makes a nominally "matched beta" comparison
+    # differ in the schedule of the very quantity being matched
+    # (falsification/FINDINGS_2026-09-02.md, item 7).
+    kl_warmup_steps: Optional[int] = None
     decay_start_step: Optional[int] = None
     
     # Buffer configuration
@@ -221,6 +232,7 @@ class ExperimentRunner:
             steps=self.config.total_steps,
             lr=self.config.lr,
             kl_coeff=self.config.kl_coeff,
+            kl_warmup_steps=self.config.kl_warmup_steps,
             auxk_alpha=self.config.auxk_alpha,
             warmup_steps=self.config.warmup_steps,
             sparsity_warmup_steps=self.config.sparsity_warmup_steps,

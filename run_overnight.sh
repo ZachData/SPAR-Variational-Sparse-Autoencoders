@@ -26,6 +26,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$(dirname "$0")"
+# Without this the allocator fragments and evaluation OOMs on a 10GB card that
+# is also driving a display; the OOM is caught and silently NaNs the loss metrics.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 STAMP="$(date +%Y%m%d_%H%M%S)"
 LOGDIR="logs/sweep_${STAMP}"
 mkdir -p "$LOGDIR"
@@ -98,25 +101,14 @@ for arm in "${ARMS[@]}"; do
   done
 done
 
-# ---- Analysis over every completed checkpoint. Same n-samples for all runs:
-# features_used is sample-size dependent, so comparability requires consistency.
+# ---- Analysis over every completed checkpoint. Delegated to run_analysis.sh.
+# The loop that used to live here was wrong in three ways (see
+# falsification/FINDINGS_2026-09-02.md item 0); the dangerous one was silent:
+# the analyzer names its output dir after the checkpoint dir, get_experiment_name()
+# omits the seed, so with the default --output-dir every seed of an arm overwrote
+# the previous one and you were left with one summary per arm instead of six.
 log "Training phase done. Starting feature-usage analysis."
-find experiments -name RUN_COMPLETE.json 2>/dev/null | sort | while read -r marker; do
-  RUN=$(dirname "$marker")
-  for ckpt in "$RUN"/*/; do
-    [[ -d "$ckpt" ]] || continue
-    NAME=$(echo "$ckpt" | tr '/' '_')
-    if compgen -G "$ckpt/comprehensive_summary_*.json" >/dev/null; then
-      log "  skip analysis (already done): $ckpt"; continue
-    fi
-    NOW=$(date +%s)
-    if (( NOW > DEADLINE )); then log "  budget exhausted; analysis incomplete"; break 2; fi
-    log "  analysing $ckpt"
-    python analysis_scripts/online_histogram_analyzer.py \
-      --model-path "$ckpt" --n-samples 1000000 --no-individual \
-      >"$LOGDIR/analysis_${NAME}.log" 2>&1 || log "    analysis FAILED for $ckpt"
-  done
-done
+./run_analysis.sh 2>&1 | tee -a "$LOGDIR/sweep.log"
 
 log "Sweep complete. Summary:"
 column -t "$SUMMARY" 2>/dev/null | tee -a "$LOGDIR/sweep.log" || cat "$SUMMARY"

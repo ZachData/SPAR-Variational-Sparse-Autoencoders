@@ -144,11 +144,23 @@ def seed_permutation_test(
 
 
 def min_p_floor(n_a: int, n_b: int, alternative: Alternative = "greater") -> float:
-    """Smallest attainable p-value for an exact permutation test of these group sizes."""
+    """Smallest attainable p-value for an exact permutation test of these group sizes.
+
+    Over all N = C(n_a+n_b, n_a) assignments:
+
+    * one-sided -- at maximal separation only the observed assignment has a
+      statistic >= its own, so the count is 1 and the floor is 1/N.
+    * two-sided -- an assignment and its complement have equal |statistic|, so the
+      count is never odd; the floor is 2/N.
+
+    These were previously the wrong way round, which made a one-sided test report
+    a floor twice its true value and let `seed_permutation_test` return a p-value
+    below its own reported floor.
+    """
     n_assignments = comb(n_a + n_b, n_a)
     if alternative == "two-sided":
-        return 1.0 / n_assignments
-    return 1.0 / max(n_assignments // 2, 1)
+        return 2.0 / n_assignments
+    return 1.0 / n_assignments
 
 
 def subsample_null_test(

@@ -13,6 +13,15 @@ Key Features:
 - Minimal storage footprint
 """
 
+import sys
+from pathlib import Path
+
+# analysis_scripts/ is not a package and running this file directly puts that
+# directory on sys.path rather than the repo root, so `import dictionary_learning`
+# fails for the exact invocation documented in RUNBOOK.md and used by
+# run_overnight.sh. Same bootstrap as falsification/run_arm.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,7 +29,6 @@ import seaborn as sns
 import json
 import argparse
 import logging
-from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 from dataclasses import dataclass, asdict
 from tqdm import tqdm
