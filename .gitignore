@@ -52,6 +52,16 @@ coverage.xml
 .pytest_cache/
 cover/
 tests/
+# ...but NOT the falsification suite. `tests/` above came from the stock Python
+# .gitignore, where it means a coverage artefact directory. It also matched
+# falsification/tests/, so the 104 contracts CLAUDE.md calls "must stay green"
+# were never committed -- they existed on one machine only, and the CI workflow
+# had nothing to run.
+!falsification/tests/
+!falsification/tests/**
+# The re-include above out-ranks the earlier __pycache__ rule for these
+# paths, because last matching pattern wins. Put it back.
+falsification/tests/**/__pycache__/
 
 # Translations
 *.mo

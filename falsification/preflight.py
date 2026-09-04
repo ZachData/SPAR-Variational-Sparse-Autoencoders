@@ -105,6 +105,29 @@ def main() -> int:
         warn_only=True,
     )
 
+    print("\nTraining modules actually import")
+    # Every other wiring check in this file reads source as TEXT, which is why it
+    # stays useful without torch -- but it means a module can pass every check and
+    # still be unimportable. That gap is FINDINGS item 5, and it bit on 2026-09-03:
+    # preflight was green on the wiring while the environment had a CPU-only torch
+    # wheel and no nnsight, so no arm could run at all. Importing each training
+    # script through the same loader run_arm.py uses closes it.
+    try:
+        from falsification.run_arm import ARMS, load_training_module
+
+        for script in sorted({spec["script"] for spec in ARMS.values()}):
+            try:
+                load_training_module(script)
+                check(f"{script} imports", True)
+            except Exception as exc:  # noqa: BLE001 -- any failure blocks training
+                check(
+                    f"{script} imports",
+                    False,
+                    f"{type(exc).__name__}: {exc}",
+                )
+    except Exception as exc:  # noqa: BLE001
+        check("falsification.run_arm importable", False, f"{type(exc).__name__}: {exc}")
+
     print("\nData already committed")
     summaries = list(
         (REPO / "comprehensive_histogram_analysis").glob("*/comprehensive_summary_*.json")

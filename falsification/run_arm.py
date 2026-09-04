@@ -120,6 +120,29 @@ ARMS: dict[str, dict[str, Any]] = {
                       "kl_warmup_steps": 0, "use_april_update_mode": False,
                       "decoder_init_scale": 1.0},
     },
+    # E1 gradient-projection factor. With kl_warmup, the bias form and the decoder
+    # init all matched, E1's LIVENESS claim is confirmed (neither threshold
+    # significant, both agreeing) but RECONSTRUCTION still differs: FVE by 0.0181,
+    # d = +16.5. The last identified asymmetry between the arms is that top_k.py
+    # calls remove_gradient_parallel_to_decoder_directions every step and
+    # vsae_topk.py imports it and never calls it (grep count: 0) -- while both
+    # renormalise the decoder to unit norm, since these arms set
+    # use_april_update_mode=False. Renormalising without projecting applies the
+    # radial gradient component and then undoes it, making the effective learning
+    # rate per-feature and data-dependent.
+    #
+    # This arm is e1_vsae_ref_unitinit plus the projection, so it differs from it in
+    # exactly one factor and is the like-for-like comparison against baseline's
+    # TopK update. Keeping e1_vsae_ref_unitinit means the projection's contribution
+    # is measured, not assumed -- the same treatment relu_mu and decoder_init_scale
+    # got, both of which turned up effects that would otherwise have been
+    # misattributed.
+    "e1_vsae_ref_gradproj": {
+        "script": "train_vsae_topk.py",
+        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
+                      "kl_warmup_steps": 0, "use_april_update_mode": False,
+                      "decoder_init_scale": 1.0, "project_decoder_grad": True},
+    },
     # E3: masked-KL, run as a 2-level factor rather than a confound. The masked
     # trainer omits the F.relu(mu) that vsae_topk.py applies unconditionally, so a
     # single E3 arm cannot separate "masking the KL did this" from "the ReLU did

@@ -112,6 +112,29 @@ class VSAETopKConfig:
     # contribution is measured rather than assumed, the same way relu_mu is handled
     # in vsae_topk_masked_kl.py.
     decoder_init_scale: float = 0.1
+    # Whether to project the component of the decoder gradient parallel to each
+    # decoder column out before the optimiser step.
+    #
+    # top_k.py does this every step (top_k.py:588) and then renormalises the decoder
+    # to unit norm. vsae_topk.py IMPORTS remove_gradient_parallel_to_decoder_directions
+    # and never calls it, while still renormalising whenever
+    # use_april_update_mode=False -- which is exactly the setting both E1 vSAE arms
+    # run under. Renormalising without projecting means the radial part of the
+    # gradient is applied by the optimiser and then immediately undone by the
+    # constraint, so each column's effective learning rate depends on how much of its
+    # gradient happened to point radially. That is a per-feature, data-dependent
+    # perturbation of the learning rate, and it is the leading candidate for E1's
+    # remaining reconstruction gap (FVE differs by 0.0181 with the init matched).
+    #
+    # Default False preserves every existing checkpoint's behaviour. Like relu_mu and
+    # decoder_init_scale, this runs as a measured factor rather than a silent fix:
+    # e1_vsae_ref_gradproj is e1_vsae_ref_unitinit with it enabled.
+    #
+    # Training-time only -- it changes no parameter shape and no forward pass, so it
+    # is invisible in a state dict and config.json is its only record. It does NOT
+    # need reading back in utils.load_dictionary (unlike relu_mu, which changes
+    # encode); it is recorded for provenance, the same way decoder_init_scale is.
+    project_decoder_grad: bool = False
     dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
     log_var_init: float = -2.0  # Initialize log_var around exp(-2) ≈ 0.135 variance
@@ -725,6 +748,7 @@ class VSAETopKTrainer(SAETrainer):
         var_flag: Optional[int] = None,
         use_april_update_mode: Optional[bool] = None,
         decoder_init_scale: Optional[float] = None,
+        project_decoder_grad: Optional[bool] = None,
         device: Optional[str] = None,
         **kwargs  # Catch any other parameters
     ):
@@ -743,6 +767,7 @@ class VSAETopKTrainer(SAETrainer):
                 var_flag=var_flag or 0,
                 use_april_update_mode=use_april_update_mode if use_april_update_mode is not None else True,
                 decoder_init_scale=decoder_init_scale if decoder_init_scale is not None else 0.1,
+                project_decoder_grad=project_decoder_grad if project_decoder_grad is not None else False,
                 device=device_obj
             )
         
@@ -999,7 +1024,18 @@ class VSAETopKTrainer(SAETrainer):
         # Calculate loss and backpropagate
         loss = self.loss(activations, step=step)
         loss.backward()
-        
+
+        # Remove the decoder-gradient component parallel to each decoder column,
+        # before clipping, matching top_k.py's ordering (project -> clip -> step ->
+        # renormalise). Off by default; see project_decoder_grad on VSAETopKConfig.
+        if self.model_config.project_decoder_grad:
+            self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
+                self.ae.decoder.weight,
+                self.ae.decoder.weight.grad,
+                self.ae.activation_dim,
+                self.ae.dict_size,
+            )
+
         # Apply gradient clipping
         torch.nn.utils.clip_grad_norm_(
             self.ae.parameters(), 
@@ -1032,6 +1068,9 @@ class VSAETopKTrainer(SAETrainer):
             # Init scale is not recoverable from trained weights; config.json is the
             # only record of which E1 init arm a checkpoint belongs to.
             'decoder_init_scale': self.model_config.decoder_init_scale,
+            # Training-time only and invisible in the state dict; recorded so a
+            # checkpoint's E1 gradient-projection arm is recoverable.
+            'project_decoder_grad': self.model_config.project_decoder_grad,
             'log_var_init': self.model_config.log_var_init,
             'dtype': str(self.model_config.dtype),
             'device': str(self.model_config.device),

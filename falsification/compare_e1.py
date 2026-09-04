@@ -9,8 +9,13 @@ Two confounds have been removed from this comparison in turn, and each
 pre-correction generation is archived so its cost stays measurable rather than
 merely asserted. Use --ref to score any of the three:
 
+  gradproj  everything below, plus the decoder-gradient projection: the last
+            identified asymmetry, run as a factor (see run_arm.py)
+  unitinit  schedule- and parameterisation-matched AND started at the same decoder
+            norm; this is the generation E1's pre-registered claim is scored on
   current   both arms apply their penalty at constant full strength from step 0
-            AND share the TopK bias form (`use_april_update_mode=False`)
+            AND share the TopK bias form (`use_april_update_mode=False`), but the
+            vSAE still starts its decoder 10x smaller
   aprilmode schedule-matched, but the vSAE still had no pre-bias and an untied
             decoder.bias while the penalty arm centred its input on a tied b_dec
   klwarmup  neither matched: the vSAE ramped its KL over the first 1000 steps
@@ -34,16 +39,24 @@ from statistics import mean, stdev
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from falsification.permutation import seed_permutation_test  # noqa: E402
+from falsification.permutation import min_p_floor, seed_permutation_test  # noqa: E402
 from falsification.report_summaries import liveness  # noqa: E402
 
 EVAL_KEYS = ("frac_variance_explained", "frac_recovered", "frac_alive")
 
 # Each generation of the vSAE arm, newest first, with the confound it still carries.
 REF_ARMS = {
+    "gradproj": (
+        "experiments/e1_vsae_ref_gradproj",
+        "init 1.0 AND the decoder-gradient projection top_k.py applies",
+    ),
+    "unitinit": (
+        "experiments/e1_vsae_ref_unitinit",
+        "decoder_init_scale=1.0, matching top_k.py's unit-norm init",
+    ),
     "current": (
         "experiments/e1_vsae_ref",
-        "schedule- AND parameterisation-matched (no known confound)",
+        "schedule- and parameterisation-matched, but decoder_init_scale=0.1",
     ),
     "aprilmode": (
         "archive/e1_vsae_ref_aprilmode",
@@ -110,8 +123,18 @@ def main() -> int:
         print(f"{k:<24} {mean(va):>13.6f}±{sa:<6.4f} {mean(vb):>13.6f}±{sb:<6.4f} "
               f"{diff:>+10.4f} {d:>+9.1f} {res['p_value']:>9.5f}")
 
-    print("\nEvery p at 0.00216 is the exact two-sided minimum for 6v6 -- the design "
-          "floor,\nnot a measure of how large the effect is. Read the d column for that.")
+    # This ran at 6 seeds, where every p sat at 0.00216 -- the exact two-sided
+    # floor for 6v6, 3.07 sigma, reachable by any effect large enough. The arms are
+    # at 13 seeds now, so the floor moved and the p-values are no longer pinned to
+    # it, but the caution is the same one and still applies: check the floor before
+    # reading a p as evidence.
+    n = min(len(v) for v in list(a.values()) + list(b.values()))
+    floor = min_p_floor(n, n, "two-sided")
+    print(f"\nSmallest attainable p at {n} seeds/group: {floor:.3g} (exact "
+          f"enumeration).\nA p sitting there means the design ran out, not the "
+          f"evidence. Read the d column\nfor effect size -- and note the default "
+          f"n_perm caps Monte Carlo p at 1e-5;\nfalsification/compare_arms.py runs "
+          f"the same test at 4e6 draws.")
     return 0
 
 

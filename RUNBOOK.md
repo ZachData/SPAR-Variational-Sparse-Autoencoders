@@ -109,6 +109,8 @@ Arms, in the priority order the sweep uses:
 | `e2_learned_var` | `train_vsae_topk.py` | `var_flag=1` — the genuinely variational model (E2) |
 | `e1_penalty` | `train_topk.py` | TopK + L2 penalty matched to the vSAE beta (E1) |
 | `e1_vsae_ref` | `train_vsae_topk.py` | fixed-variance vSAE that E1 should reproduce |
+| `e1_vsae_ref_unitinit` | `train_vsae_topk.py` | the same, `decoder_init_scale=1.0` — matches `top_k.py`'s init (E1) |
+| `e1_vsae_ref_gradproj` | `train_vsae_topk.py` | the same again, plus the decoder-gradient projection (E1) |
 | `e3_masked_kl` | `train_vsae_topk_masked_kl.py` | masked-KL, **no** ReLU — matches the preprint (E3) |
 | `e3_masked_kl_relu` | `train_vsae_topk_masked_kl.py` | masked-KL **with** ReLU — matches the released code (E3) |
 | `e2_beta_pilot_*` | `train_vsae_topk.py` | E2 stage-1 beta pilot, `var_flag=1`, one seed each |
@@ -125,6 +127,18 @@ depends on what E3 is meant to test — so neither trainer was changed. Instead
 `relu_mu` is a flag and both arms are run. `e3_masked_kl_relu` is the
 like-for-like comparison against `e1_vsae_ref`; plain `e3_masked_kl` matches the
 preprint. Report both; the difference between them *is* the ReLU's contribution.
+
+**E1's remaining asymmetries are factors, not fixes (same pattern as E3's ReLU).**
+Two differences between `e1_penalty` and the vSAE arm were found after the pilot,
+and neither was silently patched. `decoder_init_scale` (0.1 in `vsae_topk.py`, 1.0
+in `top_k.py`) gave `e1_vsae_ref_unitinit`; matching it is what confirmed E1 on the
+pre-registered liveness metric. `project_decoder_grad` gave `e1_vsae_ref_gradproj`:
+`top_k.py` calls `remove_gradient_parallel_to_decoder_directions` every step,
+`vsae_topk.py` imports it and never calls it, while both renormalise the decoder to
+unit norm — so the radial gradient component is applied and immediately undone.
+Each arm differs from its predecessor in exactly one factor, so the contribution is
+measured. Both flags are training-time only and invisible in a state dict;
+`config.json` is the only record of which arm a checkpoint belongs to.
 
 **E2 needs its beta pilot before its confirmatory seeds.** `kl_coeff` is not a
 shared scale across `var_flag`: at 0 the KL is `0.5‖mu‖²`, at 1 the variance term
@@ -189,6 +203,20 @@ sample-size dependent and cross-arm comparability depends on it.
 python falsification/worked_example.py     # sanity: framework still runs
 python -m pytest falsification/tests/ -q   # must stay green
 ```
+
+Cross-arm tables and any two-arm comparison:
+
+```bash
+python falsification/report_summaries.py --table
+python falsification/compare_e1.py --ref gradproj|unitinit|current|aprilmode|klwarmup
+python falsification/compare_arms.py e1_vsae_ref_unitinit e1_vsae_ref_gradproj
+```
+
+`compare_arms.py` is the general form and defaults to `--n-perm 4e6`. At 13 seeds
+the exact enumeration limit is exceeded, so the test goes Monte Carlo and the
+library's 100k default would cap every p at 1e-5 (4.42 sigma) whatever the effect
+size — an underpowered *analysis* of a fully powered design. It prints both
+pre-registered liveness thresholds and marks any p that is sitting on its floor.
 
 Then per arm, with κ = 0.3 as pre-registered:
 

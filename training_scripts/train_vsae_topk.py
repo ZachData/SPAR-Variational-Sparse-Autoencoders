@@ -53,6 +53,12 @@ class ExperimentConfig:
     # two arms started 10x apart in decoder scale. Run as a factor, not silently
     # matched -- see decoder_init_scale on VSAETopKConfig.
     decoder_init_scale: float = 0.1
+    # Project the decoder gradient's parallel component out before the optimiser
+    # step, as top_k.py does. This trainer imports the helper and never calls it
+    # while still renormalising the decoder when use_april_update_mode=False, so the
+    # constraint fights the optimiser. Default False keeps existing behaviour; run
+    # as a factor via the e1_vsae_ref_gradproj arm. See VSAETopKConfig.
+    project_decoder_grad: bool = False
     threshold_beta: float = 0.999
     threshold_start_step: Optional[int] = None
     
@@ -221,6 +227,7 @@ class ExperimentRunner:
             var_flag=self.config.var_flag,
             use_april_update_mode=self.config.use_april_update_mode,
             decoder_init_scale=self.config.decoder_init_scale,
+            project_decoder_grad=self.config.project_decoder_grad,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )
