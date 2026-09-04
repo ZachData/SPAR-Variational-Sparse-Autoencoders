@@ -53,6 +53,11 @@ class ExperimentConfig:
     # two arms started 10x apart in decoder scale. Run as a factor, not silently
     # matched -- see decoder_init_scale on VSAETopKConfig.
     decoder_init_scale: float = 0.1
+    # Distribution the tied columns are drawn from before normalisation. top_k.py
+    # normalises nn.Linear's default uniform init; this trainer has always drawn
+    # Gaussians. Last item on E1's frozen code diff -- run as a factor via the
+    # e1_vsae_ref_fullmatch arm. See decoder_init_dist on VSAETopKConfig.
+    decoder_init_dist: str = "gaussian"
     # Project the decoder gradient's parallel component out before the optimiser
     # step, as top_k.py does. This trainer imports the helper and never calls it
     # while still renormalising the decoder when use_april_update_mode=False, so the
@@ -228,6 +233,7 @@ class ExperimentRunner:
             use_april_update_mode=self.config.use_april_update_mode,
             decoder_init_scale=self.config.decoder_init_scale,
             project_decoder_grad=self.config.project_decoder_grad,
+            decoder_init_dist=self.config.decoder_init_dist,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )

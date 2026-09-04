@@ -74,6 +74,18 @@ is not a bug but a property to plan around:
 A p-value sitting exactly at one of these floors means **the design ran out, not the
 evidence**. Check `result["exact"]` and `result["p_floor"]` before reporting.
 
+**`norm_factor` is not recorded in any checkpoint's `config.json`.** Training
+normalises activations to unit mean squared norm (`trainSAE(normalize_activations=
+True)`) and scales the biases back up by `norm_factor` before saving, so a saved
+model is correct on raw activations. But `trainSAE` records it with
+`trainer.config["norm_factor"] = norm_factor` (`training.py:212`) and every
+trainer's `config` is a `@property` that builds a fresh dict — the write lands on
+a temporary and is discarded. It affects every arm identically, so it confounds
+nothing, but **any analysis that reasons about a quantity in training space has to
+re-estimate it** as `sqrt(mean ||x||^2)`, the estimator `get_norm_factor` uses
+(≈ 25.54 for gelu-1l layer 0). Skipping that step rescales every activation by 25x;
+`falsification/read_penalty_clamp.py` does it correctly and says why.
+
 **`frac_recovered = 0.0` in a summary file usually means an OOM, not a result.**
 `loss_recovered()` OOMs at the default eval batch size on a 10GB card, the failure
 is swallowed by an `except ... continue`, and the run reports success with the
@@ -121,6 +133,10 @@ python falsification/run_arm.py --arm baseline --seed 1
 # and re-analyses only checkpoints whose summary is older than their ae.pt.
 ./run_analysis.sh
 ./run_analysis.sh --force                            # ~1.2 min x every run on disk
+
+# Read a checkpoint's own internals (no training, needs the GPU for activations)
+python falsification/read_learned_sigma.py     # E2's learned posterior sigma
+python falsification/read_penalty_clamp.py     # E1's +/-10 penalty clamp: does it ever bind?
 
 # Cross-arm tables and the E1 comparison across its confound generations
 python falsification/report_summaries.py --table

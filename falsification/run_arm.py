@@ -143,6 +143,30 @@ ARMS: dict[str, dict[str, Any]] = {
                       "kl_warmup_steps": 0, "use_april_update_mode": False,
                       "decoder_init_scale": 1.0, "project_decoder_grad": True},
     },
+    # E1 CLOSING ARM. The code diff between the two E1 arms was enumerated by
+    # reading top_k.py and vsae_topk.py against each other and frozen at 14 items
+    # (RESULTS addendum 4). Thirteen are settled -- matched by config, run as a
+    # factor, or shown to be no-ops by measurement or by reading. The fourteenth is
+    # the initial weight draw: top_k.py normalises nn.Linear's default uniform
+    # init, vsae_topk.py normalises Gaussians.
+    #
+    # This arm is e1_vsae_ref_gradproj with that last item matched, so:
+    #   * against e1_vsae_ref_gradproj it is a one-factor contrast and measures the
+    #     init draw's own contribution;
+    #   * against e1_penalty it is the FULLY MATCHED vSAE -- nothing on the frozen
+    #     list is unmatched -- so any residual difference means the enumeration is
+    #     incomplete, which is itself the finding.
+    #
+    # Running it is what makes the stopping rule pre-registrable: the list is
+    # empty afterwards. Do not add further factors without a code diff to justify
+    # them (PROJECT.md, Open decisions).
+    "e1_vsae_ref_fullmatch": {
+        "script": "train_vsae_topk.py",
+        "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 1.0, "var_flag": 0,
+                      "kl_warmup_steps": 0, "use_april_update_mode": False,
+                      "decoder_init_scale": 1.0, "project_decoder_grad": True,
+                      "decoder_init_dist": "uniform"},
+    },
     # E3: masked-KL, run as a 2-level factor rather than a confound. The masked
     # trainer omits the F.relu(mu) that vsae_topk.py applies unconditionally, so a
     # single E3 arm cannot separate "masking the KL did this" from "the ReLU did
