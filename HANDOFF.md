@@ -3,26 +3,28 @@
 Read this first. `CLAUDE.md` has the repo's standing landmines; this file has
 **current state, what is established, and what to do next**.
 
-Last updated: 2026-09-03, end of session. Branch `claude/falsification-framework`.
-Working tree clean, nothing running, GPU idle. `git log --oneline -8` shows the
-session's commits, newest first; this file was added by the last of them.
+Last updated: 2026-09-03, end of the gradient-projection session. Branch
+`claude/falsification-framework`. Working tree clean, nothing running, GPU idle.
+`git log --oneline -10` shows the session's commits, newest first.
 
 ---
 
 ## State in one paragraph
 
-The falsification battery is **complete at 13 seeds per arm** — 8 arms, 104
-checkpoints, 0 failures — and reaches **5 sigma** on every comparison. Three of the
-four experiments have landed. E1's degeneracy claim is **confirmed** on the metric it
-was pre-registered against. E2 has produced a stronger result than it was designed
-for. E3 turned a confound into a measured factor. What remains is one cheap
-experiment, one piece of code to write, and one decision only a human can make.
+The falsification battery is **complete at 13 seeds per arm** — 9 arms, 117
+checkpoints, 0 failures — and reaches **5 sigma** on every comparison. E2 and E3
+have landed. **E1 has not, and the reason is now precise rather than vague**: its
+verdict depends on which implementation asymmetries you match, and matching the
+newest one (the decoder-gradient projection) closed 79% of the reconstruction gap
+while opening a liveness gap that had been closed. E1's remaining questions are
+both decisions, not measurements. What remains is one cheap experiment (E4), one
+optional factor, and two human decisions that block the write-up.
 
 ---
 
 ## What is established
 
-### E1 — the degeneracy claim is CONFIRMED on the pre-registered construct
+### E1 — confirmed on the pre-registered construct, but only for one of the arms
 
 `CLAUDE.md` landmine 1: at `sigma = 1` a vSAE's KL reduces to `0.5*||mu||^2`, so a
 fixed-variance vSAE *is* a TopK SAE with an L2 activation penalty. Verified as
@@ -41,11 +43,35 @@ decoder init scale. With all three matched, on the pre-registered liveness metri
 
 Neither threshold significant, both agreeing, at the highest power run.
 
-**Still open on E1:** reconstruction. `frac_variance_explained` differs by 0.0181
-(d = +16.5, 5.16σ) with the init matched — and, awkwardly, that gap is *larger* than
-with the init unmatched (0.0059). Liveness and reconstruction point in opposite
-directions here; only liveness is pre-registered. See "Next steps" #1 for the
-leading explanation.
+**...but only on the arm that leaves the decoder-gradient projection unmatched.**
+That was the next factor, it has now been run, and it changes the picture — see the
+section below. The E1 verdict as it stands:
+
+| arm | reconstruction (FVE gap) | liveness (pre-registered) |
+|---|---|---|
+| `e1_vsae_ref_unitinit` (projection off) | 0.0181, d = +16.5 | **indistinguishable** (p = 0.114 / 0.614) |
+| `e1_vsae_ref_gradproj` (projection on) | **0.0038**, d = +3.8 | **distinguishable** (d = −2.4 / −3.7, both agreeing) |
+
+### E1's newest factor — the decoder-gradient projection
+
+`vsae_topk.py` imported `remove_gradient_parallel_to_decoder_directions` and never
+called it while still renormalising the decoder to unit norm, so the radial gradient
+component was applied and then undone. Run as a factor (`project_decoder_grad`,
+default off), 13 seeds:
+
+* **It was the right explanation for reconstruction.** 78.9% of the FVE gap closes,
+  74.9% of `frac_recovered`.
+* **It breaks the liveness result.** Both pre-registered thresholds now separate the
+  arms and both agree in direction, so this is a robust effect by F8b, not the
+  shape change the two-threshold rule caught twice before.
+* **It moved the vSAE away from `e1_penalty` on liveness, not toward it** — 0.1816
+  (off) → 0.2197 (on) against `e1_penalty`'s 0.1836, and `e1_penalty` has had the
+  projection all along. The same update-rule change has opposite-signed effects in
+  the two implementations. That is an interaction, not a missing match.
+
+The degeneracy is an identity between *objectives* (verified to six decimals on a
+shared batch). It says nothing about two optimisers descending that objective
+landing in the same place, and these arms measure that they do not.
 
 ### E2 — it is the sampling, not the KL (94.7% / 5.3%)
 
@@ -92,22 +118,26 @@ effect — once for E1's init factor, once for E1a. Keep reporting both.
 
 ## Next steps, in priority order
 
-### 1. The gradient-projection asymmetry — cheapest, highest value, ~30 min
+### 1. Two decisions, and they block the write-up — human only
 
-`vsae_topk.py` **imports `remove_gradient_parallel_to_decoder_directions` and never
-calls it** (grep count: 0). `top_k.py` calls it every step, before renormalising the
-decoder to unit norm. Renormalising without projecting out the parallel gradient
-makes the optimiser fight the constraint — the radial component is applied and then
-immediately undone, a per-feature change in effective learning rate.
+**Compute cannot supply either.** Both are recorded in `PROJECT.md`, open decisions.
 
-This is the leading candidate for E1's remaining reconstruction gap, and it looks
-like an oversight rather than a design choice.
+**(a) Which implementation is E1's claim about?** Three asymmetries have been found
+after the pilot and run as factors; a fourth is identified (below). Matching them
+one at a time is honest as far as it goes — each contribution is measured, and two
+of them turned up effects that would otherwise have been misattributed — but "keep
+matching until the arms agree" is a garden of forking paths with a pre-registered
+metric attached. Either the claim is about the **objectives** (in which case the
+projection is a nuisance factor and the unprojected arm is a legitimate vSAE), or
+about the **released implementations** (in which case no asymmetry should have been
+matched at all). Those readings license different arms and currently give different
+verdicts. Record the choice before running another factor.
 
-**Do it as a factor, not a silent fix** — the same pattern as `relu_mu` and
-`decoder_init_scale`, both of which paid off. Add a config flag (default preserving
-current behaviour), add an arm, run 13 seeds, analyse, compare. Precedent to copy:
-`decoder_init_scale` in `dictionary_learning/trainers/vsae_topk.py` and the
-`e1_vsae_ref_unitinit` entry in `falsification/run_arm.py`.
+**(b) E1's equivalence margin.** Unchanged in substance and now sharper: at 13 seeds
+the across-seed SDs are ~1e-3, so almost any non-zero difference clears 5 sigma, and
+E1's verdict has already flipped on a live-fraction difference of 0.036. The margin
+must be a statement about what difference would **matter**, and it can no longer be
+chosen innocently.
 
 ### 2. E4 — no training required
 
@@ -115,15 +145,26 @@ The size-matched SCR/TPP control. `RUNBOOK.md` section 1 has the design; the mis
 piece is the `scorer(keep_indices)` function that masks the dictionary and calls
 SAEBench. Everything else (usage counts from the baseline summaries) is on disk.
 
-### 3. E1's equivalence margin — human decision, blocks the write-up
+### 3. Optional — the dead-feature tracking factor, ~30 min, blocked on decision (a)
 
-**Compute cannot supply this.** E1 is an *equivalence* claim, and more power makes
-equivalence *harder* to declare: at 13 seeds E1 clears 5.16σ on a reconstruction
-difference of 0.0181, and 5.03σ on 0.0059. Across-seed SDs are ~0.001, so almost any
-non-zero difference will be "significant". The margin must be a statement about what
-difference would **matter**, chosen independently of the measured numbers — and it
-can no longer be chosen innocently, since those numbers are now known. `PROJECT.md`
-still lists it as open.
+The two trainers define "fired" differently, and it is the only part of the loss
+that targets liveness — the construct that now separates the arms:
+
+* `top_k.py:543` — `did_fire[top_indices_BK.flatten()] = True`: **selected** by
+  TopK, whatever its value.
+* `vsae_topk.py:888` — `active_features = (sparse_features_BF.sum(0) > 0)`:
+  selected **and strictly positive**.
+
+Both encoders ReLU before selecting (`top_k.py:183`, `vsae_topk.py:290`), so values
+are non-negative and the rules differ on exactly one case: a feature TopK selects at
+value 0, which resets the counter in one trainer and not the other. The vSAE
+therefore declares features dead sooner and gives them more AuxK pressure. Whether
+that case is common enough to explain d = −3.7 is unmeasured.
+
+**Do not run it before decision (a).** Under the "objectives" reading it is out of
+scope entirely; under the "implementations" reading so were the three factors
+already run. Running it first and deciding afterwards is exactly the failure mode
+this framework exists to prevent.
 
 ### 4. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
 
@@ -162,6 +203,13 @@ summary or the stale numbers will silently persist.
 recovered from a state dict. Both are written into the trainer's `config` property and
 read back in `utils.load_dictionary`. Any new factor of this kind needs the same.
 
+**`falsification/tests/` was never in git until 2026-09-03.** The stock `tests/`
+rule in `.gitignore` — where it means a coverage artefact directory — matched it,
+so the suite CLAUDE.md calls "must stay green" existed on one machine only. It is
+re-included now (`!falsification/tests/`, with `__pycache__` put back after it,
+since the last matching pattern wins). If you add a directory under `falsification/`
+that the stock ignore list happens to name, check `git status` actually sees it.
+
 **Timings, measured.** Training ≈ 1 min/run. Analysis ≈ 1.1 min/checkpoint at 1M
 samples (was 6 min before `update_histograms` was vectorised — 59 of 60 output arrays
 verified bit-identical after that change). A full 13-seed arm is ≈ 13 min train +
@@ -173,7 +221,7 @@ verified bit-identical after that change). A full 13-seed arm is ≈ 13 min trai
 
 | file | what it holds |
 |---|---|
-| `falsification/RESULTS_2026-09-03.md` | all measured results, incl. the 13-seed/5σ addendum |
+| `falsification/RESULTS_2026-09-03.md` | all measured results; addendum 1 is the 13-seed/5σ rerun, addendum 2 the gradient projection |
 | `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
 | `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
 | `RUNBOOK.md` | commands, arm table, E4 design |
@@ -183,12 +231,14 @@ verified bit-identical after that change). A full 13-seed arm is ≈ 13 min trai
 
 ```bash
 python falsification/preflight.py                 # says which environment you are in
-python -m pytest falsification/tests/ -q          # 93 passing; must stay green
+python -m pytest falsification/tests/ -q          # 112 passing; must stay green
 python falsification/run_arm.py --check           # validates every arm without torch
 python falsification/report_summaries.py --table  # cross-arm liveness
+python falsification/compare_arms.py e1_penalty e1_vsae_ref_gradproj   # any two arms
 ```
 
-Note `preflight.py` still passes on a machine that cannot train — it verifies wiring
-by reading training-script source as text rather than importing it, so missing
-packages slip through (FINDINGS item 5). Importing each module through
-`run_arm.load_training_module()` would close that gap.
+`preflight.py` now imports each training module through
+`run_arm.load_training_module()` as well as reading its source as text, which closes
+FINDINGS item 5 — it used to pass on a machine that could not train, because every
+wiring check read source as text and missing packages slipped through. The text
+checks stay: they are what makes preflight useful in an environment without torch.

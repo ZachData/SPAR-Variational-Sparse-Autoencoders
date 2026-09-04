@@ -275,4 +275,29 @@ permitted only if reported as exploratory and excluded from the evidence product
   table in "What the simulation settled" is κ=0.5 and is superseded by the κ=0.3
   table in `RUNBOOK.md`.
 - **Equivalence margin for E1.** Needs to be pre-specified. What difference in live
-  fraction would we consider a real departure from degeneracy?
+  fraction would we consider a real departure from degeneracy? This is now the
+  binding constraint on the whole experiment, not a formality: at 13 seeds the
+  across-seed SDs are ~1e-3, so essentially any non-zero difference clears 5 sigma,
+  and E1's verdict has already flipped once on a difference of 0.036 in live
+  fraction. More power cannot supply it, and the numbers are now known, so it can
+  no longer be chosen innocently.
+- **A stopping rule for matching asymmetries (new, 2026-09-03).** Three differences
+  between `e1_penalty` and the vSAE arm have been found after the pilot and run as
+  factors: `decoder_init_scale`, `use_april_update_mode`, `project_decoder_grad`.
+  Matching the third **closed 79% of the reconstruction gap and opened a liveness
+  gap that had been closed** (RESULTS addendum 2), and a fourth candidate is already
+  identified (the two trainers' definitions of "fired" for dead-feature tracking).
+  Each factor is measured rather than silently patched, which is what keeps this
+  honest — but "keep matching until the arms agree" is a garden of forking paths
+  with a pre-registered metric attached, and the decision of which implementation
+  E1's claim is *about* has to be made explicitly rather than by exhaustion:
+
+  * the degeneracy is an identity between **objectives** (`0.5*||mu||^2`, verified
+    to six decimals), and says nothing about optimisers, in which case the
+    projection is a nuisance factor and the unprojected arm is a legitimate vSAE;
+  * or the claim is about the **released implementations**, in which case every
+    asymmetry between them is in scope and none of them should be matched at all.
+
+  Those two readings license different arms and currently give different verdicts.
+  Picking one is a human decision, and it should be recorded before the next factor
+  is run.
