@@ -90,8 +90,16 @@ def measure(ckpt: Path, acts, device: str) -> dict:
 
     ae, _ = load_dictionary(str(ckpt), device=device)
     ae.eval()
-    if getattr(ae, "var_flag", 0) != 1:
-        raise ValueError(f"{ckpt} is not a var_flag=1 checkpoint")
+    # var_flag=0 checkpoints have no var_encoder, so the sigma columns come back
+    # empty -- but the selection diagnostics still apply, and they are what says
+    # whether the two trainers' definitions of "fired" can ever disagree.
+    if not hasattr(ae, "var_flag"):
+        raise TypeError(
+            f"{type(ae).__name__} is not a VSAETopK; this script reads the "
+            f"variational encoder and the vSAE's own selection statistics. "
+            f"top_k.py's AutoEncoderTopK has neither."
+        )
+    deterministic = ae.var_flag != 1
 
     n_at_floor = n_at_ceil = n_total = 0
     raw_sum = raw_sq = 0.0
@@ -109,7 +117,7 @@ def measure(ckpt: Path, acts, device: str) -> dict:
             _, _, mu, log_var, top_indices, _ = ae.encode(
                 x, return_topk=True, training=False
             )
-            lv = log_var.float()
+            lv = (torch.zeros_like(mu) if deterministic else log_var).float()
             n_total += lv.numel()
             n_at_floor += int((lv <= LOG_VAR_MIN).sum())
             n_at_ceil += int((lv >= LOG_VAR_MAX).sum())
