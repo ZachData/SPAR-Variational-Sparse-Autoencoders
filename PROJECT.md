@@ -20,6 +20,7 @@ Last updated: 2026-09-03, after the gradient-projection run. Branch
 | Stage | Battery complete at 13 seeds; E1 blocked on two human decisions |
 | Framework | `falsification/` implemented, **112 tests green**, Type-I control verified |
 | Data | 9 arms, 117 checkpoints, 13 seeds/arm, 0 failures, all analysed at 1e6 samples |
+| Newest result | The learned sigma collapses past the clamp floor: the vSAE's optimum *is* the deterministic SAE |
 | Blocking | Decisions (a) and (b) under **Open decisions** — not compute |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
@@ -31,8 +32,9 @@ to be. **E1 has not landed, and the reason is now precise rather than vague:** i
 verdict depends on which implementation asymmetries you match, and matching the
 newest one — the decoder-gradient projection — closed 79% of the reconstruction gap
 while opening a liveness gap that had been closed. E1's remaining questions are
-decisions, not measurements. E0 and E4 have never been reported at all. Two free
-measurements are sitting on disk unread (see "Claims worth opening", 1 and 2).
+decisions, not measurements. E0 and E4 have never been reported at all. **The learned sigma has now been read**
+and it collapses completely — see below; the remaining free measurement is the
+liveness/reconstruction frontier ("Claims worth opening", 2).
 ## What is established
 
 ### E1 — confirmed on the pre-registered construct, but only for one of the arms
@@ -126,21 +128,49 @@ distribution that a single threshold would have reported as a clean one-directio
 effect — once for E1's init factor, once for E1a. Keep reporting both.
 
 
+### E2's learned sigma — the posterior collapses, and the damage is not the noise
+
+Read 2026-09-03 with `falsification/read_learned_sigma.py`, 20,000 activations,
+same batch for every checkpoint, 13 seeds per arm. Full detail in RESULTS
+addendum 3.
+
+**Every one of 41 million measured `log_var` values is at or below the [−6, 2]
+clamp floor**, and the largest is 24 log-units beneath it. Mean raw `log_var` is
+−66.92 (`e2_confirm`) and −71.32 (`e2_sampling_only`): the encoder asks for
+sigma ≈ 3e−15 and the clamp gives it exp(−3) = 0.0498. **The variational SAE's
+optimum is the deterministic SAE** — the strongest form the degeneracy claim could
+take, and it needed no new training. The KL is minimised in sigma at sigma = 1 and
+so pulls the other way; it moves `log_var` by 4.4 units and is overwhelmed, which
+is the right direction and confirms the reading.
+
+**The noise at convergence is harmless.** `evaluation.py:51` calls
+`dictionary(x, output_features=True)` without passing `training=`, and
+`VSAETopK.forward` defaults it to `True`, so every recorded FVE for a `var_flag=1`
+arm was measured *with* sampling on. Turning it off on identical data changes FVE
+by 0.000012. So E2's damage is **an optimisation-path effect**: the model has
+already learned to switch the noise off as hard as it can and is still at FVE 0.46
+against baseline's 0.90. Training under sampling lands the optimiser somewhere
+worse and it does not recover once the posterior collapses.
+
+E2's "94.7% is the reparameterisation" stands and now has a mechanism. Sigma starts
+at exp(−1) = 0.368 (`log_var_init = −2.0`) when mu is still small, so the
+noise-to-signal ratio is worst exactly when the TopK selection is being
+established. **Untested prediction:** initialising `log_var` below the clamp floor,
+or annealing sigma over the first steps, should recover most of the gap if a bad
+initial noise scale is the whole story.
+
 ### Pre-registered but never reported
 
-Two items are in the battery's design and appear nowhere in
-`RESULTS_2026-09-03.md`. Neither is blocked; both were simply overtaken.
+One item in the battery's design still appears nowhere in
+`RESULTS_2026-09-03.md`. It is not blocked; it was simply overtaken.
 
 * **E0, the pipeline negative control.** 13 `baseline` seeds exist and are
   analysed. The test itself — split them into two arbitrary groups, run the real
   metric pipeline, ask the framework to validate "group A is better organised" —
   has not been run. It is the only check that the real pipeline is exchangeable
   across seeds, and every downstream p-value assumes it is.
-* **The learned sigma.** `E2` was specified with the diagnostic "if the learned
-  sigma collapses toward 0, the degeneracy is the *optimum* rather than an
-  implementation accident, which is a substantially stronger result." The 13
-  `e2_confirm` checkpoints carry `var_encoder.weight` and `var_encoder.bias` on
-  disk. Nobody has looked.
+
+~~The learned sigma.~~ **Done 2026-09-03** — see the section immediately above.
 
 ---
 
@@ -182,7 +212,7 @@ becomes a result rather than a failed match:
 | bias form (`use_april_update_mode`) | no | removed as a confound, 6 seeds |
 | `decoder_init_scale` | no | closes liveness, opens reconstruction |
 | `project_decoder_grad` | no | closes 79% of reconstruction, opens liveness |
-| dead-feature tracking rule | no | **unmeasured** |
+| dead-feature tracking rule | no | **none possible** — see Next steps #5 |
 
 The claim that falls out is stronger than any equivalence verdict: *two
 implementations of an algebraically identical objective differ at d ≈ 16 on
@@ -203,11 +233,20 @@ a code diff rather than by results. That makes the stopping rule pre-registrable
 Step 1 before step 2 is what makes the remaining arms confirmatory rather than
 exploratory. Do not invert them.
 
-### 3. The two free measurements
+### 3. The remaining free measurement, and the experiment the sigma reading implies
 
-Both are on disk and neither needs the GPU. See "Claims worth opening" 1 and 2 —
-the learned sigma could be the single strongest result in the battery, and it is
-one `torch.load` away.
+The liveness/reconstruction frontier ("Claims worth opening" 2) is still unread and
+still needs no GPU.
+
+The sigma reading also promoted a new arm to cheap-and-decisive: **initialise
+`log_var` below the clamp floor, or anneal sigma over the first steps, and retrain
+`e2_sampling_only`.** Sigma starts at 0.368 while mu is still small, so the
+noise-to-signal ratio is worst exactly when the TopK selection is being
+established; the damage is an optimisation-path effect and this is the direct test
+of whether a bad initial noise scale is the whole of it. ~30 min. If FVE recovers
+toward 0.90, the reparameterisation is not intrinsically incompatible with TopK and
+E2's headline needs restating; if it stays at 0.48, the incompatibility is real and
+E2 gets much stronger.
 
 ### 4. E4 — no training required
 
@@ -217,24 +256,20 @@ that masks the dictionary and calls SAEBench. Everything else (usage counts from
 the baseline summaries) is on disk, and the machinery around it is implemented and
 tested against synthetic scorers with known ground truth.
 
-### 5. The dead-feature tracking factor — ~30 min, gated on decision (a)
+### 5. ~~The dead-feature tracking factor~~ — CLOSED, it is a no-op
 
-The two trainers define "fired" differently, and it is the only part of the loss
-that targets liveness — the construct that now separates the arms:
+The two trainers do define "fired" differently (`top_k.py:543` counts a feature as
+fired when TopK **selects** it; `vsae_topk.py:888` requires the value to be
+**strictly positive**), and the rules diverge only on a feature TopK selects at
+value 0. Measured on the E1 arms: there are 458.7 (`unitinit`) and 455.4
+(`gradproj`) strictly positive features per token against k = 256, and the fraction
+of selected features with `mu == 0` is exactly **0**. TopK is never forced to pad,
+so the rules cannot disagree. Do not run it — it would have cost 30 GPU-minutes to
+measure something that cannot happen.
 
-* `top_k.py:543` — `did_fire[top_indices_BK.flatten()] = True`: **selected** by
-  TopK, whatever its value.
-* `vsae_topk.py:888` — `active_features = (sparse_features_BF.sum(0) > 0)`:
-  selected **and strictly positive**.
-
-Both encoders ReLU before selecting (`top_k.py:183`, `vsae_topk.py:290`), so values
-are non-negative and the rules differ on exactly one case: a feature TopK selects
-at value 0, which resets the counter in one trainer and not the other. The vSAE
-therefore declares features dead sooner and gives them more AuxK pressure.
-
-**Check the mechanism before spending the GPU time.** If the post-ReLU positive
-count typically exceeds k = 256, zero-selection essentially never happens and this
-story is wrong. That is a ten-minute measurement on an existing checkpoint.
+Caveat: measured at convergence. The rules would begin to diverge only if the
+positive count fell below k during training, and it moves from roughly 1024 at
+initialisation to 455 at the end without approaching 256.
 
 ### 6. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
 
@@ -249,29 +284,12 @@ formally. It would be a **new pre-registration**, not a continuation of this one
 Ranked by value per unit of cost. The first two need no GPU and no new code beyond
 a script; the third is the most scientifically interesting thing available.
 
-### 1. "The deterministic SAE is the variational SAE's optimum" — free, on disk
+### 1. ~~"The deterministic SAE is the variational SAE's optimum"~~ — ANSWERED
 
-E2 as pre-registered says: *if the learned sigma collapses toward 0, the degeneracy
-is the optimum rather than an implementation accident, which is a substantially
-stronger result.* The 13 `e2_confirm` checkpoints carry `var_encoder.weight` and
-`var_encoder.bias`. **Nobody has read them.**
-
-Load them, push activations through, and look at the distribution of
-`exp(0.5*log_var)` per feature. Three outcomes, all publishable:
-
-* **sigma → 0.** The variational machinery optimises itself away. The preprint's
-  deterministic checkpoints were not a bug in the run script; they were where
-  training goes. This is the strongest single sentence available to the paper and
-  it costs one `torch.load`.
-* **sigma → large, mu → 0.** Posterior collapse in the other direction: the model
-  gives up on the latent. Already suspected at beta=1 (mu → 1e-3, FVE = 0.0001);
-  worth confirming it is the same phenomenon.
-* **sigma stays finite and structured.** Then the damage E2 measured is the price
-  of a *working* posterior, and the 94.7% attribution needs a mechanism — see
-  claim 3.
-
-Do this before anything else in the battery. It is the highest value/cost ratio in
-the repo by a wide margin.
+**Yes, emphatically.** Read 2026-09-03; see "What is established" above and RESULTS
+addendum 3. Mean raw `log_var` is −66.9 against a clamp floor of −6, with 100% of
+41M values at or below the floor. What it opened instead is the annealing arm under
+Next steps #3, and a correction to the method proposed for claim 3 below.
 
 ### 2. Is there one liveness–reconstruction frontier? — free, 117 checkpoints
 
@@ -303,13 +321,24 @@ inconsistent feature assignment and every feature's decoder column is trained on
 moving target. The damage is then a property of *discrete selection under noise*,
 not of variational inference.
 
+**Two things are already known about it.** The damage is an optimisation-path
+effect — it is in the trained weights, not in the eval-time noise (RESULTS
+addendum 3) — which is what this hypothesis predicts. And one sub-hypothesis is
+already falsified: TopK is *not* forced to pad its selection with `mu == 0`
+features. There are 975–1064 strictly positive features per token against k = 256,
+and the measured fraction of selected features with `mu == 0` is exactly 0. If
+selection instability is the mechanism it works through boundary flips, not through
+zero-padding.
+
 **Two ways to test it, both cheap, and the repo already has the trainers:**
 
-* **Measure the instability directly** (no training). On the existing
-  `e2_confirm` / `e2_sampling_only` checkpoints, run the same input through
-  `encode` twice with sampling on and compute the Jaccard overlap of the selected
-  index sets. Correlate per-checkpoint instability with FVE across the 13 seeds. A
-  tight negative correlation is the mechanism.
+* **Measure the instability during EARLY TRAINING, not on converged checkpoints.**
+  The original form of this test — Jaccard overlap of selected indices on the
+  finished `e2_confirm` checkpoints — is now known to be useless: at the collapsed
+  sigma, sampling on versus off moves FVE by 0.000012, so the converged forward
+  pass is stable and the test would read as "no instability" and be misinterpreted
+  as falsifying the mechanism. Instrument the Jaccard overlap **during** a training
+  run instead, where sigma starts at 0.368 and mu is still small.
 * **Vary the discreteness of the sparsity** (training). `vsae_jump_relu.py` has
   `var_flag` and its sparsity is a *learned threshold*, not a top-k selection;
   `vsae_batch_topk.py` selects discretely but across the batch. Run
@@ -609,8 +638,8 @@ Do not report a null result as confirmation.
 
 ### E2 — Is it variational at all? 6 runs.
 > **Outcome: landed, stronger than designed** — 94.7% of the damage is the
-> reparameterisation, not the KL. The learned-sigma diagnostic below is still
-> unread; see "Claims worth opening" 1.
+> reparameterisation, not the KL. The learned-sigma diagnostic below has now
+> been read: it collapses past the clamp floor. See "What is established".
 
 Train with `var_flag=1`, 6 seeds — the experiment the preprint claims to have run
 and did not. Diagnostic of interest is the learned σ: if it collapses toward 0, the
