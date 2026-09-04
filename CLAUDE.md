@@ -127,8 +127,9 @@ python falsification/report_summaries.py --table
 python falsification/compare_e1.py --ref current|aprilmode|klwarmup
 ```
 
-**Read `HANDOFF.md` first.** It carries current state, what is established, and the
-prioritised next steps.
+**Read `PROJECT.md` first.** It is the living document: current state, what is
+established, the prioritised next steps, the pre-registration and the open
+decisions. It absorbed the former `HANDOFF.md` on 2026-09-03.
 
 ## Conventions
 

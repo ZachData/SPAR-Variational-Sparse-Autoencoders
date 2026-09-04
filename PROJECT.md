@@ -1,14 +1,412 @@
 # PROJECT.md — Falsification-based validation of sparse autoencoder claims
 
+**This is the living document.** It carries current state, what is established,
+what to do next, and the pre-registration the battery runs under. It absorbed
+`HANDOFF.md` on 2026-09-03; there is no separate handoff file. `CLAUDE.md` has the
+repo's standing landmines about the vSAE code — read that too, and read it before
+touching anything in `dictionary_learning/`.
+
+Reading order for a cold start: **Status** → **Where things stand** → **What is
+established** → **Next steps**. Everything after that is the design and the
+pre-registration, which change rarely; the sections before it change every session.
+
+Last updated: 2026-09-03, after the gradient-projection run. Branch
+`claude/falsification-framework`, working tree clean, GPU idle.
+
 ## Status
 
 | | |
 |---|---|
-| Stage | Reframing after the workshop deadline was dropped |
-| Framework | `falsification/` implemented, 93 tests green, Type-I control verified |
-| Blocking | Seeded training runs (local GPU only) |
+| Stage | Battery complete at 13 seeds; E1 blocked on two human decisions |
+| Framework | `falsification/` implemented, **112 tests green**, Type-I control verified |
+| Data | 9 arms, 117 checkpoints, 13 seeds/arm, 0 failures, all analysed at 1e6 samples |
+| Blocking | Decisions (a) and (b) under **Open decisions** — not compute |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
+## Where things stand
+
+The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
+on every comparison. E2 and E3 have landed and are stronger than they were designed
+to be. **E1 has not landed, and the reason is now precise rather than vague:** its
+verdict depends on which implementation asymmetries you match, and matching the
+newest one — the decoder-gradient projection — closed 79% of the reconstruction gap
+while opening a liveness gap that had been closed. E1's remaining questions are
+decisions, not measurements. E0 and E4 have never been reported at all. Two free
+measurements are sitting on disk unread (see "Claims worth opening", 1 and 2).
+## What is established
+
+### E1 — confirmed on the pre-registered construct, but only for one of the arms
+
+`CLAUDE.md` landmine 1: at `sigma = 1` a vSAE's KL reduces to `0.5*||mu||^2`, so a
+fixed-variance vSAE *is* a TopK SAE with an L2 activation penalty. Verified as
+algebra (both trainers return `511.895264` on the same batch, six decimals) and now
+as a claim about trained checkpoints.
+
+The pilot's apparent difference (d = 37–59) was **three stacked implementation
+mismatches**, removed in sequence: `kl_warmup_steps`, `use_april_update_mode`, and
+decoder init scale. With all three matched, on the pre-registered liveness metric at
+13 seeds:
+
+| | < 0.1x k/d | < 0.5x k/d | thresholds |
+|---|---|---|---|
+| TopK+L2 vs vSAE (init 0.1, historical) | d = −2.8, 5.03σ | d = +13.0, 5.03σ | **disagree in direction** |
+| **TopK+L2 vs vSAE (init 1.0, matched)** | **d = +0.8, p = 0.114** | **d = +0.2, p = 0.614** | **agree → indistinguishable** |
+
+Neither threshold significant, both agreeing, at the highest power run.
+
+**...but only on the arm that leaves the decoder-gradient projection unmatched.**
+That was the next factor, it has now been run, and it changes the picture — see the
+section below. The E1 verdict as it stands:
+
+| arm | reconstruction (FVE gap) | liveness (pre-registered) |
+|---|---|---|
+| `e1_vsae_ref_unitinit` (projection off) | 0.0181, d = +16.5 | **indistinguishable** (p = 0.114 / 0.614) |
+| `e1_vsae_ref_gradproj` (projection on) | **0.0038**, d = +3.8 | **distinguishable** (d = −2.4 / −3.7, both agreeing) |
+
+### E1's newest factor — the decoder-gradient projection
+
+`vsae_topk.py` imported `remove_gradient_parallel_to_decoder_directions` and never
+called it while still renormalising the decoder to unit norm, so the radial gradient
+component was applied and then undone. Run as a factor (`project_decoder_grad`,
+default off), 13 seeds:
+
+* **It was the right explanation for reconstruction.** 78.9% of the FVE gap closes,
+  74.9% of `frac_recovered`.
+* **It breaks the liveness result.** Both pre-registered thresholds now separate the
+  arms and both agree in direction, so this is a robust effect by F8b, not the
+  shape change the two-threshold rule caught twice before.
+* **It moved the vSAE away from `e1_penalty` on liveness, not toward it** — 0.1816
+  (off) → 0.2197 (on) against `e1_penalty`'s 0.1836, and `e1_penalty` has had the
+  projection all along. The same update-rule change has opposite-signed effects in
+  the two implementations. That is an interaction, not a missing match.
+
+The degeneracy is an identity between *objectives* (verified to six decimals on a
+shared batch). It says nothing about two optimisers descending that objective
+landing in the same place, and these arms measure that they do not.
+
+### E2 — it is the sampling, not the KL (94.7% / 5.3%)
+
+`kl_coeff` is not a shared scale across `var_flag`. A pre-registered two-stage design
+(pilot at seed 101, confirmatory at seeds disjoint from it) found that **no beta in
+{1e-4 … 1} puts a `var_flag=1` model within 0.02 FVE of baseline** — FVE degrades
+monotonically (0.4581 → 0.0001) and never approaches baseline's 0.9003.
+
+The decisive run was a control with **sampling on and the KL entirely off**:
+
+| config | FVE (13 seeds) |
+|---|---|
+| baseline (deterministic) | 0.900159 ± 0.0006 |
+| `var_flag=1`, beta=1e-4 | 0.460894 ± 0.0025 |
+| `var_flag=1`, **beta=0** | 0.484106 ± 0.0022 |
+
+Removing the KL entirely recovers **5.3%** of the gap. The other **94.7% is the
+reparameterisation**. This is a claim about the architecture, not a hyperparameter,
+and it is much stronger than the beta-tuning story E2 was built on.
+
+Caveats that must travel with any E2 statement:
+* `e2_confirm` characterises a model at FVE ≈ 0.46, not a healthy one. Liveness on it
+  belongs in `confounders_uncontrolled` — recorded *before* the runs were read.
+* `e2_sampling_only` is **not pre-registered**; proposed after stage 1 was seen. It is
+  a control, not a selection step, so it does not contaminate `e2_confirm`, but it is
+  exploratory.
+
+### E3 — the ReLU is a large effect, not a nuisance
+
+`vsae_topk.py` applies `F.relu(mu)`; the masked-KL trainer did not; the preprint shows
+none. Rather than patch one to match the other, `relu_mu` became a flag and both run
+as arms. no-ReLU vs ReLU: **d = +19.3 (0.1x) and +15.3 (0.5x)**, both thresholds
+agreeing, 5.03σ. Had either trainer simply been patched, every E3 number would have
+silently inherited a d ≈ 20 effect attributed to the KL mask.
+
+### The method earned its keep twice
+
+Both times, the **two-threshold** liveness pre-registration (F8b: robust only if both
+agree; a disagreement is itself the finding) caught a *shape* change in the usage
+distribution that a single threshold would have reported as a clean one-directional
+effect — once for E1's init factor, once for E1a. Keep reporting both.
+
+
+### Pre-registered but never reported
+
+Two items are in the battery's design and appear nowhere in
+`RESULTS_2026-09-03.md`. Neither is blocked; both were simply overtaken.
+
+* **E0, the pipeline negative control.** 13 `baseline` seeds exist and are
+  analysed. The test itself — split them into two arbitrary groups, run the real
+  metric pipeline, ask the framework to validate "group A is better organised" —
+  has not been run. It is the only check that the real pipeline is exchangeable
+  across seeds, and every downstream p-value assumes it is.
+* **The learned sigma.** `E2` was specified with the diagnostic "if the learned
+  sigma collapses toward 0, the degeneracy is the *optimum* rather than an
+  implementation accident, which is a substantially stronger result." The 13
+  `e2_confirm` checkpoints carry `var_encoder.weight` and `var_encoder.bias` on
+  disk. Nobody has looked.
+
+---
+
+## Next steps, in priority order
+
+### 1. Two decisions, and they block the write-up — human only
+
+**Compute cannot supply either.** Both are stated in full under **Open decisions**.
+In brief:
+
+**(a) Which implementation is E1's claim about?** Three asymmetries between
+`e1_penalty` and the vSAE arm have been found after the pilot and run as factors; a
+fourth is identified. Either the claim is about the **objectives** — in which case
+the gradient projection is a nuisance factor and the unprojected arm is a
+legitimate vSAE — or about the **released implementations**, in which case no
+asymmetry should have been matched at all. Those readings license different arms
+and currently give different verdicts.
+
+**(b) E1's equivalence margin.** At 13 seeds the across-seed SDs are ~1e-3, so
+almost any non-zero difference clears 5 sigma, and E1's verdict has already flipped
+on a live-fraction difference of 0.036. The margin must say what difference would
+**matter**, and the numbers are now known, so it can no longer be chosen innocently.
+
+### 2. Reframe E1 from an equivalence test to a decomposition
+
+This is the recommended resolution of (a), and it is cheap.
+
+E1 is currently posed as "is a fixed-variance vSAE the same thing as TopK+L2?"
+Equivalence questions get *harder* with more power, and the gradient-projection
+result shows this one has no single answer: same objective to six decimals, and
+matching the update rule trades reconstruction agreement for liveness agreement.
+
+Reposed as **"what makes them differ, and by how much?"**, every factor already run
+becomes a result rather than a failed match:
+
+| factor | in either paper's equations? | measured effect |
+|---|---|---|
+| `kl_warmup_steps` | no | removed as a confound, 6 seeds |
+| bias form (`use_april_update_mode`) | no | removed as a confound, 6 seeds |
+| `decoder_init_scale` | no | closes liveness, opens reconstruction |
+| `project_decoder_grad` | no | closes 79% of reconstruction, opens liveness |
+| dead-feature tracking rule | no | **unmeasured** |
+
+The claim that falls out is stronger than any equivalence verdict: *two
+implementations of an algebraically identical objective differ at d ≈ 16 on
+reconstruction, and the difference decomposes entirely into optimiser-side details
+that appear in nobody's equations.*
+
+**It also dissolves the forking-path problem.** You stop matching until the arms
+agree and start measuring each factor's contribution, with the factor set fixed by
+a code diff rather than by results. That makes the stopping rule pre-registrable:
+
+1. **Enumerate every difference between `top_k.py` and `vsae_topk.py` by reading
+   the two files.** ~1 hour, no GPU. Freeze the list here before running anything.
+2. Run each enumerated factor as an arm, ~30 min each.
+3. Rerun the two archived generations at 13 seeds if the decomposition needs
+   uniform power — `archive/e1_vsae_ref_aprilmode` and
+   `archive/e1_vsae_ref_klwarmup1000` are at 6.
+
+Step 1 before step 2 is what makes the remaining arms confirmatory rather than
+exploratory. Do not invert them.
+
+### 3. The two free measurements
+
+Both are on disk and neither needs the GPU. See "Claims worth opening" 1 and 2 —
+the learned sigma could be the single strongest result in the battery, and it is
+one `torch.load` away.
+
+### 4. E4 — no training required
+
+The size-matched SCR/TPP control. The design is under **Experiments** below and in
+`RUNBOOK.md` section 1; the missing piece is the `scorer(keep_indices)` function
+that masks the dictionary and calls SAEBench. Everything else (usage counts from
+the baseline summaries) is on disk, and the machinery around it is implemented and
+tested against synthetic scorers with known ground truth.
+
+### 5. The dead-feature tracking factor — ~30 min, gated on decision (a)
+
+The two trainers define "fired" differently, and it is the only part of the loss
+that targets liveness — the construct that now separates the arms:
+
+* `top_k.py:543` — `did_fire[top_indices_BK.flatten()] = True`: **selected** by
+  TopK, whatever its value.
+* `vsae_topk.py:888` — `active_features = (sparse_features_BF.sum(0) > 0)`:
+  selected **and strictly positive**.
+
+Both encoders ReLU before selecting (`top_k.py:183`, `vsae_topk.py:290`), so values
+are non-negative and the rules differ on exactly one case: a feature TopK selects
+at value 0, which resets the counter in one trainer and not the other. The vSAE
+therefore declares features dead sooner and gives them more AuxK pressure.
+
+**Check the mechanism before spending the GPU time.** If the post-ReLU positive
+count typically exceeds k = 256, zero-selection essentially never happens and this
+story is wrong. That is a ten-minute measurement on an existing checkpoint.
+
+### 6. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
+
+The beta=0 control makes this much less interesting: if 94.7% of the damage is the
+sampling, no smaller beta recovers a healthy model. It would close the question
+formally. It would be a **new pre-registration**, not a continuation of this one.
+
+---
+
+## Claims worth opening
+
+Ranked by value per unit of cost. The first two need no GPU and no new code beyond
+a script; the third is the most scientifically interesting thing available.
+
+### 1. "The deterministic SAE is the variational SAE's optimum" — free, on disk
+
+E2 as pre-registered says: *if the learned sigma collapses toward 0, the degeneracy
+is the optimum rather than an implementation accident, which is a substantially
+stronger result.* The 13 `e2_confirm` checkpoints carry `var_encoder.weight` and
+`var_encoder.bias`. **Nobody has read them.**
+
+Load them, push activations through, and look at the distribution of
+`exp(0.5*log_var)` per feature. Three outcomes, all publishable:
+
+* **sigma → 0.** The variational machinery optimises itself away. The preprint's
+  deterministic checkpoints were not a bug in the run script; they were where
+  training goes. This is the strongest single sentence available to the paper and
+  it costs one `torch.load`.
+* **sigma → large, mu → 0.** Posterior collapse in the other direction: the model
+  gives up on the latent. Already suspected at beta=1 (mu → 1e-3, FVE = 0.0001);
+  worth confirming it is the same phenomenon.
+* **sigma stays finite and structured.** Then the damage E2 measured is the price
+  of a *working* posterior, and the 94.7% attribution needs a mechanism — see
+  claim 3.
+
+Do this before anything else in the battery. It is the highest value/cost ratio in
+the repo by a wide margin.
+
+### 2. Is there one liveness–reconstruction frontier? — free, 117 checkpoints
+
+Every arm now has (FVE, dead-fraction) at 13 seeds. Plot them together.
+
+* If they lie on **one tight curve**, then "the vSAE has more dead features" and
+  "the vSAE reconstructs worse" are not two findings — they are one, and reporting
+  both as independent evidence is double-counting. That is precisely Failure 2 of
+  the thesis (metrics co-varying with a nuisance), demonstrated on our own battery
+  rather than argued in the abstract.
+* If specific arms sit **off** the curve, those arms are doing something the others
+  are not, and the frontier gives a principled way to say what "better" means:
+  above the curve, not merely higher on one axis.
+
+Either answer strengthens the paper, the data is already on disk, and it produces a
+figure. Note the E1 arms are the interesting case: `gradproj` bought reconstruction
+and paid in liveness, which is exactly what movement *along* a frontier looks like.
+
+### 3. "The reparameterisation trick is incompatible with discrete top-k selection,
+not with sparse autoencoders" — the best new science here
+
+E2 established **that** 94.7% of the damage is the sampling rather than the KL. It
+did not establish **why**, and the obvious mechanism is testable and sharp.
+
+**Hypothesis.** TopK selection is a discrete argmax over noisy scores. Sampling
+`z = mu + sigma*eps` before selection means the selected index set changes between
+forward passes for the same input, so the decoder is asked to reconstruct from an
+inconsistent feature assignment and every feature's decoder column is trained on a
+moving target. The damage is then a property of *discrete selection under noise*,
+not of variational inference.
+
+**Two ways to test it, both cheap, and the repo already has the trainers:**
+
+* **Measure the instability directly** (no training). On the existing
+  `e2_confirm` / `e2_sampling_only` checkpoints, run the same input through
+  `encode` twice with sampling on and compute the Jaccard overlap of the selected
+  index sets. Correlate per-checkpoint instability with FVE across the 13 seeds. A
+  tight negative correlation is the mechanism.
+* **Vary the discreteness of the sparsity** (training). `vsae_jump_relu.py` has
+  `var_flag` and its sparsity is a *learned threshold*, not a top-k selection;
+  `vsae_batch_topk.py` selects discretely but across the batch. Run
+  sampling-on vs sampling-off for each, exactly as `e2_sampling_only` did for
+  TopK. **Prediction: the FVE damage is large for TopK, intermediate for BatchTopK,
+  and small for JumpReLU.** If that ordering holds, the claim is established and it
+  generalises well beyond this preprint.
+
+This is the one item on the list that produces a positive, mechanistic, transferable
+result rather than a correction. It is also the natural headline for a second paper.
+
+### 4. "A one-line optimiser detail moves reconstruction more than the architecture
+under study" — ~30 min, converts a local finding into a general one
+
+The decoder-gradient projection is worth d = −14.3 on FVE in the vSAE. That is
+larger than most published architectural interventions, and it appears in no
+equations. Right now it reads as a bug in one file. One arm makes it general:
+**turn the projection off in `top_k.py` and train the baseline** — a plain TopK SAE
+with no penalty and no KL.
+
+* Same magnitude there → the projection is a **generic and unreported factor in
+  TopK SAE training**, and any comparison between codebases that differ on it is
+  confounded. That is a claim about the field, not about this repo.
+* Different magnitude → it **interacts with the penalty**, which is already the
+  leading interpretation given that the projection moved the vSAE *away* from
+  `e1_penalty` on liveness (0.1816 → 0.2197 against 0.1836). An interaction between
+  an optimiser detail and a loss term is a subtler and more interesting result.
+
+Either way the E1 decomposition gets a control arm it currently lacks.
+
+### 5. "Most published SAE comparisons cannot reach the significance they imply" —
+desk work
+
+The combinatorial floor is not a subtlety, it is arithmetic: 6 seeds per group
+cannot beat 3.07 sigma however large the effect, and 5 cannot beat 2.6. Survey how
+many training seeds recent SAE papers actually use — the modal answer appears to be
+one — and state the ceiling that implies for each.
+
+This is the empirical hook the methods paper currently lacks: it turns "you should
+pre-register and use permutation tests" from advice into a measured gap. Handle it
+carefully — the point is that the field's *design conventions* cap what its results
+can say, not that particular authors erred.
+
+---
+
+## Open decisions
+
+- **Agentic or fixed battery?** POPPER's novelty is LLM agents *designing* the
+  falsification tests. We could (a) hand-specify a battery — more rigorous, much
+  cheaper, less novel; or (b) have an LLM propose tests against a metric schema —
+  closer to POPPER, more moving parts, and the relevance checker becomes load-
+  bearing. **Recommendation: (a) first.** The statistical contribution stands
+  alone, E0 is meaningful either way, and (b) can be layered on once the fixed
+  battery has established the error rates it should be compared against.
+- ~~**α and κ.**~~ **RESOLVED: α = 0.1, κ = 0.3**, pre-registered. The κ sweep
+  (`kappa_sweep()` in `falsification/simulate.py`) measured worst-case Type-I
+  (5 fully redundant tests) against power at 5 seeds/group:
+
+  | κ | Type-I (worst) | power d=1.0 | d=1.5 | d=2.0 |
+  |---|---|---|---|---|
+  | 0.2 | 0.066 | 0.27 | 0.63 | 0.90 |
+  | **0.3** | **0.086** | **0.29** | **0.66** | **0.92** |
+  | 0.4 | 0.095 | 0.27 | 0.63 | 0.91 |
+  | 0.5 | 0.095 | 0.19 | 0.53 | 0.85 |
+  | 0.7 | 0.061 | 0.01 | 0.08 | 0.27 |
+
+  κ=0.3 maximises power while staying under α. Against the previous κ=0.5 this is
+  free: power at d=1.5 rises 0.53 → 0.66 at 5 seeds, 0.73 → 0.82 at 6. The power
+  table in "What the simulation settled" is κ=0.5 and is superseded by the κ=0.3
+  table in `RUNBOOK.md`.
+- **Equivalence margin for E1.** Needs to be pre-specified. What difference in live
+  fraction would we consider a real departure from degeneracy? This is now the
+  binding constraint on the whole experiment, not a formality: at 13 seeds the
+  across-seed SDs are ~1e-3, so essentially any non-zero difference clears 5 sigma,
+  and E1's verdict has already flipped once on a difference of 0.036 in live
+  fraction. More power cannot supply it, and the numbers are now known, so it can
+  no longer be chosen innocently.
+- **A stopping rule for matching asymmetries (new, 2026-09-03).** Three differences
+  between `e1_penalty` and the vSAE arm have been found after the pilot and run as
+  factors: `decoder_init_scale`, `use_april_update_mode`, `project_decoder_grad`.
+  Matching the third **closed 79% of the reconstruction gap and opened a liveness
+  gap that had been closed** (RESULTS addendum 2), and a fourth candidate is already
+  identified (the two trainers' definitions of "fired" for dead-feature tracking).
+  Each factor is measured rather than silently patched, which is what keeps this
+  honest — but "keep matching until the arms agree" is a garden of forking paths
+  with a pre-registered metric attached, and the decision of which implementation
+  E1's claim is *about* has to be made explicitly rather than by exhaustion:
+
+  * the degeneracy is an identity between **objectives** (`0.5*||mu||^2`, verified
+    to six decimals), and says nothing about optimisers, in which case the
+    projection is a nuisance factor and the unprojected arm is a legitimate vSAE;
+  * or the claim is about the **released implementations**, in which case every
+    asymmetry between them is in scope and none of them should be matched at all.
+
+  Those two readings license different arms and currently give different verdicts.
+  Picking one is a human decision, and it should be recorded before the next factor
+  is run.
 ## The thesis
 
 Interpretability makes claims of the form "architecture A produces better features
@@ -153,13 +551,27 @@ should say so rather than run an underpowered arm and report a null.
 Before committing GPU time to an arm, estimate its d from the existing single-seed
 data and read the required seed count off this table.
 
-## Experiments
+
+---
+
+## Experiments — the pre-registration
+
+This is the battery as pre-registered, kept in its original form because that is
+what makes it a pre-registration. The seed counts say 6 and 10; the confirmatory
+battery ran at **13 seeds per arm** after the 6-seed generation hit the 3.07-sigma
+combinatorial floor. Outcomes are **not** recorded here — they are in
+`falsification/RESULTS_2026-09-03.md` and summarised under "What is established"
+above. Where an experiment's design was changed after seeing results, the change is
+noted in the section itself and the arm is marked exploratory.
 
 Every arm is gelu-1l, `blocks.0.hook_resid_post`, d=2048, k=256, auxk=1/32,
 lr=8e-4, 10k steps — the existing sweep configuration — varying only the stated
 intervention and the seed.
 
 ### E0 — Pipeline negative control. 10 runs.
+> **Outcome: never run.** 13 `baseline` seeds exist and are analysed; the split
+> test itself has not been done. See "Pre-registered but never reported".
+
 Train 10 TopK SAEs with **identical config, different seeds**, run the *real*
 metric pipeline over them, split into two arbitrary groups of 5 and ask the
 framework to validate "group A is better organised than group B". Ground truth:
@@ -182,6 +594,10 @@ Error control of the *procedure* is established separately and for free by
 `falsification/simulate.py`, which needs no GPU. See "What the simulation settled".
 
 ### E1 — The degeneracy claim. 6 runs.
+> **Outcome: unresolved, and the reason is a decision.** Confirmed on the
+> pre-registered liveness metric against `e1_vsae_ref_unitinit`, not against
+> `e1_vsae_ref_gradproj`. See "What is established" and Open decisions (a), (b).
+
 Train TopK SAE + explicit `(β/2)·||f||²` activation penalty, 6 seeds. Under the
 degeneracy (`CLAUDE.md`, landmine 1) this should be **indistinguishable** from the
 fixed-variance vSAE at matched β.
@@ -192,18 +608,28 @@ margin, or as a power statement ("we could have detected a difference of size X"
 Do not report a null result as confirmation.
 
 ### E2 — Is it variational at all? 6 runs.
+> **Outcome: landed, stronger than designed** — 94.7% of the damage is the
+> reparameterisation, not the KL. The learned-sigma diagnostic below is still
+> unread; see "Claims worth opening" 1.
+
 Train with `var_flag=1`, 6 seeds — the experiment the preprint claims to have run
 and did not. Diagnostic of interest is the learned σ: if it collapses toward 0, the
 degeneracy is the *optimum* rather than an implementation accident, which is a
 substantially stronger result.
 
 ### E3 — The masked-KL intervention. 6 runs.
+> **Outcome: landed.** The ReLU confound flagged below was resolved by running
+> `relu_mu` as a two-level factor rather than patching either trainer; the ReLU
+> alone is d = +19.3 / +15.3.
+
 `vsae_topk_masked_kl`, 6 seeds. Tests the preprint's stated death mechanism
 directly. **Beware the confound in landmine 2**: that trainer omits the `F.relu(mu)`
 that `vsae_topk.py` applies, so either patch one to match the other or report the
 comparison as confounded.
 
 ### E4 — Size-matched SCR/TPP control. No training. Implemented in `falsification/size_control.py`.
+> **Outcome: not started.** Blocked only on the SAEBench-side scorer. Next steps #4.
+
 Measure SCR/TPP as a **function of dictionary size** for the baseline SAE, then
 ask where the vSAE's score falls on that curve.
 
@@ -249,55 +675,72 @@ permitted only if reported as exploratory and excluded from the evidence product
 3. **Corrections** to the preprint's record: the degeneracy, the AuxK confound, the
    config mismatches, the self-contradiction between Global and Conclusion.
 
-## Open decisions
+## Landmines specific to continuing this work
 
-- **Agentic or fixed battery?** POPPER's novelty is LLM agents *designing* the
-  falsification tests. We could (a) hand-specify a battery — more rigorous, much
-  cheaper, less novel; or (b) have an LLM propose tests against a metric schema —
-  closer to POPPER, more moving parts, and the relevance checker becomes load-
-  bearing. **Recommendation: (a) first.** The statistical contribution stands
-  alone, E0 is meaningful either way, and (b) can be layered on once the fixed
-  battery has established the error rates it should be compared against.
-- ~~**α and κ.**~~ **RESOLVED: α = 0.1, κ = 0.3**, pre-registered. The κ sweep
-  (`kappa_sweep()` in `falsification/simulate.py`) measured worst-case Type-I
-  (5 fully redundant tests) against power at 5 seeds/group:
+These cost real time this session. They are not in `CLAUDE.md` because they are about
+*operating* the battery, not about the science.
 
-  | κ | Type-I (worst) | power d=1.0 | d=1.5 | d=2.0 |
-  |---|---|---|---|---|
-  | 0.2 | 0.066 | 0.27 | 0.63 | 0.90 |
-  | **0.3** | **0.086** | **0.29** | **0.66** | **0.92** |
-  | 0.4 | 0.095 | 0.27 | 0.63 | 0.91 |
-  | 0.5 | 0.095 | 0.19 | 0.53 | 0.85 |
-  | 0.7 | 0.061 | 0.01 | 0.08 | 0.27 |
+**Never poll for GPU-busy with `pgrep -f '<pattern>'`.** The Bash-tool wrapper
+process's command line contains the entire script text, so a wait loop that greps for
+`run_arm.py` matches *its own parent* and never exits. This deadlocked a job for six
+minutes. If the GPU is already idle, omit the wait entirely.
 
-  κ=0.3 maximises power while staying under α. Against the previous κ=0.5 this is
-  free: power at d=1.5 rises 0.53 → 0.66 at 5 seeds, 0.73 → 0.82 at 6. The power
-  table in "What the simulation settled" is κ=0.5 and is superseded by the κ=0.3
-  table in `RUNBOOK.md`.
-- **Equivalence margin for E1.** Needs to be pre-specified. What difference in live
-  fraction would we consider a real departure from degeneracy? This is now the
-  binding constraint on the whole experiment, not a formality: at 13 seeds the
-  across-seed SDs are ~1e-3, so essentially any non-zero difference clears 5 sigma,
-  and E1's verdict has already flipped once on a difference of 0.036 in live
-  fraction. More power cannot supply it, and the numbers are now known, so it can
-  no longer be chosen innocently.
-- **A stopping rule for matching asymmetries (new, 2026-09-03).** Three differences
-  between `e1_penalty` and the vSAE arm have been found after the pilot and run as
-  factors: `decoder_init_scale`, `use_april_update_mode`, `project_decoder_grad`.
-  Matching the third **closed 79% of the reconstruction gap and opened a liveness
-  gap that had been closed** (RESULTS addendum 2), and a fourth candidate is already
-  identified (the two trainers' definitions of "fired" for dead-feature tracking).
-  Each factor is measured rather than silently patched, which is what keeps this
-  honest — but "keep matching until the arms agree" is a garden of forking paths
-  with a pre-registered metric attached, and the decision of which implementation
-  E1's claim is *about* has to be made explicitly rather than by exhaustion:
+**Do not run two GPU jobs concurrently.** Two analysers OOM on the 10GB card
+(each needs ~3.5–3.9 GB with `n_ctxs=3000`). Analysis is serial by necessity. The
+analyser *raises* on OOM so no bad summary is written — but a **training** OOM in
+`loss_recovered()` is swallowed by an `except ... continue` and written as
+`frac_recovered: 0.0` with NaN CE metrics. That failure is silent.
 
-  * the degeneracy is an identity between **objectives** (`0.5*||mu||^2`, verified
-    to six decimals), and says nothing about optimisers, in which case the
-    projection is a nuisance factor and the unprojected arm is a legitimate vSAE;
-  * or the claim is about the **released implementations**, in which case every
-    asymmetry between them is in scope and none of them should be matched at all.
+**Shrinking `n_ctxs` to enable parallelism would break comparability** — it changes
+which tokens each checkpoint sees, and the existing runs were all measured at 3000.
 
-  Those two readings license different arms and currently give different verdicts.
-  Picking one is a human decision, and it should be recorded before the next factor
-  is run.
+**`run_analysis.sh` skips on mtime, not existence.** Retraining an arm leaves the old
+generation's summary next to the new `ae.pt`; the mtime check catches that. If you add
+a step that rewrites checkpoints, make sure `ae.pt` gets a newer mtime than its
+summary or the stale numbers will silently persist.
+
+**Flags that leave no trace in the weights need `config.json`.** `relu_mu` and
+`decoder_init_scale` change behaviour but not parameter shapes, so they cannot be
+recovered from a state dict. Both are written into the trainer's `config` property and
+read back in `utils.load_dictionary`. Any new factor of this kind needs the same.
+
+**`falsification/tests/` was never in git until 2026-09-03.** The stock `tests/`
+rule in `.gitignore` — where it means a coverage artefact directory — matched it,
+so the suite CLAUDE.md calls "must stay green" existed on one machine only. It is
+re-included now (`!falsification/tests/`, with `__pycache__` put back after it,
+since the last matching pattern wins). If you add a directory under `falsification/`
+that the stock ignore list happens to name, check `git status` actually sees it.
+
+**Timings, measured.** Training ≈ 1 min/run. Analysis ≈ 1.1 min/checkpoint at 1M
+samples (was 6 min before `update_histograms` was vectorised — 59 of 60 output arrays
+verified bit-identical after that change). A full 13-seed arm is ≈ 13 min train +
+≈ 15 min analyse.
+
+
+---
+
+## Where the detail lives
+
+| file | what it holds |
+|---|---|
+| **this file** | current state, what is established, next steps, the pre-registration, open decisions |
+| `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
+| `falsification/RESULTS_2026-09-03.md` | all measured results; addendum 1 is the 13-seed/5σ rerun, addendum 2 the gradient projection |
+| `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
+| `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
+| `RUNBOOK.md` | commands, arm table, E4 design |
+## Verify the environment is sane
+
+```bash
+python falsification/preflight.py                 # says which environment you are in
+python -m pytest falsification/tests/ -q          # 112 passing; must stay green
+python falsification/run_arm.py --check           # validates every arm without torch
+python falsification/report_summaries.py --table  # cross-arm liveness
+python falsification/compare_arms.py e1_penalty e1_vsae_ref_gradproj   # any two arms
+```
+
+`preflight.py` now imports each training module through
+`run_arm.load_training_module()` as well as reading its source as text, which closes
+FINDINGS item 5 — it used to pass on a machine that could not train, because every
+wiring check read source as text and missing packages slipped through. The text
+checks stay: they are what makes preflight useful in an environment without torch.
