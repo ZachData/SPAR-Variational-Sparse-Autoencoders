@@ -20,6 +20,7 @@ Branch `claude/falsification-framework`, GPU idle.
 |---|---|
 | Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed** |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
+| Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms |
 | Data | 10 arms, 130 checkpoints, 13 seeds/arm, 0 failures, all analysed at 1e6 samples |
 | Newest result | With all 15 enumerated differences matched, the vSAE is **indistinguishable from TopK+L2 on every metric** |
 | Blocking | Nothing is blocked on compute. Decision (b) sets how strongly to state E1's null |
@@ -49,8 +50,9 @@ garden of forking paths, and the prediction recorded for it (that the init draw
 would be null) was **wrong** — it is worth d = −4.7 on FVE on its own. E1 stops
 here because the list is empty, not because the arms finally agreed.
 
-The remaining free measurement is the liveness/reconstruction frontier
-("Claims worth opening", 2).
+The liveness/reconstruction frontier ("Claims worth opening" 2) has been read too
+— see there and RESULTS addendum 6. The free measurements are now done; what is
+left needs either the GPU (next steps #3) or desk work (#4, #5).
 ## What is established
 
 ### E1 — confirmed, once every enumerated implementation difference is matched
@@ -341,10 +343,7 @@ Step 1 before step 2 is what makes the remaining arm confirmatory rather than
 exploratory. It is done; do not add factors to the list without a code diff that
 justifies them.
 
-### 3. The remaining free measurement, and the experiment the sigma reading implies
-
-The liveness/reconstruction frontier ("Claims worth opening" 2) is still unread and
-still needs no GPU.
+### 3. The experiment the sigma reading implies
 
 The sigma reading also promoted a new arm to cheap-and-decisive: **initialise
 `log_var` below the clamp floor, or anneal sigma over the first steps, and retrain
@@ -399,22 +398,35 @@ addendum 3. Mean raw `log_var` is −66.9 against a clamp floor of −6, with 10
 41M values at or below the floor. What it opened instead is the annealing arm under
 Next steps #3, and a correction to the method proposed for claim 3 below.
 
-### 2. Is there one liveness–reconstruction frontier? — free, 117 checkpoints
+### 2. ~~Is there one liveness–reconstruction frontier?~~ — ANSWERED 2026-09-04
 
-Every arm now has (FVE, dead-fraction) at 13 seeds. Plot them together.
+**Both answers, in different regimes.** `falsification/frontier.py`, figure at
+`workshop/figs/frontier.pdf`, full detail in RESULTS addendum 6. Exploratory, not
+pre-registered.
 
-* If they lie on **one tight curve**, then "the vSAE has more dead features" and
-  "the vSAE reconstructs worse" are not two findings — they are one, and reporting
-  both as independent evidence is double-counting. That is precisely Failure 2 of
-  the thesis (metrics co-varying with a nuisance), demonstrated on our own battery
-  rather than argued in the abstract.
-* If specific arms sit **off** the curve, those arms are doing something the others
-  are not, and the frontier gives a principled way to say what "better" means:
-  above the curve, not merely higher on one axis.
+* **Pooled over all 11 replicated arms the two metrics look unrelated**
+  (rho = −0.14, p = 0.69) — which is the condition under which someone would
+  report them as two independent pieces of evidence.
+* **That zero is two opposite-signed relationships cancelling.** Scanning every
+  possible cut rather than choosing one: below the cut rho < 0 at *every* cut,
+  above it rho > 0 at *every* cut, at both thresholds.
+* **Among the 8 working models the frontier is real and slopes UP**: rho = +0.86
+  (p = 0.007) and +0.69 (p = 0.058). Better reconstruction buys **more** near-dead
+  features. 25 of 28 pairs trade.
 
-Either answer strengthens the paper, the data is already on disk, and it produces a
-figure. Note the E1 arms are the interesting case: `gradproj` bought reconstruction
-and paid in liveness, which is exactly what movement *along* a frontier looks like.
+The consequence is sharper than the double-counting worry that motivated it. Since
+the frontier slopes up, *"architecture A reconstructs better AND has fewer dead
+features"* is not a doubly-supported claim — it asserts A is **off** the frontier,
+which is rarer and stronger than either half, and it is the shape of claim the
+preprint made.
+
+Two things the run corrected. The speculation recorded here — that `gradproj`
+"bought reconstruction and paid in liveness, which is what movement along a
+frontier looks like" — is **wrong**: `fullmatch` bought both, and `gradproj` is
+the only working arm that is dominated outright (by three others). And within the
+E1 family, which shares an objective exactly, the arms scatter instead of tracing
+a curve (rho = +0.40 / −0.30, thresholds disagreeing in sign). **Implementation
+details knock an arm off the frontier rather than sliding it along.**
 
 ### 3. "The reparameterisation trick is incompatible with discrete top-k selection,
 not with sparse autoencoders" — the best new science here

@@ -138,6 +138,9 @@ python falsification/run_arm.py --arm baseline --seed 1
 python falsification/read_learned_sigma.py     # E2's learned posterior sigma
 python falsification/read_penalty_clamp.py     # E1's +/-10 penalty clamp: does it ever bind?
 
+# The liveness/reconstruction frontier across every analysed arm (+ figure)
+python falsification/frontier.py
+
 # Cross-arm tables and the E1 comparison across its confound generations
 python falsification/report_summaries.py --table
 python falsification/compare_e1.py --ref current|aprilmode|klwarmup
