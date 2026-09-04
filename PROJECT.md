@@ -830,6 +830,27 @@ analyser *raises* on OOM so no bad summary is written — but a **training** OOM
 `loss_recovered()` is swallowed by an `except ... continue` and written as
 `frac_recovered: 0.0` with NaN CE metrics. That failure is silent.
 
+**Calling `analysis_scripts/online_histogram_analyzer.py` directly (bypassing
+`run_analysis.sh`) needs `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set
+by hand.** `run_analysis.sh` exports it (line 16); a bare invocation (e.g. to
+re-analyse one straggler seed after a batch run gets killed) does not inherit it
+and OOMs on allocator fragmentation even with ~9GB nominally free — it needs the
+contiguous block `torch.addmm` wants for the unembed. Confirmed 2026-09-04:
+`read_learned_sigma.py` and other one-off checkpoint-reading scripts likely have
+the same exposure; export it before running any of them standalone.
+
+**A long-running unattended shell command (`run_in_background: true`) can be
+killed by *unrelated* memory pressure on the host, not by anything this repo's
+jobs did.** Twice this session a multi-seed loop was killed mid-run with "system
+is running low on memory" while a completely different project's process
+(`relay_null`, ~8.5GB RSS, 99% CPU, from another Claude Code session on this
+machine) was the actual cause. `ps aux --sort=-%mem` before assuming a killed job
+means *this* repo's config is too heavy — the GPU card itself was never the
+constraint (idle at ~1.3GB used throughout). After a kill, check which seeds
+actually finished (`RUN_COMPLETE.json` / `comprehensive_summary_*.json` on disk)
+before re-running — both `run_arm.py` and `run_analysis.sh`'s per-seed loop are
+naturally resumable from wherever they stopped.
+
 **Shrinking `n_ctxs` to enable parallelism would break comparability** — it changes
 which tokens each checkpoint sees, and the existing runs were all measured at 3000.
 
