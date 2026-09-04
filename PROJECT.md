@@ -10,22 +10,25 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-04. Two things closed this session: the E1 code diff was
-enumerated, frozen, and closed by its last arm (**E1 has landed**), and the
-liveness/reconstruction frontier was read (it reverses sign between regimes — see
-"Claims worth opening" #2). Both free measurements are now exhausted; what's left
-needs either ~30 min of GPU or desk work — see **Next steps**.
-Branch `claude/falsification-framework`, GPU idle.
+Last updated: 2026-09-04 (second session). The sigma-annealing arm from Next steps
+#1 has landed: `log_var_init` is now a factor, `e2_sigma_low_init` ran 13 seeds,
+and it closes **84% of E2's FVE gap** to baseline and reaches **100% liveness**
+(RESULTS addendum 7). E2's headline needs restating — see below and "What is
+established". Earlier this session (previous entry): the E1 code diff was
+enumerated, frozen, and closed by its last arm, and the liveness/reconstruction
+frontier was read. What's left is E4 (no GPU needed) or desk work — see
+**Next steps**.
+Branch `claude/falsification-framework`, GPU idle. 11 arms, 143 checkpoints on disk.
 
 ## Status
 
 | | |
 |---|---|
-| Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed** |
+| Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism now has a cause |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms |
-| Data | 10 arms, 130 checkpoints, 13 seeds/arm, 0 failures, all analysed at 1e6 samples |
-| Newest result | With all 15 enumerated differences matched, the vSAE is **indistinguishable from TopK+L2 on every metric** |
+| Data | 11 arms, 143 checkpoints, 13 seeds/arm, 0 failures, all analysed at 1e6 samples |
+| Newest result | **84% of E2's reconstruction damage is the initial noise scale, not the reparameterisation itself** — `e2_sigma_low_init`, RESULTS addendum 7 |
 | Blocking | Nothing is blocked on compute. Decision (b) sets how strongly to state E1's null |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
@@ -54,8 +57,23 @@ would be null) was **wrong** — it is worth d = −4.7 on FVE on its own. E1 st
 here because the list is empty, not because the arms finally agreed.
 
 The liveness/reconstruction frontier ("Claims worth opening" 2) has been read too
-— see there and RESULTS addendum 6. The free measurements are now done; what is
-left needs either the GPU (next steps #1) or desk work (#2, #3).
+— see there and RESULTS addendum 6.
+
+**The sigma-annealing arm has landed (RESULTS addendum 7).** `log_var_init` is now
+a factor on `VSAETopKConfig`/`ExperimentConfig`; `e2_sigma_low_init` sets it to
+−8.0 (below the `[-6, 2]` reparameterise clamp, so sigma is pinned at
+`exp(-3) = 0.0498` from step 0 rather than declining there over training) with
+`kl_coeff=0.0`, `var_flag=1` — otherwise identical to `e2_sampling_only`. 13 seeds:
+FVE rises 0.484 → **0.834** (baseline 0.900, so **84.1%** of the gap closes) and
+`frac_alive` reaches **1.0000** — better than baseline's own 0.9934. A real 5-sigma
+residual against baseline remains (FVE d = +103), so the reparameterisation is not
+entirely free, but the dominant story — "94.7% of the damage is the
+reparameterisation" — turns out to be substantially an **initialisation artifact**,
+not an architectural incompatibility between sampling and discrete TopK selection.
+`read_learned_sigma.py` confirms the mechanism: 100% of measured values sit at the
+clamp floor from the first checkpoint onward, i.e. this arm is
+deterministic-equivalent throughout, and that alone is what recovers most of the
+gap. What's left needs either E4 (no GPU, next steps #1) or desk work (#2).
 
 ## What is established
 
@@ -223,12 +241,27 @@ already learned to switch the noise off as hard as it can and is still at FVE 0.
 against baseline's 0.90. Training under sampling lands the optimiser somewhere
 worse and it does not recover once the posterior collapses.
 
-E2's "94.7% is the reparameterisation" stands and now has a mechanism. Sigma starts
-at exp(−1) = 0.368 (`log_var_init = −2.0`) when mu is still small, so the
+E2's "94.7% is the reparameterisation" stood with a mechanism attached: sigma
+starts at exp(−1) = 0.368 (`log_var_init = −2.0`) when mu is still small, so the
 noise-to-signal ratio is worst exactly when the TopK selection is being
-established. **Untested prediction:** initialising `log_var` below the clamp floor,
-or annealing sigma over the first steps, should recover most of the gap if a bad
-initial noise scale is the whole story.
+established, and the prediction was that initialising `log_var` below the clamp
+floor should recover most of the gap if a bad initial noise scale is the whole
+story.
+
+**Tested 2026-09-04, and the prediction was right.** `e2_sigma_low_init`
+(`log_var_init=-8.0`, otherwise identical to `e2_sampling_only`), 13 seeds
+(RESULTS addendum 7): FVE 0.484 → **0.834** against baseline's 0.900 — **84.1%** of
+the gap closes — and `frac_alive` reaches **1.0000**, exceeding baseline's 0.9934.
+A real 5-sigma residual against baseline remains (d = +103 on FVE), so the
+reparameterisation is not entirely free of cost, but **the dominant share of E2's
+headline number was an initialisation artifact, not an architectural
+incompatibility**. `read_learned_sigma.py` on the new arm shows 100% of values at
+the clamp floor from the first checkpoint — this arm is deterministic-equivalent
+throughout training, unlike `e2_sampling_only` which arrives there late — and that
+alone is what recovers 84–89% of the gap. Restate E2 as: *the reparameterisation
+costs little once the initial noise scale is matched to where the clamp will take
+it anyway; a naive default (sigma starting at 0.368 while mu is small) makes the
+KL-off control look far worse than the architecture actually is.*
 
 ### Pre-registered but never reported
 
@@ -247,32 +280,11 @@ One item in the battery's design still appears nowhere in
 
 ## Next steps, in priority order
 
-Both free-measurement items (the code-diff decomposition, the frontier) are done.
-What's left needs either ~30 min of GPU or desk work; nothing is blocked.
+The sigma-annealing arm (previously #1) landed this session — RESULTS addendum 7,
+and see "What is established" above. What's left is E4 (no GPU) or desk work;
+nothing is blocked.
 
-### 1. The sigma-annealing arm — ~30 min GPU, the highest-value thing left
-
-RESULTS addendum 3 found the learned sigma collapses completely (mean raw
-`log_var` = −66.9 against a clamp floor of −6) and that the damage is an
-optimisation-path effect, not eval-time noise. Sigma starts at `exp(-1) = 0.368`
-while `mu` is still small, so the noise-to-signal ratio is worst exactly when
-TopK selection is being established. Untested prediction from that reading:
-**initialise `log_var` below the clamp floor, or anneal sigma over the first
-steps, and retrain `e2_sampling_only`.**
-
-* If FVE recovers toward baseline's 0.90, the reparameterisation is not
-  intrinsically incompatible with TopK selection and E2's headline ("94.7% is the
-  reparameterisation") needs restating as an initialisation artifact.
-* If it stays near 0.48, the incompatibility is real and E2 gets substantially
-  stronger — worth pairing with Claims-worth-opening #3 below, which tests the
-  same mechanism a different way (instrumenting Jaccard overlap during early
-  training instead of changing the init).
-
-No arm exists for this yet; add `log_var_init` (or an annealing schedule) as a
-factor on `VSAETopKConfig` the way `decoder_init_dist` was added for E1, run it,
-and compare against `e2_sampling_only`.
-
-### 2. E4 — the size-matched SCR/TPP control, no training required
+### 1. E4 — the size-matched SCR/TPP control, no training required
 
 Design under **Experiments** below and in `RUNBOOK.md` section 1. The missing
 piece is the `scorer(keep_indices)` function that masks the dictionary and calls
@@ -280,13 +292,24 @@ SAEBench; everything else (usage counts from the baseline summaries) is on disk,
 and the machinery around it is implemented and tested against synthetic scorers
 with known ground truth.
 
+### 2. The residual E2 gap — instrument Jaccard overlap during early training
+
+`e2_sigma_low_init` closed 84% of the FVE gap and reached 100% liveness, but left
+a real 5-sigma residual against baseline (d = +103 on FVE). That residual is now
+the interesting quantity: Claims-worth-opening #3's hypothesis (selection
+instability under noisy scores, not variational inference per se) predicts it
+should show up as index churn early in training even with the low-sigma init,
+just less of it than under the default init. Instrumenting Jaccard overlap of
+selected indices **during** a training run (not on converged checkpoints, which
+addendum 3 already showed reads as falsely stable) is the direct test and the
+best new science left on the list — see Claims-worth-opening #3 for the two ways
+to run it.
+
 ### 3. Desk work — no GPU, no new code
 
 Both items under **Claims worth opening** (#4, the field-level projection claim;
 #5, the seed-count survey) are pure analysis/writing and can be done from a
-remote/no-GPU session. #3 (the reparameterisation-vs-discreteness mechanism) is
-the best new science on the list but needs a training run instrumented for
-Jaccard overlap during early training — not yet built.
+remote/no-GPU session.
 
 ### 4. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
 
@@ -380,8 +403,11 @@ details knock an arm off the frontier rather than sliding it along.**
 ### 3. "The reparameterisation trick is incompatible with discrete top-k selection,
 not with sparse autoencoders" — the best new science here
 
-E2 established **that** 94.7% of the damage is the sampling rather than the KL. It
-did not establish **why**, and the obvious mechanism is testable and sharp.
+E2 established **that** 94.7% of the damage is the sampling rather than the KL,
+and RESULTS addendum 7 has since shown 84% of *that* is an initialisation
+artifact rather than the sampling itself. What remains — a real, 5-sigma residual
+between `e2_sigma_low_init` and `baseline` — is smaller than the original number
+but still needs a mechanism, and the obvious one is testable and sharp.
 
 **Hypothesis.** TopK selection is a discrete argmax over noisy scores. Sampling
 `z = mu + sigma*eps` before selection means the selected index set changes between
@@ -407,7 +433,11 @@ zero-padding.
   sigma, sampling on versus off moves FVE by 0.000012, so the converged forward
   pass is stable and the test would read as "no instability" and be misinterpreted
   as falsifying the mechanism. Instrument the Jaccard overlap **during** a training
-  run instead, where sigma starts at 0.368 and mu is still small.
+  run instead, where sigma starts at 0.368 and mu is still small. Now that
+  `e2_sigma_low_init` exists, run the instrumentation on **both** it and
+  `e2_sampling_only`: the prediction is less early-training index churn under the
+  low-sigma init (which is most of why its FVE recovers), with some churn
+  remaining (which is the source of the residual 5-sigma gap against baseline).
 * **Vary the discreteness of the sparsity** (training). `vsae_jump_relu.py` has
   `var_flag` and its sparsity is a *learned threshold*, not a top-k selection;
   `vsae_batch_topk.py` selects discretely but across the batch. Run
@@ -846,7 +876,7 @@ verified bit-identical after that change). A full 13-seed arm is ≈ 13 min trai
 |---|---|
 | **this file** | current state, what is established, next steps, the pre-registration, open decisions |
 | `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
-| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier |
+| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation |
 | `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
 | `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
 | `RUNBOOK.md` | commands, arm table, E4 design |

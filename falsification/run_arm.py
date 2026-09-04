@@ -274,6 +274,33 @@ ARMS["e2_sampling_only"] = {
     "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 0.0, "var_flag": 1},
 }
 
+# E2 sigma-annealing control (PROJECT.md, Next steps #1). read_learned_sigma.py
+# found the posterior collapses completely under e2_sampling_only: mean raw
+# log_var -66.9 against reparameterize()'s clamp floor of -6.0, and the damage is
+# in the trained weights, not eval-time noise (RESULTS addendum 3). log_var_init
+# defaults to -2.0 (sigma ~= 0.368) while mu is still small early in training, so
+# the noise-to-signal ratio is worst exactly when TopK selection is being
+# established -- the untested prediction is that this, not the reparameterisation
+# per se, is what E2's FVE damage comes from.
+#
+# This arm is e2_sampling_only with log_var_init set to -8.0, i.e. AT the clamp
+# floor from step 0 (reparameterize() clamps to -6.0, so sigma starts at
+# exp(-3) = 0.0498 instead of declining there over training). Same kl_coeff=0.0 so
+# the KL still contributes nothing and this isolates the init's effect on its own:
+#   * FVE recovers toward baseline's 0.90 -> the reparameterisation is not
+#     intrinsically incompatible with TopK selection; E2's headline needs
+#     restating as an initialisation artifact.
+#   * FVE stays near e2_sampling_only's 0.48 -> the incompatibility is real and
+#     independent of where sigma starts.
+#
+# 13 seeds to match the confirmatory battery's power (PROJECT.md "The power
+# problem").
+ARMS["e2_sigma_low_init"] = {
+    "script": "train_vsae_topk.py",
+    "overrides": {**BASE, "k_fraction": 0.125, "kl_coeff": 0.0, "var_flag": 1,
+                  "log_var_init": -8.0},
+}
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.

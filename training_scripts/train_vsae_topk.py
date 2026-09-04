@@ -64,6 +64,17 @@ class ExperimentConfig:
     # constraint fights the optimiser. Default False keeps existing behaviour; run
     # as a factor via the e1_vsae_ref_gradproj arm. See VSAETopKConfig.
     project_decoder_grad: bool = False
+    # Initial value of the var_encoder bias, i.e. log(sigma^2) at step 0. Default
+    # -2.0 (sigma ~= 0.368) is what every existing var_flag=1 checkpoint used and
+    # RESULTS addendum 3 found it collapses completely during training (mean raw
+    # log_var -66.9 against the reparameterize() clamp floor of -6.0, PROJECT.md
+    # "What is established"). The untested prediction there is that the collapse is
+    # an optimisation-path effect because sigma starts largest exactly when mu is
+    # smallest, i.e. when TopK selection is being established. Setting this AT or
+    # BELOW the clamp floor makes the model deterministic-equivalent (sigma ~=
+    # exp(-3) = 0.0498 once reparameterize() clamps it) from step 0 instead of
+    # arriving there over training -- see the e2_sigma_low_init arm in run_arm.py.
+    log_var_init: float = -2.0
     threshold_beta: float = 0.999
     threshold_start_step: Optional[int] = None
     
@@ -234,6 +245,7 @@ class ExperimentRunner:
             decoder_init_scale=self.config.decoder_init_scale,
             project_decoder_grad=self.config.project_decoder_grad,
             decoder_init_dist=self.config.decoder_init_dist,
+            log_var_init=self.config.log_var_init,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )
