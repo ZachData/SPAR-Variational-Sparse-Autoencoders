@@ -14,10 +14,11 @@ Last updated: 2026-09-04 (second session). The sigma-annealing arm from Next ste
 #1 has landed: `log_var_init` is now a factor, `e2_sigma_low_init` ran 13 seeds,
 and it closes **84% of E2's FVE gap** to baseline and reaches **100% liveness**
 (RESULTS addendum 7). E2's headline needs restating — see below and "What is
-established". Earlier this session (previous entry): the E1 code diff was
-enumerated, frozen, and closed by its last arm, and the liveness/reconstruction
-frontier was read. What's left is E4 (no GPU needed) or desk work — see
-**Next steps**.
+established". E4 was checked next and found **blocked** on missing Pythia
+checkpoint weights (Next steps #0) rather than merely unstarted. Earlier this
+session (previous entry): the E1 code diff was enumerated, frozen, and closed by
+its last arm, and the liveness/reconstruction frontier was read. What's left is
+the Jaccard-overlap instrumentation (#1) or desk work (#2) — see **Next steps**.
 Branch `claude/falsification-framework`, GPU idle. 11 arms, 143 checkpoints on disk.
 
 ## Status
@@ -73,7 +74,9 @@ not an architectural incompatibility between sampling and discrete TopK selectio
 `read_learned_sigma.py` confirms the mechanism: 100% of measured values sit at the
 clamp floor from the first checkpoint onward, i.e. this arm is
 deterministic-equivalent throughout, and that alone is what recovers most of the
-gap. What's left needs either E4 (no GPU, next steps #1) or desk work (#2).
+gap. **E4 was checked next and turned out to be blocked** on missing Pythia
+checkpoint weights, not merely unstarted — see Next steps #0. What's left is the
+Jaccard-overlap instrumentation (#1) or desk work (#2).
 
 ## What is established
 
@@ -281,18 +284,48 @@ One item in the battery's design still appears nowhere in
 ## Next steps, in priority order
 
 The sigma-annealing arm (previously #1) landed this session — RESULTS addendum 7,
-and see "What is established" above. What's left is E4 (no GPU) or desk work;
-nothing is blocked.
+and see "What is established" above. E4 (previously #2 here) turned out to be
+**blocked**, not merely unstarted — see immediately below. What's left is the
+Jaccard-overlap instrumentation or desk work.
 
-### 1. E4 — the size-matched SCR/TPP control, no training required
+### 0. E4 is blocked on missing weights, not on the scorer function
 
-Design under **Experiments** below and in `RUNBOOK.md` section 1. The missing
-piece is the `scorer(keep_indices)` function that masks the dictionary and calls
-SAEBench; everything else (usage counts from the baseline summaries) is on disk,
-and the machinery around it is implemented and tested against synthetic scorers
-with known ground truth.
+Checked 2026-09-04 (second session). `falsification/size_control.py` is fully
+implemented and tested; the missing piece was believed to be only the
+`scorer(keep_indices)` closure. It is not reachable yet: **the original
+preprint's Pythia checkpoints (`TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`,
+the baseline with the actual 7379/8192 vs. 1474/8192 size confound E4 exists to
+control for) have no `ae.pt` anywhere on this machine.**
+`comprehensive_histogram_analysis/` holds only their derived analysis outputs
+(summary JSONs, histograms, `.npz` files) — the trained weights themselves were
+apparently never saved to this checkpoint of the repo, on this machine, or in git
+(`archive/` is gitignored and empty of them too). `size_response_curve` needs the
+actual dictionary to mask and re-score at each grid point, so no scorer can be
+written against them.
 
-### 2. The residual E2 gap — instrument Jaccard overlap during early training
+**This is not the same gap as "E4 within the falsification battery."** The
+gelu-1l arms trained for E0–E3 (`baseline`, `e1_penalty`, `e2_confirm`, etc.) all
+share `dict_size=2048` and none show the preprint's size disparity — even
+`e2_sampling_only` is 98%+ alive and `e2_sigma_low_init` is 100% alive (RESULTS
+addendum 7) — so running `size_control.py` against them would not be testing the
+thing E4 was designed to test; there is no size confound in this battery to
+control for.
+
+**Two ways forward, both real experiments, neither a quick pickup:**
+* Retrain the Pythia baseline + vSAE at the preprint's original scale
+  (d=8192, layer 3, matching `auxk0.03125` on both arms this time to also close
+  the AuxK confound CLAUDE.md flags) — a new pre-registration decision (beta,
+  seed count, whether to fix AuxK or preserve the original confound for a direct
+  preprint comparison), and substantially more GPU time than anything else in
+  this battery (4x the dictionary size, a bigger LM).
+* Or locate the original checkpoints if they exist somewhere off this machine
+  (a prior session's disk, cloud storage) and copy them in — cheapest if
+  available, unverified whether they exist anywhere at all.
+
+Until one of those happens, E4 stays on the list but is not actionable in a
+normal continuation session.
+
+### 1. The residual E2 gap — instrument Jaccard overlap during early training
 
 `e2_sigma_low_init` closed 84% of the FVE gap and reached 100% liveness, but left
 a real 5-sigma residual against baseline (d = +103 on FVE). That residual is now
@@ -305,13 +338,13 @@ addendum 3 already showed reads as falsely stable) is the direct test and the
 best new science left on the list — see Claims-worth-opening #3 for the two ways
 to run it.
 
-### 3. Desk work — no GPU, no new code
+### 2. Desk work — no GPU, no new code
 
 Both items under **Claims worth opening** (#4, the field-level projection claim;
 #5, the seed-count survey) are pure analysis/writing and can be done from a
 remote/no-GPU session.
 
-### 4. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
+### 3. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
 
 The beta=0 control (`e2_sampling_only`) makes this much less interesting: if
 94.7% of the damage is the sampling, no smaller beta recovers a healthy model.
