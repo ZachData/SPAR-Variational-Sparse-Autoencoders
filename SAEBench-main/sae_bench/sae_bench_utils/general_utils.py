@@ -8,7 +8,6 @@ from typing import Any, Callable
 import pandas as pd
 import torch
 from sae_lens import SAE
-from sae_lens.toolkit.pretrained_saes_directory import get_pretrained_saes_directory
 
 
 def str_to_dtype(dtype_str: str) -> torch.dtype:
@@ -163,6 +162,8 @@ def find_gemmascope_average_l0_sae_names(
     gemmascope_release_name: str = "gemma-scope-2b-pt-res",
     width_num: str = "16k",
 ) -> list[str]:
+    from sae_lens.loading.pretrained_saes_directory import get_pretrained_saes_directory
+
     df = pd.DataFrame.from_records(
         {k: v.__dict__ for k, v in get_pretrained_saes_directory().items()}
     ).T

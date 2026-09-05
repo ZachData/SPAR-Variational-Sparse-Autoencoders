@@ -202,3 +202,4 @@ workshop/*.bbl
 workshop/*.blg
 archive/
 sweep.out
+falsification/e4_scr_artifacts/
