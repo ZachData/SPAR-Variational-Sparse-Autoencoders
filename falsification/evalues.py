@@ -215,9 +215,11 @@ def min_attainable_p(n_per_group: int, two_sided: bool = False) -> float:
     if n_per_group < 1:
         raise ValueError("n_per_group must be >= 1")
     n_assignments = comb(2 * n_per_group, n_per_group)
-    # One-sided tests may exploit complementary assignments; two-sided may not.
-    distinct = n_assignments if two_sided else n_assignments // 2
-    return 1.0 / max(distinct, 1)
+    # A two-sided test cannot go below 2/N: an assignment and its complement always
+    # tie on |statistic|, so the count is never 1. A one-sided test can reach 1/N,
+    # where only the observed assignment matches or exceeds itself. This was
+    # previously inverted, making every one-sided floor 2x too pessimistic.
+    return (2.0 if two_sided else 1.0) / n_assignments
 
 
 def seeds_required(alpha: float = 0.1, kappa: float = 0.5, n_tests: int = 1) -> int:

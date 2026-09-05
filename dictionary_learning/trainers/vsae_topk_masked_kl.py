@@ -19,6 +19,14 @@ class VSAETopKConfig:
     k: int
     var_flag: int = 0
     use_april_update_mode: bool = True
+    # Whether to apply relu to mu after the encoder. trainers/vsae_topk.py applies
+    # it unconditionally; this trainer never did, so any E3 comparison between them
+    # confounded the KL mask with the ReLU (CLAUDE.md landmine 2). The preprint's
+    # equations show no ReLU, the released vsae_topk.py code has one, and the two
+    # are different experiments -- so it is a flag and both are run as arms rather
+    # than one being silently declared correct. Default False preserves every
+    # existing masked-KL checkpoint's behaviour.
+    relu_mu: bool = False
     log_var_init: float = -2.0
     dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
@@ -43,6 +51,7 @@ class VSAETopK(nn.Module):
         self.k = nn.Parameter(torch.tensor(config.k), requires_grad=False)
         self.var_flag = config.var_flag
         self.use_april_update_mode = config.use_april_update_mode
+        self.relu_mu = config.relu_mu
         
         device = config.get_device()
         dtype = config.dtype
@@ -66,16 +75,26 @@ class VSAETopK(nn.Module):
         self._initialize_weights()
 
     def scale_biases(self, scale: float) -> None:
-        """Scale biases by a factor (for activation normalization)."""
+        """Scale the activation-space biases by a factor (for activation
+        normalization). var_encoder.bias is left unscaled and var_encoder.weight
+        is divided by `scale` instead -- see the long comment on
+        VSAETopK.scale_biases in vsae_topk.py and RESULTS addendum 8. Multiplying
+        the bias (the old behaviour) corrupts the learned-sigma reading of any
+        saved var_flag=1 checkpoint; rescaling the weight instead preserves
+        log_var's true trained value when the checkpoint is read on raw
+        activations, the same as every other quantity here. Dormant for every arm
+        actually trained with this trainer so far (E3 runs at var_flag=0), fixed
+        for consistency and so the bug is not there waiting.
+        """
         with torch.no_grad():
             self.encoder.bias.mul_(scale)
             if self.use_april_update_mode:
                 self.decoder.bias.mul_(scale)
             else:
                 self.bias.mul_(scale)
-                
+
             if self.var_flag == 1:
-                self.var_encoder.bias.mul_(scale)
+                self.var_encoder.weight.div_(scale)
     
     def _initialize_weights(self):
         device = self.config.get_device()
@@ -122,6 +141,10 @@ class VSAETopK(nn.Module):
         
         # Encode to latent distribution parameters
         mu = self.encoder(x_processed)
+        if self.relu_mu:
+            # Matches trainers/vsae_topk.py:253. Off by default; see relu_mu on
+            # VSAETopKConfig for why this is a flag rather than a fixed choice.
+            mu = torch.relu(mu)
         
         log_var = None
         if self.var_flag == 1:
@@ -172,6 +195,82 @@ class VSAETopK(nn.Module):
             return x_hat, sparse_features
         return x_hat
     
+    @classmethod
+    def from_pretrained(
+        cls,
+        path: str,
+        config: Optional['VSAETopKConfig'] = None,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] = None,
+        normalize_decoder: bool = False,
+        var_flag: Optional[int] = None,
+        relu_mu: bool = False,
+    ) -> 'VSAETopK':
+        """Load a checkpoint saved by this trainer.
+
+        This class had no loader, so `utils.load_dictionary`'s "VSAETopKMasked"
+        branch -- which calls exactly this method -- raised AttributeError and no
+        masked-KL checkpoint could be read back
+        (falsification/FINDINGS_2026-09-02.md, item 9).
+
+        Deliberately NOT a copy of `vsae_topk.VSAETopK.from_pretrained`: that one
+        defaults `normalize_decoder=True`, which rescales the decoder on load. For
+        analysing a trained checkpoint we want exactly the weights that were saved,
+        so the default here is False. Pass True only if you specifically want the
+        rescaling.
+
+        Shapes and flags are read from the state dict rather than trusted from
+        config.json, because that file was itself missing fields for this trainer.
+        """
+        checkpoint = torch.load(path, map_location=device or "cpu", weights_only=False)
+        state_dict = (
+            checkpoint if isinstance(checkpoint, dict)
+            else checkpoint.get("state_dict", checkpoint)
+        )
+        if "encoder.weight" not in state_dict:
+            raise ValueError(
+                f"{path} has no 'encoder.weight'; keys are {sorted(state_dict)}"
+            )
+
+        if config is None:
+            dict_size, activation_dim = state_dict["encoder.weight"].shape
+            # april-update mode keeps the pre-bias on the decoder; standard mode
+            # keeps a separate `bias` parameter. Detect rather than assume.
+            use_april_update_mode = "decoder.bias" in state_dict
+            if var_flag is None:
+                var_flag = 1 if "var_encoder.weight" in state_dict else 0
+            if "k" in state_dict:
+                k = int(state_dict["k"].item())
+            else:
+                raise ValueError(f"{path} has no 'k' entry; cannot infer sparsity")
+            config = VSAETopKConfig(
+                activation_dim=int(activation_dim),
+                dict_size=int(dict_size),
+                k=k,
+                var_flag=var_flag,
+                use_april_update_mode=use_april_update_mode,
+                # NOT detectable from the state dict -- relu_mu changes no
+                # parameter shape, only the forward pass. Callers that care must
+                # pass it; load_dictionary() reads it from config.json.
+                relu_mu=relu_mu,
+                dtype=dtype or state_dict["encoder.weight"].dtype,
+                device=device,
+            )
+
+        model = cls(config)
+        model.load_state_dict(state_dict)
+
+        if normalize_decoder:
+            with torch.no_grad():
+                norms = model.decoder.weight.norm(dim=0, keepdim=True)
+                model.decoder.weight.div_(norms.clamp(min=1e-8))
+
+        if dtype is not None:
+            model = model.to(dtype=dtype)
+        if device is not None:
+            model = model.to(device)
+        return model
+
     def get_kl_diagnostics(self, x: torch.Tensor) -> Dict[str, float]:
         """Get detailed KL divergence diagnostics."""
         with torch.no_grad():
@@ -321,6 +420,7 @@ class VSAETopKTrainer:
         k: Optional[int] = None,
         var_flag: Optional[int] = None,
         use_april_update_mode: Optional[bool] = None,
+        relu_mu: Optional[bool] = None,
         device: Optional[str] = None,
         steps: Optional[int] = None,
         lr: Optional[float] = None,
@@ -342,6 +442,7 @@ class VSAETopKTrainer:
                 k=k,
                 var_flag=var_flag or 0,
                 use_april_update_mode=use_april_update_mode if use_april_update_mode is not None else True,
+                relu_mu=relu_mu if relu_mu is not None else False,
                 device=device_obj
             )
         
@@ -413,11 +514,27 @@ class VSAETopKTrainer:
     def config(self):
         """Return config dict for wandb logging."""
         return {
+            # dict_class is what load_dictionary() dispatches on. Without it every
+            # checkpoint from this trainer is unloadable (KeyError: 'dict_class').
+            # It MUST be VSAETopKMasked, not VSAETopK: the latter resolves to
+            # trainers/vsae_topk.py, which applies F.relu(mu) that this trainer
+            # omits -- so the wrong value silently loads the wrong architecture.
+            'dict_class': 'VSAETopKMasked',
+            'trainer_class': 'VSAETopKTrainer',
+            # The analyzer reads these to rebuild the activation buffer, and
+            # defaults submodule_name to blocks.0.mlp.hook_post when it is absent --
+            # a different hook than these runs use, silently analysed as if correct.
+            'layer': self.layer,
+            'lm_name': self.lm_name,
+            'submodule_name': self.submodule_name,
             'activation_dim': self.model_config.activation_dim,
             'dict_size': self.model_config.dict_size,
             'k': self.model_config.k,
             'var_flag': self.model_config.var_flag,
             'use_april_update_mode': self.model_config.use_april_update_mode,
+            # Load-bearing: relu_mu is invisible in the state dict, so config.json
+            # is the only record of which E3 arm a checkpoint belongs to.
+            'relu_mu': self.model_config.relu_mu,
             'steps': self.training_config.steps,
             'lr': self.training_config.lr,
             'kl_coeff': self.training_config.kl_coeff,

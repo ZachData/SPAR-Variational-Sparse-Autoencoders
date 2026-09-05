@@ -344,19 +344,30 @@ class VSAEJumpReLU(Dictionary, nn.Module):
                 }
     
     def scale_biases(self, scale: float) -> None:
-        """Scale all bias parameters by a given factor."""
+        """Scale the activation-space biases by a given factor. b_enc_var is left
+        unscaled and W_enc_var is divided by `scale` instead -- see the long
+        comment on VSAETopK.scale_biases in vsae_topk.py and RESULTS addendum 8.
+        b_enc_var parameterises log(sigma^2), not a quantity on the same additive
+        axis as x/mu, so multiplying it by norm_factor (the old behaviour) is not
+        the correct transformation and corrupts the learned-sigma reading of any
+        saved var_flag=1 checkpoint; rescaling the weight instead preserves
+        log_var's true trained value when read on raw activations. No arm has
+        trained this architecture with var_flag=1 yet, so nothing on disk is
+        affected, but this mirrors the fix in vsae_topk.py so the bug is not
+        there waiting.
+        """
         with torch.no_grad():
             self.b_enc.mul_(scale)
             self.threshold.mul_(scale)
-            
+
             if self.use_april_update_mode:
                 self.b_dec.mul_(scale)
             else:
                 self.bias.mul_(scale)
-            
+
             if self.var_flag == 1:
-                self.b_enc_var.mul_(scale)
-    
+                self.W_enc_var.div_(scale)
+
     def normalize_decoder(self) -> None:
         """
         Normalize decoder weights to have unit norm.

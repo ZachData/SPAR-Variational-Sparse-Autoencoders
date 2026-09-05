@@ -356,12 +356,18 @@ def load_dictionary(base_path: str, device: str) -> tuple:
         use_april_update_mode = trainer_config.get("use_april_update_mode", True)
         log_var_init = trainer_config.get("log_var_init", -2.0)
         
+        # relu_mu changes no parameter shape, so it cannot be inferred from the
+        # weights -- config.json is the only record of which E3 arm this is.
+        # Default False matches every checkpoint written before the flag existed.
+        relu_mu = trainer_config.get("relu_mu", False)
+
         vsae_config = VSAETopKConfig(
             activation_dim=activation_dim,
             dict_size=dict_size,
             k=k,
             var_flag=var_flag,
             use_april_update_mode=use_april_update_mode,
+            relu_mu=relu_mu,
             log_var_init=log_var_init,
             device=device
         )

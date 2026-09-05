@@ -57,16 +57,37 @@ def main() -> int:
         check(f"falsification.{module} importable", spec is not None)
 
     print("\nDegeneracy control (E1) wiring")
-    top_k = (REPO / "dictionary_learning/trainers/top_k.py").read_text()
+    # NOTE: train_topk.py imports top_k_with_feature_penalty, NOT top_k. Checking
+    # the wrong file here previously reported green while the arm was unrunnable.
+    trainer = (
+        REPO / "dictionary_learning/trainers/top_k_with_feature_penalty.py"
+    ).read_text()
+    script = (REPO / "training_scripts/train_topk.py").read_text()
     check(
-        "TopK trainer exposes activation_penalty",
-        "activation_penalty: float = 0.0" in top_k,
+        "penalty trainer exposes activation_penalty",
+        "activation_penalty: float = 0.0" in trainer,
         "E1 has no control arm without it",
     )
     check(
+        "penalty is configurable, not hardcoded",
+        "0.01 * post_relu_acts_BF.pow(2)" not in trainer,
+        "a hardcoded penalty makes a clean baseline impossible",
+    )
+    check(
         "penalty applies to pre-TopK activations",
-        "activation_penalty > 0" in top_k and "post_relu_acts_BF.pow(2)" in top_k,
+        "self.training_config.activation_penalty" in trainer
+        and "post_relu_acts_BF.pow(2)" in trainer,
         "must penalise unselected features to mirror the vSAE KL",
+    )
+    check(
+        "train_topk.py passes activation_penalty through",
+        "activation_penalty=self.config.activation_penalty" in script,
+        "the field exists but never reaches the trainer",
+    )
+    check(
+        "train_topk.py imports the penalty trainer",
+        "top_k_with_feature_penalty import" in script,
+        "arm would train the wrong module",
     )
 
     print("\nKnown landmines")
@@ -83,6 +104,29 @@ def main() -> int:
         "the E3 masked-KL comparison is confounded by this ReLU",
         warn_only=True,
     )
+
+    print("\nTraining modules actually import")
+    # Every other wiring check in this file reads source as TEXT, which is why it
+    # stays useful without torch -- but it means a module can pass every check and
+    # still be unimportable. That gap is FINDINGS item 5, and it bit on 2026-09-03:
+    # preflight was green on the wiring while the environment had a CPU-only torch
+    # wheel and no nnsight, so no arm could run at all. Importing each training
+    # script through the same loader run_arm.py uses closes it.
+    try:
+        from falsification.run_arm import ARMS, load_training_module
+
+        for script in sorted({spec["script"] for spec in ARMS.values()}):
+            try:
+                load_training_module(script)
+                check(f"{script} imports", True)
+            except Exception as exc:  # noqa: BLE001 -- any failure blocks training
+                check(
+                    f"{script} imports",
+                    False,
+                    f"{type(exc).__name__}: {exc}",
+                )
+    except Exception as exc:  # noqa: BLE001
+        check("falsification.run_arm importable", False, f"{type(exc).__name__}: {exc}")
 
     print("\nData already committed")
     summaries = list(

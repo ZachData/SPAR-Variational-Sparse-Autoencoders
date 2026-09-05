@@ -33,6 +33,12 @@ variational, stochastic, or as testing a posterior.
 **`vsae_topk.py` applies `F.relu(mu)`; `vsae_topk_masked_kl.py` does not.** The
 two trainers therefore differ by more than the KL mask. Any comparison between
 them confounds the mask with the ReLU. The preprint's equations show no ReLU.
+The masked trainer now carries a `relu_mu` flag (default `False`, so every
+existing checkpoint is unchanged), and E3 runs as two arms — `e3_masked_kl`
+(no ReLU, matching the preprint) and `e3_masked_kl_relu` (ReLU, matching the
+released code) — so the ReLU's contribution is measured rather than assumed.
+`relu_mu` changes no parameter shape and so **cannot be recovered from a state
+dict**; `config.json` is the only record of which arm a checkpoint belongs to.
 
 **The baseline had AuxK on and the vSAE had it off.** The headline Pythia
 comparison is `auxk0.03125` (baseline) against `aux0` (vSAE). AuxK is the standard
@@ -53,13 +59,70 @@ two different dead-feature numbers from two different measurements (1,227/6,970
 from sae_vis histograms; 1,474/7,379 from the 1M-sample analysis). Prefer the
 1M-sample numbers and say which measurement you used.
 
+**Two p-value floors are combinatorial, and both have bitten.** `min_p_floor` /
+`min_attainable_p` once had their one-sided and two-sided branches swapped; that is
+**fixed** (F1), and the `xfail` that pinned it is now a positive test. What remains
+is not a bug but a property to plan around:
+
+* The **seed** floor is `2/C(2n,n)` two-sided. 6 seeds/group cannot beat 3.07 sigma
+  however large the effect; 13 seeds/group is the first n reaching 5 sigma.
+* Above `_EXACT_ENUMERATION_LIMIT` (200k assignments) the test silently falls back
+  to **Monte Carlo**, whose floor is `1/(n_perm+1)`. The 100k default caps evidence
+  at 4.42 sigma *regardless of effect size*. Pass a larger `n_perm` (it is
+  vectorised; 4M draws take ~1s) whenever n > 8 per group.
+
+A p-value sitting exactly at one of these floors means **the design ran out, not the
+evidence**. Check `result["exact"]` and `result["p_floor"]` before reporting.
+
+**`norm_factor` is not recorded in any checkpoint's `config.json`.** Training
+normalises activations to unit mean squared norm (`trainSAE(normalize_activations=
+True)`) and scales the biases back up by `norm_factor` before saving, so a saved
+model is correct on raw activations. But `trainSAE` records it with
+`trainer.config["norm_factor"] = norm_factor` (`training.py:212`) and every
+trainer's `config` is a `@property` that builds a fresh dict — the write lands on
+a temporary and is discarded. It affects every arm identically, so it confounds
+nothing, but **any analysis that reasons about a quantity in training space has to
+re-estimate it** as `sqrt(mean ||x||^2)`, the estimator `get_norm_factor` uses
+(≈ 25.54 for gelu-1l layer 0). Skipping that step rescales every activation by 25x;
+`falsification/read_penalty_clamp.py` does it correctly and says why.
+
+**`var_encoder.bias` (`b_enc_var` for JumpReLU) was corrupted by `scale_biases` in
+every checkpoint saved before 2026-09-04 (second session).** The same save-time
+rescaling that correctly converts `encoder.bias`/`decoder.bias` to raw-activation
+space was, until fixed, ALSO applied to the log-variance bias — mathematically
+wrong (log_var isn't on the additive x/mu axis; clamp+exp aren't scale-homogeneous)
+and it drives every saved `var_flag=1` checkpoint's `log_var` to appear fully
+clamp-collapsed regardless of what was actually learned (RESULTS addendum 8:
+`log_var_init=-2.0` saved as `-51.5`). This is why addendum 3's "the posterior
+collapses completely" and "sampling noise is harmless at eval time" both turned
+out to be measurement artifacts, not findings — read addendum 8 before trusting
+either claim. Now fixed (weight is rescaled instead of bias, preserving log_var's
+true value on raw activations for anything trained after the fix), but **every
+checkpoint already on disk still needs the correction applied by hand** when its
+`log_var` is read: divide both `var_encoder.bias` and `var_encoder.weight` by
+`norm_factor` before calling `encode()` — see `read_selection_jaccard.py`'s
+`mean_jaccard` for the pattern. `e2_sigma_low_init` is the one arm this doesn't
+change: `log_var_init=-8.0` already sits below the clamp floor, so it saturates
+identically whether or not the bug's multiplication is applied.
+
+**`frac_recovered = 0.0` in a summary file usually means an OOM, not a result.**
+`loss_recovered()` OOMs at the default eval batch size on a 10GB card, the failure
+is swallowed by an `except ... continue`, and the run reports success with the
+cross-entropy metrics written as NaN. Every committed checkpoint shows that
+signature. `falsification/run_arm.py` now evaluates at batch 2 x 48, which fixes it.
+
 ## Environment
 
-- **Remote Claude Code sessions have no GPU and no torch.** `nvidia-smi` and
-  `import torch` both fail. Training and any checkpoint-loading analysis must run
-  on the user's local RTX 3080 (10GB). Work that can be done remotely: reading
-  code, the `falsification/` package, analysis of the committed
-  `comprehensive_summary_*.json` files, figure generation, writing.
+- **Two environments, and it matters which you are in.** Run
+  `python falsification/preflight.py` to find out.
+  - *Remote/web sessions* have no GPU and no torch; `nvidia-smi` and
+    `import torch` both fail. Available work: reading code, the `falsification/`
+    package, analysis of committed `comprehensive_summary_*.json` files, figure
+    generation, writing.
+  - *Local sessions* on the RTX 3080 (10GB) can train. Use `./run_overnight.sh`
+    for sweeps and `falsification/run_arm.py` for single runs; never hand-edit
+    `create_full_config()`, because `get_experiment_name()` omits the seed and
+    seeds will silently overwrite one another.
 - `numpy`, `scipy`, `matplotlib`, `pytest` install cleanly with pip when needed.
 - Training targets bfloat16 on 10GB; buffer settings in the training scripts are
   tuned for that and are easy to OOM if raised.
@@ -76,15 +139,35 @@ python falsification/worked_example.py
 # Regenerate the beta dose-response figure from committed JSONs
 python workshop/make_fig_beta.py     # if the workshop/ docs are present
 
-# Training (LOCAL GPU ONLY). Configs are hardcoded in create_full_config();
-# there are no CLI flags for model/beta/seed -- edit the function.
-python training_scripts/train_vsae_topk.py --config full
-python training_scripts/train_topk.py --config full
+# Training (LOCAL GPU ONLY). Use run_arm.py -- do NOT hand-edit
+# create_full_config(); get_experiment_name() omits the seed, so seeds
+# written that way silently overwrite one another.
+python falsification/run_arm.py --check              # validate all arms, no torch
+python falsification/run_arm.py --arm baseline --seed 1
+./run_overnight.sh --hours 10                        # the seeded arms
+./run_e2_pilot.sh                                    # E2 stage 1 + selection rule
 
-# Feature-usage measurement after a run
-python analysis_scripts/online_histogram_analyzer.py \
-  --model-path <checkpoint_dir> --n-samples 1000000 --no-individual
+# Feature-usage measurement. run_analysis.sh handles the per-seed output dir
+# (the analyzer names outputs after the checkpoint dir, which omits the seed)
+# and re-analyses only checkpoints whose summary is older than their ae.pt.
+./run_analysis.sh
+./run_analysis.sh --force                            # ~1.2 min x every run on disk
+
+# Read a checkpoint's own internals (no training, needs the GPU for activations)
+python falsification/read_learned_sigma.py     # E2's learned posterior sigma
+python falsification/read_penalty_clamp.py     # E1's +/-10 penalty clamp: does it ever bind?
+
+# The liveness/reconstruction frontier across every analysed arm (+ figure)
+python falsification/frontier.py
+
+# Cross-arm tables and the E1 comparison across its confound generations
+python falsification/report_summaries.py --table
+python falsification/compare_e1.py --ref current|aprilmode|klwarmup
 ```
+
+**Read `PROJECT.md` first.** It is the living document: current state, what is
+established, the prioritised next steps, the pre-registration and the open
+decisions. It absorbed the former `HANDOFF.md` on 2026-09-03.
 
 ## Conventions
 

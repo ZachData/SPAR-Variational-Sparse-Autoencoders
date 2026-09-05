@@ -110,6 +110,15 @@ class TopKTrainingConfig:
     threshold_beta: float = 0.999  # EMA coefficient for threshold updates
     threshold_start_step: int = 1000  # When to start threshold updates
     gradient_clip_norm: float = 1.0
+    # Coefficient on an L2 penalty over the FULL pre-TopK activation vector, added as
+    #     activation_penalty * 0.5 * ||f||^2
+    # The 0.5 makes this numerically identical to the fixed-variance vSAE's KL term,
+    # which reduces to 0.5 * ||mu||^2, so a run at activation_penalty = b is directly
+    # comparable to a vSAE at kl_coeff = b (E1 in PROJECT.md).
+    # Defaults to 0.0 -- previously this penalty was hardcoded at 0.01 and could not
+    # be switched off, so every run of this trainer silently carried one and no
+    # clean TopK baseline was obtainable from it.
+    activation_penalty: float = 0.0
     dead_feature_threshold: int = 1_000  # Steps before considering feature dead  #changed! was 10k
     
     def __post_init__(self):
@@ -551,7 +560,15 @@ class TopKTrainer(SAETrainer):
         if self.training_config.auxk_alpha > 0:
             auxk_loss = self.get_auxiliary_loss(e.detach(), post_relu_acts_BF)
         
-        activation_cost = 0.01 * post_relu_acts_BF.pow(2).sum(dim=-1).mean() #added loss term
+        # Penalise the full pre-TopK vector, matching the vSAE KL, which also
+        # penalises unselected features. The 0.5 mirrors the KL's own factor.
+        activation_cost = t.tensor(0.0, device=x.device)
+        if self.training_config.activation_penalty > 0:
+            activation_cost = (
+                self.training_config.activation_penalty
+                * 0.5
+                * post_relu_acts_BF.pow(2).sum(dim=-1).mean()
+            )
 
         total_loss = l2_loss + self.training_config.auxk_alpha * auxk_loss + activation_cost
 
@@ -564,6 +581,10 @@ class TopKTrainer(SAETrainer):
                 {
                     "l2_loss": l2_loss.item(),
                     "auxk_loss": auxk_loss.item() if t.is_tensor(auxk_loss) else auxk_loss,
+                    "activation_cost": (
+                        activation_cost.item()
+                        if t.is_tensor(activation_cost) else activation_cost
+                    ),
                     "loss": total_loss.item(),
                     "effective_l0": self.effective_l0,
                     "dead_features": self.dead_features,

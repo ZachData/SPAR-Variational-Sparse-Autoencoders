@@ -124,9 +124,32 @@ def seed_permutation_test(
         observed = a.mean() - b.mean()
         rng = np.random.default_rng(seed)
         null_stats = np.empty(n_perm, dtype=float)
-        for i in range(n_perm):
-            perm = rng.permutation(pooled)
-            null_stats[i] = perm[:n_a].mean() - perm[n_a:].mean()
+
+        # Vectorised in chunks. The scalar loop this replaces made a large n_perm
+        # impractical, and n_perm is what sets the attainable p: the Monte Carlo
+        # floor is 1/(n_perm+1), so the 100k default caps evidence at p = 1e-5
+        # (4.42 sigma) no matter how large the effect. Reaching 5 sigma
+        # (p = 5.73e-07) needs n_perm >= 1.75e6, which the loop could not deliver
+        # in reasonable time.
+        #
+        # argsort of uniform randoms gives uniformly distributed permutations, so
+        # the null is the same one the loop sampled. It is NOT the same *sequence*
+        # for a given seed -- the draws are equivalent in distribution, not
+        # identical -- so a Monte Carlo p-value may shift in its last digits
+        # relative to results computed before this change. Exact enumeration, which
+        # every test in falsification/tests/ uses, is untouched.
+        total = float(pooled.sum())
+        n_b = n_total - n_a
+        chunk = max(1, min(100_000, n_perm))
+        filled = 0
+        while filled < n_perm:
+            m = min(chunk, n_perm - filled)
+            order = np.argsort(rng.random((m, n_total)), axis=1)
+            picks = order[:, :n_a]
+            sums_a = pooled[picks].sum(axis=1)
+            null_stats[filled:filled + m] = sums_a / n_a - (total - sums_a) / n_b
+            filled += m
+
         count = _one_sided_count(observed, null_stats, alternative)
         # (count + 1) / (n + 1) keeps the Monte Carlo p-value valid and non-zero.
         p_value = (count + 1) / (n_perm + 1)
@@ -144,11 +167,23 @@ def seed_permutation_test(
 
 
 def min_p_floor(n_a: int, n_b: int, alternative: Alternative = "greater") -> float:
-    """Smallest attainable p-value for an exact permutation test of these group sizes."""
+    """Smallest attainable p-value for an exact permutation test of these group sizes.
+
+    Over all N = C(n_a+n_b, n_a) assignments:
+
+    * one-sided -- at maximal separation only the observed assignment has a
+      statistic >= its own, so the count is 1 and the floor is 1/N.
+    * two-sided -- an assignment and its complement have equal |statistic|, so the
+      count is never odd; the floor is 2/N.
+
+    These were previously the wrong way round, which made a one-sided test report
+    a floor twice its true value and let `seed_permutation_test` return a p-value
+    below its own reported floor.
+    """
     n_assignments = comb(n_a + n_b, n_a)
     if alternative == "two-sided":
-        return 1.0 / n_assignments
-    return 1.0 / max(n_assignments // 2, 1)
+        return 2.0 / n_assignments
+    return 1.0 / n_assignments
 
 
 def subsample_null_test(

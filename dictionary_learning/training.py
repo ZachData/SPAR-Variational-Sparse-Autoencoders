@@ -66,7 +66,22 @@ def log_stats(
                 l0 = (f != 0).float().sum(dim=-1).mean().item()
 
             if verbose:
-                print(f"Step {step}: L0 = {l0}, frac_variance_explained = {frac_variance_explained}")
+                # losslog holds every loss term the trainer computed, including
+                # activation_cost for the feature-penalty trainer. These used to be
+                # forwarded only to the wandb queue, so a run with use_wandb=False
+                # (which is what unattended sweeps use) discarded them entirely and
+                # left no way to confirm a configured penalty was actually applied.
+                terms = []
+                for name, value in losslog.items():
+                    if isinstance(value, t.Tensor):
+                        value = value.cpu().item()
+                    terms.append(
+                        f"{name}={value:.4f}" if isinstance(value, float)
+                        else f"{name}={value}"
+                    )
+                print(f"Step {step}: L0 = {l0}, "
+                      f"frac_variance_explained = {frac_variance_explained}, "
+                      + ", ".join(terms))
 
             # log parameters from training
             log.update({f"{k}": v.cpu().item() if isinstance(v, t.Tensor) else v for k, v in losslog.items()})

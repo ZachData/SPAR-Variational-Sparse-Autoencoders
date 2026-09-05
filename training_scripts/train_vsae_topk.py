@@ -48,6 +48,33 @@ class ExperimentConfig:
     # Model-specific config
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
+    # Column norm the tied encoder/decoder are initialised to. 0.1 is this trainer's
+    # historical value; top_k.py uses 1.0 via set_decoder_norm_to_unit_norm, so E1's
+    # two arms started 10x apart in decoder scale. Run as a factor, not silently
+    # matched -- see decoder_init_scale on VSAETopKConfig.
+    decoder_init_scale: float = 0.1
+    # Distribution the tied columns are drawn from before normalisation. top_k.py
+    # normalises nn.Linear's default uniform init; this trainer has always drawn
+    # Gaussians. Last item on E1's frozen code diff -- run as a factor via the
+    # e1_vsae_ref_fullmatch arm. See decoder_init_dist on VSAETopKConfig.
+    decoder_init_dist: str = "gaussian"
+    # Project the decoder gradient's parallel component out before the optimiser
+    # step, as top_k.py does. This trainer imports the helper and never calls it
+    # while still renormalising the decoder when use_april_update_mode=False, so the
+    # constraint fights the optimiser. Default False keeps existing behaviour; run
+    # as a factor via the e1_vsae_ref_gradproj arm. See VSAETopKConfig.
+    project_decoder_grad: bool = False
+    # Initial value of the var_encoder bias, i.e. log(sigma^2) at step 0. Default
+    # -2.0 (sigma ~= 0.368) is what every existing var_flag=1 checkpoint used and
+    # RESULTS addendum 3 found it collapses completely during training (mean raw
+    # log_var -66.9 against the reparameterize() clamp floor of -6.0, PROJECT.md
+    # "What is established"). The untested prediction there is that the collapse is
+    # an optimisation-path effect because sigma starts largest exactly when mu is
+    # smallest, i.e. when TopK selection is being established. Setting this AT or
+    # BELOW the clamp floor makes the model deterministic-equivalent (sigma ~=
+    # exp(-3) = 0.0498 once reparameterize() clamps it) from step 0 instead of
+    # arriving there over training -- see the e2_sigma_low_init arm in run_arm.py.
+    log_var_init: float = -2.0
     threshold_beta: float = 0.999
     threshold_start_step: Optional[int] = None
     
@@ -60,6 +87,14 @@ class ExperimentConfig:
     # Schedule configuration
     warmup_steps: Optional[int] = None
     sparsity_warmup_steps: Optional[int] = None
+    # Linear ramp applied to the KL term: total_loss multiplies kl_coeff by
+    # kl_scale = step/kl_warmup_steps until the ramp completes. None keeps the
+    # trainer default of int(0.1 * steps) = 1000 at 10k steps. Set 0 for no ramp.
+    # This matters for E1: the TopK activation penalty has no equivalent ramp, so
+    # leaving this at its default makes a nominally "matched beta" comparison
+    # differ in the schedule of the very quantity being matched
+    # (falsification/FINDINGS_2026-09-02.md, item 7).
+    kl_warmup_steps: Optional[int] = None
     decay_start_step: Optional[int] = None
     
     # Buffer configuration
@@ -207,6 +242,10 @@ class ExperimentRunner:
             k=k,
             var_flag=self.config.var_flag,
             use_april_update_mode=self.config.use_april_update_mode,
+            decoder_init_scale=self.config.decoder_init_scale,
+            project_decoder_grad=self.config.project_decoder_grad,
+            decoder_init_dist=self.config.decoder_init_dist,
+            log_var_init=self.config.log_var_init,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )
@@ -223,6 +262,7 @@ class ExperimentRunner:
             steps=self.config.total_steps,
             lr=self.config.lr,
             kl_coeff=self.config.kl_coeff,
+            kl_warmup_steps=self.config.kl_warmup_steps,
             auxk_alpha=self.config.auxk_alpha,
             warmup_steps=self.config.warmup_steps,
             sparsity_warmup_steps=self.config.sparsity_warmup_steps,

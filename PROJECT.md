@@ -1,14 +1,676 @@
 # PROJECT.md — Falsification-based validation of sparse autoencoder claims
 
+**This is the living document.** It carries current state, what is established,
+what to do next, and the pre-registration the battery runs under. It absorbed
+`HANDOFF.md` on 2026-09-03; there is no separate handoff file. `CLAUDE.md` has the
+repo's standing landmines about the vSAE code — read that too, and read it before
+touching anything in `dictionary_learning/`.
+
+Reading order for a cold start: **Status** → **Where things stand** → **What is
+established** → **Next steps**. Everything after that is the design and the
+pre-registration, which change rarely; the sections before it change every session.
+
+Last updated: 2026-09-05. Two things landed this session, in order:
+
+1. **Next steps #0 from the prior session is closed.**
+   `falsification/reeval_var_flag1.py` re-ran the official `evaluate()` pipeline
+   on all 37 on-disk `var_flag=1` checkpoints with the `scale_biases` bug
+   corrected. **The result is reassuring, not alarming**: officially-reported FVE
+   moves by ≈0.003-0.006 once corrected, not the ≈0.12 a pre-existing uncommitted
+   proxy script had estimated — that proxy figure does not survive contact with
+   the real pipeline and is superseded (RESULTS addendum 9). The 94.7%/5.3%
+   reparameterisation/KL split that is E2's headline finding is essentially
+   unchanged (93.6%/6.4% corrected). `evaluate()`'s own small-sample `frac_alive`
+   did move a lot (0.85→1.00 for `e2_confirm`) but the pre-registered liveness
+   thresholds are untouched by this bug entirely, because the histogram analyzer
+   that computes them never samples (`training=False` unconditionally). Corrected
+   results are written to `evaluation_results_corrected.json` alongside every
+   affected checkpoint's original file (left untouched for the record);
+   `compare_arms.py` and `frontier.py` now prefer the corrected file
+   automatically.
+2. **E4's "missing weights" blocker is resolved — the checkpoints were found, not
+   retrained.** A search of other drives mounted on this machine turned up a
+   prior/parallel copy of this project on `HDD_1TB` holding the actual `ae.pt`
+   files for both the preprint's Pythia baseline
+   (`TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`) and its actual vSAE
+   (`VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var`, `var_flag=0`).
+   Both verified to load and run under the current codebase, checksummed and
+   copied into `experiments/e4_pythia_baseline/seed42/` and
+   `experiments/e4_pythia_vsae/seed42/`. `config.json` recovers the original
+   hyperparameters directly (single seed 42; `auxk_alpha` 0.03125 vs. 0, CLAUDE.md
+   landmine 3's confound confirmed in the checkpoint itself). The per-feature
+   usage array E4's size-response curve needs was already sitting in the
+   committed `all_histograms_*.npz`. **No retraining decision was needed after
+   all** — the only remaining gap is writing the SAEBench-side scorer (Next steps
+   #0; not yet scoped).
+
+Branch `claude/falsification-framework`, GPU idle, pushed to origin and merged to
+`master`. 11 arms in the confirmatory battery (153 checkpoints) plus the 2 newly
+recovered single-seed Pythia checkpoints for E4.
+
+Prior session (2026-09-04, second session), for context: (1) the sigma-annealing
+arm (`e2_sigma_low_init`, addendum 7) closed 84% of E2's FVE gap to baseline; (2)
+E4 was believed **blocked** on missing Pythia checkpoint weights (later found —
+see above); (3) building the Jaccard-overlap instrumentation to explain (1)'s
+residual gap surfaced **a real bug** in `scale_biases` that corrupted every saved
+`var_flag=1` checkpoint's learned sigma (addendum 8) — corrected, RESULTS
+addendum 3's "the posterior collapses completely" and "sampling noise is harmless
+at eval time" both reverse, and the corrected Jaccard read then confirms
+Claims-worth-opening #3 cleanly. Bug fixed in the trainer code; addendum 7's own
+numbers were unaffected.
+
 ## Status
 
 | | |
 |---|---|
-| Stage | Reframing after the workshop deadline was dropped |
-| Framework | `falsification/` implemented, 23 tests green, Type-I control verified |
-| Blocking | Seeded training runs (local GPU only) |
+| Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
+| Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
+| Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
+| Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
+| Newest result | **The official `evaluate()` re-run (addendum 9) shows the `scale_biases` bug moved reported FVE by ≈0.005, not the ≈0.12 an uncommitted proxy had estimated; E2's 94.7%/5.3% split is essentially unchanged (93.6%/6.4%)** |
+| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered from an external drive (2026-09-05); the SAEBench scorer is the one remaining piece — see Next steps #0 |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
+## Where things stand
+
+The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
+on every comparison. E1, E2 and E3 have all landed; E0 and E4 have never been
+reported (E4's checkpoints are now recovered — see Next steps #0 — but the
+SAEBench scorer is still unwritten).
+
+**How E1 landed.** The code diff between the two arms was enumerated by reading
+`top_k.py` and `vsae_topk.py` against each other, plus the two training scripts,
+and frozen at **15 differences and no more** (RESULTS addendum 4): 2 matched by
+config, 2 already run as factors, 2 measured to be no-ops, 7 static no-ops shown
+by reading, 1 the seed-permutation design already treats as noise, and exactly one
+never run. That last one — the initial weight draw — was then run as
+`e1_vsae_ref_fullmatch` (RESULTS addendum 5), and **with every enumerated
+difference matched the two implementations are indistinguishable on all four
+metrics** (largest effect d = 0.8, nothing significant) at the power where every
+previous generation of the arm was detected at 5 sigma. The factor set was fixed
+by the code diff *before* the arm ran, so this is confirmatory rather than a
+garden of forking paths, and the recorded prediction for the closing arm (that it
+would be null) was **wrong** — d = −4.7 on FVE on its own.
+
+The liveness/reconstruction frontier ("Claims worth opening" #2) has been read too
+— RESULTS addendum 6.
+
+**E2's story changed twice this session, in two directions.** The sigma-annealing
+arm (addendum 7) first closed 84% of E2's FVE gap to baseline by pinning sigma at
+the reparameterise clamp floor from step 0, leaving a real 5-sigma residual.
+Building the instrumentation to explain that residual then found a genuine bug in
+`scale_biases` (addendum 8) that had been corrupting every saved `var_flag=1`
+checkpoint's learned sigma since `var_flag=1` was added — corrected, RESULTS
+addendum 3's "posterior collapses completely" and "eval-time noise is harmless"
+both reverse, and the corrected Jaccard-overlap read then confirms
+Claims-worth-opening #3 (selection instability under sampling noise) cleanly.
+Addendum 7's own numbers are unaffected. Full account under **What is
+established** below, in the E2 section.
+
+## What is established
+
+### E1 — confirmed, once every enumerated implementation difference is matched
+
+`CLAUDE.md` landmine 1: at `sigma = 1` a vSAE's KL reduces to `0.5*||mu||^2`, so a
+fixed-variance vSAE *is* a TopK SAE with an L2 activation penalty. Verified as
+algebra (both trainers return `511.895264` on the same batch, six decimals) and now
+as a claim about trained checkpoints.
+
+The pilot's apparent difference (d = 37–59) was **three stacked implementation
+mismatches**, removed in sequence: `kl_warmup_steps`, `use_april_update_mode`, and
+decoder init scale. With all three matched, on the pre-registered liveness metric at
+13 seeds:
+
+| | < 0.1x k/d | < 0.5x k/d | thresholds |
+|---|---|---|---|
+| TopK+L2 vs vSAE (init 0.1, historical) | d = −2.8, 5.03σ | d = +13.0, 5.03σ | **disagree in direction** |
+| **TopK+L2 vs vSAE (init 1.0, matched)** | **d = +0.8, p = 0.114** | **d = +0.2, p = 0.614** | **agree → indistinguishable** |
+
+Neither threshold significant, both agreeing, at the highest power run.
+
+That table was one generation of the arm. Two more factors followed, and the
+verdict is the last row of this ladder — every vSAE arm against `e1_penalty`, in
+the order the factors were matched (RESULTS addendum 5):
+
+| vSAE arm | factors matched | FVE | `frac_recovered` | `< 0.1x` | `< 0.5x` |
+|---|---|---|---|---|---|
+| `e1_vsae_ref` | KL warmup, bias form | d = −5.7 | −8.5 | −2.8 | **+13.0** |
+| `e1_vsae_ref_unitinit` | + init scale | **+16.5** | +17.7 | +0.8 ns | +0.2 ns |
+| `e1_vsae_ref_gradproj` | + gradient projection | +3.8 | +4.9 | −2.4 | −3.7 |
+| **`e1_vsae_ref_fullmatch`** | **+ init draw** | **−0.3 ns** | **−0.8 ns** | **−0.1 ns** | **−0.6 ns** |
+
+Every intermediate generation is significant on at least one axis and each one
+*traded* — matching the init scale closed liveness and blew open reconstruction,
+matching the projection closed most of reconstruction and re-opened liveness.
+**Only the last row is null everywhere, and it is the row where the code diff is
+empty.** The largest effect anywhere in it is d = 0.8 (p = 0.071), at the power
+where every earlier generation was detected at 5 sigma.
+
+The claim this licenses is the decomposition, not a bare equivalence verdict:
+*two implementations of an algebraically identical objective differ at d ≈ 16 on
+reconstruction and d ≈ 13 on liveness; the entire difference decomposes into five
+optimiser- and initialisation-side details, none of which appears in either
+paper's equations; with all five matched they become indistinguishable.*
+
+### E1's newest factor — the decoder-gradient projection
+
+`vsae_topk.py` imported `remove_gradient_parallel_to_decoder_directions` and never
+called it while still renormalising the decoder to unit norm, so the radial gradient
+component was applied and then undone. Run as a factor (`project_decoder_grad`,
+default off), 13 seeds:
+
+* **It was the right explanation for reconstruction.** 78.9% of the FVE gap closes,
+  74.9% of `frac_recovered`.
+* **It breaks the liveness result.** Both pre-registered thresholds now separate the
+  arms and both agree in direction, so this is a robust effect by F8b, not the
+  shape change the two-threshold rule caught twice before.
+* **It moved the vSAE away from `e1_penalty` on liveness, not toward it** — 0.1816
+  (off) → 0.2197 (on) against `e1_penalty`'s 0.1836, and `e1_penalty` has had the
+  projection all along. The same update-rule change has opposite-signed effects in
+  the two implementations. That is an interaction, not a missing match.
+
+The degeneracy is an identity between *objectives* (verified to six decimals on a
+shared batch). It says nothing about two optimisers descending that objective
+landing in the same place, and these arms measure that they do not.
+
+### E1's factor set is closed — the code diff is 15 items and all 15 are settled
+
+Enumerated 2026-09-04 by reading `top_k.py` and `vsae_topk.py` against each other
+(plus `top_k_with_feature_penalty.py`, which is `top_k.py` and the penalty term
+and nothing else, and the two training scripts). Full table in RESULTS addendum 4.
+
+The config surface is fully matched — every field both arms expose is equal in the
+saved `config.json`s — so every remaining difference is in code, and there are 15:
+
+| status | count | items |
+|---|---|---|
+| matched by config | 2 | `kl_warmup_steps`, bias form |
+| run as a measured factor | 2 | `decoder_init_scale`, `project_decoder_grad` |
+| **no-op, measured** | 2 | dead-feature rule; the **±10 penalty clamp** |
+| no-op, static (unreachable or algebraically inert) | 7 | `abs()` selection, the `threshold` buffer, the geometric-median guard, two epsilon/clamp guards, the dead-counter update site, the 2.7% init-norm offset |
+| not a factor by design | 1 | RNG consumption order — the seed is the unit of randomisation |
+| **run as a measured factor (the closing arm)** | **1** | the initial weight draw: normalised uniform vs. normalised Gaussian — `e1_vsae_ref_fullmatch`, and it is **not** null (d = −4.7 on FVE) |
+
+**The clamp is the one that mattered.** `vsae_topk.py:867` penalises
+`clamp(z, -10, 10)` and `top_k_with_feature_penalty.py:570` penalises `f`
+unclamped — the same tensor at `var_flag=0`, but not the same function, and above
+the clamp the vSAE's penalty gradient is **exactly zero**. It was the only
+enumerated difference in the *objective* rather than the optimiser, so it was the
+only one that could have qualified the six-decimal loss identity E1 rests on.
+Measured over 20,000 activations, 13 seeds, all three E1 arms: the largest pre-TopK
+activation anywhere is **0.194 against a clamp at 10**, and no entry in any arm
+exceeds it. The identity is unqualified, and **the entire measured gap between the
+arms is optimiser-side.**
+
+Read that number in the right space or it misleads: training runs on activations
+normalised to unit mean squared norm and the clamp acts there, but checkpoints are
+saved with biases scaled back up by `norm_factor`. In the saved space the maximum
+reads 4.96 and the headroom looks like a factor of 2 rather than 51.
+
+### E2 — it is the sampling, not the KL (93.6% / 6.4%, corrected)
+
+`kl_coeff` is not a shared scale across `var_flag`. A pre-registered two-stage design
+(pilot at seed 101, confirmatory at seeds disjoint from it) found that **no beta in
+{1e-4 … 1} puts a `var_flag=1` model within 0.02 FVE of baseline** — FVE degrades
+monotonically (0.4581 → 0.0001) and never approaches baseline's 0.9003.
+
+The decisive run was a control with **sampling on and the KL entirely off**. Numbers
+below are from the official `evaluate()` re-run with the `scale_biases` bug
+corrected (RESULTS addendum 9); the originally-reported (buggy) values were
+0.460658 and 0.484106 and gave a 94.7%/5.3% split — the corrected split below is
+essentially the same:
+
+| config | FVE (13 seeds, corrected) |
+|---|---|
+| baseline (deterministic) | 0.900159 ± 0.0006 |
+| `var_flag=1`, beta=1e-4 (`e2_confirm`) | 0.458146 ± 0.0040 |
+| `var_flag=1`, **beta=0** (`e2_sampling_only`) | 0.486276 ± 0.0068 |
+
+Removing the KL entirely recovers **6.4%** of the gap. The other **93.6% is the
+reparameterisation**. This is a claim about the architecture, not a hyperparameter,
+and it is much stronger than the beta-tuning story E2 was built on. **The split is
+robust to the `scale_biases` correction** — it moved by ~1 percentage point, well
+inside this design's noise floor, which is itself worth stating plainly: the bug
+that reversed the collapse story (addendum 8) left this headline number alone.
+
+Caveats that must travel with any E2 statement:
+* `e2_confirm` characterises a model at FVE ≈ 0.46, not a healthy one. Liveness on it
+  belongs in `confounders_uncontrolled` — recorded *before* the runs were read.
+* `e2_sampling_only` is **not pre-registered**; proposed after stage 1 was seen. It is
+  a control, not a selection step, so it does not contaminate `e2_confirm`, but it is
+  exploratory.
+
+### E3 — the ReLU is a large effect, not a nuisance
+
+`vsae_topk.py` applies `F.relu(mu)`; the masked-KL trainer did not; the preprint shows
+none. Rather than patch one to match the other, `relu_mu` became a flag and both run
+as arms. no-ReLU vs ReLU: **d = +19.3 (0.1x) and +15.3 (0.5x)**, both thresholds
+agreeing, 5.03σ. Had either trainer simply been patched, every E3 number would have
+silently inherited a d ≈ 20 effect attributed to the KL mask.
+
+### The method earned its keep twice
+
+Both times, the **two-threshold** liveness pre-registration (F8b: robust only if both
+agree; a disagreement is itself the finding) caught a *shape* change in the usage
+distribution that a single threshold would have reported as a clean one-directional
+effect — once for E1's init factor, once for E1a. Keep reporting both.
+
+
+### E2's learned sigma — CORRECTED 2026-09-04: it does not collapse, and the noise is not harmless
+
+~~Read 2026-09-03 with `falsification/read_learned_sigma.py`... every one of 41
+million measured `log_var` values is at or below the clamp floor... the noise at
+convergence is harmless (0.000012 FVE)...~~ **Both claims were a measurement
+artifact, not a finding — see RESULTS addendum 8 for the full account.**
+`scale_biases` was multiplying `var_encoder.bias` by `norm_factor` (~25.75) at
+every checkpoint save, which is not the correct transformation for a log-variance
+bias (unlike `encoder.bias`/`decoder.bias`, for which it is correct) and drives
+`log_var` to appear fully clamp-saturated regardless of what the model actually
+learned. This is now fixed in the trainer code (`var_encoder.weight` is rescaled
+instead, which preserves `log_var`'s true value on raw activations); every
+checkpoint already on disk was saved before the fix and needs the same correction
+applied by hand when read (CLAUDE.md).
+
+**Corrected, on all 13 seeds each of `e2_confirm` and `e2_sampling_only`: mean
+`log_var` is ≈ −2.58 and ≈ −2.74 respectively, and *zero* values sit at or below
+the floor.** The encoder settles at a moderate `sigma ≈ 0.27`, not the clamp's
+`0.0498` — **the posterior does not collapse, and the deterministic SAE is not the
+variational SAE's optimum.** `e2_sigma_low_init` is the one arm unaffected by the
+bug: `log_var_init=-8.0` already sits below the floor before the bug's
+multiplication is even applied, so its own numbers (addendum 7, below) needed no
+revision.
+
+**And the "harmless at eval time" claim inverts too.** Recomputed with corrected
+sigma (a reconstruction-quality proxy, 5 seeds each, addendum 8 — not yet the
+official `evaluate()` pipeline): turning sampling off recovers ≈**0.12 FVE** for
+both `e2_confirm` and `e2_sampling_only`, not 0.000012. **This specific 0.12
+figure did not survive the official re-run (addendum 9, Next steps #0, now
+closed)** — the real `evaluate()` pipeline, run on the same corrected checkpoints,
+moves reported FVE by only ≈0.005 relative to the buggy version, an order of
+magnitude below the proxy's estimate, and its own absolute numbers do not match
+either side of the proxy's comparison. What does survive is the *qualitative*
+claim the proxy was built to support — the posterior does not collapse and eval
+still samples with real noise — just not this specific magnitude.
+
+E2's "94.7% is the reparameterisation" was built on the (now-corrected) prediction
+that sigma starts at exp(−1) = 0.368 (`log_var_init = −2.0`) when mu is still
+small, so the noise-to-signal ratio is worst exactly when TopK selection is being
+established — and the prediction that initialising `log_var` below the clamp floor
+should recover most of the gap if a bad initial noise scale is the whole story.
+
+**Tested 2026-09-04, and the prediction was right — addendum 7.** `e2_sigma_low_init`
+(`log_var_init=-8.0`, otherwise identical to `e2_sampling_only`), 13 seeds: FVE
+0.484 → **0.834** against baseline's 0.900 — **84.1%** of the gap closes — and
+`frac_alive` reaches **1.0000**, exceeding baseline's 0.9934. A real 5-sigma
+residual against baseline remains (d = +103 on FVE). Because `e2_sigma_low_init`'s
+own measurement is unaffected by the bug, **this finding stands as reported**.
+The speculation that `e2_sampling_only`'s reported 0.484 baseline was itself
+suppressed by the bug, and so understated the true residual gap, **did not pan
+out**: the official re-run (addendum 9) puts `e2_sampling_only`'s corrected FVE at
+0.486, essentially identical to the buggy 0.484 it is compared against — so
+addendum 7's 84.1% and its residual gap stand exactly as reported, not larger.
+
+**The residual gap is now explained too — addendum 8.** Building the Jaccard-
+overlap instrumentation this correction was found inside of (Next steps #1, now
+done): with sigma correctly read, `e2_sampling_only`'s TopK selection starts at
+essentially chance-level stability (Jaccard 0.069 against a random-subset
+reference of 0.067) and never fully stabilises (0.811 at step 10000 — still
+~19% churn between two forward passes on the same token at convergence).
+`e2_sigma_low_init` is far more stable throughout (0.431 → 0.952) and the gap
+never closes. Selection instability tracks reconstruction quality in exactly the
+predicted direction, confirming Claims-worth-opening #3's mechanism (a first pass
+at this same measurement, using the not-yet-discovered-as-buggy checkpoints, had
+found the opposite and is superseded).
+
+**The official re-evaluation is done — addendum 9, 2026-09-05.**
+`falsification/reeval_var_flag1.py` re-ran the real `evaluate()` pipeline (not a
+proxy) on all 37 on-disk `var_flag=1` checkpoints with the bug corrected. The
+result: officially-reported FVE moves by ≈0.003-0.006, not the ≈0.12 the
+uncommitted proxy script had estimated — that number is retracted as a measure of
+what the *official* pipeline reports, though the qualitative posterior-does-not-
+collapse finding it was built on stands. `evaluate()`'s own small-sample
+`frac_alive` did rise substantially (0.85→1.00 for `e2_confirm`), but the
+pre-registered liveness thresholds are untouched, because `online_histogram_
+analyzer.py` calls `encode(..., training=False)` unconditionally and never
+samples. The 94.7%/5.3% split is essentially unchanged at 93.6%/6.4% corrected.
+See "E2 — it is the sampling, not the KL" above and RESULTS addendum 9 for the
+full table.
+
+### Pre-registered but never reported
+
+One item in the battery's design still appears nowhere in
+`RESULTS_2026-09-03.md`. It is not blocked; it was simply overtaken.
+
+* **E0, the pipeline negative control.** 13 `baseline` seeds exist and are
+  analysed. The test itself — split them into two arbitrary groups, run the real
+  metric pipeline, ask the framework to validate "group A is better organised" —
+  has not been run. It is the only check that the real pipeline is exchangeable
+  across seeds, and every downstream p-value assumes it is.
+
+~~The learned sigma.~~ **Read 2026-09-03, corrected 2026-09-04** — see "E2's
+learned sigma" above and RESULTS addendum 8.
+
+---
+
+## Next steps, in priority order
+
+The official re-evaluation is done (RESULTS addendum 9 — see "Closed" below).
+E4's missing-weights blocker is resolved (found on an external drive, 2026-09-05);
+nothing on this list is blocked on compute or data right now.
+
+### 0. E4 — write the SAEBench SCR/TPP scorer against the recovered checkpoints
+
+Checked 2026-09-04 (second session). `falsification/size_control.py` is fully
+implemented and tested; the missing piece was believed to be only the
+`scorer(keep_indices)` closure. It is not reachable yet: **the original
+preprint's Pythia checkpoints (`TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`,
+the baseline with the actual 7379/8192 vs. 1474/8192 size confound E4 exists to
+control for) have no `ae.pt` anywhere on this machine.**
+`comprehensive_histogram_analysis/` holds only their derived analysis outputs
+(summary JSONs, histograms, `.npz` files) — the trained weights themselves were
+apparently never saved to this checkpoint of the repo, on this machine, or in git
+(`archive/` is gitignored and empty of them too). `size_response_curve` needs the
+actual dictionary to mask and re-score at each grid point, so no scorer can be
+written against them.
+
+**This is not the same gap as "E4 within the falsification battery."** The
+gelu-1l arms trained for E0–E3 (`baseline`, `e1_penalty`, `e2_confirm`, etc.) all
+share `dict_size=2048` and none show the preprint's size disparity — even
+`e2_sampling_only` is 98%+ alive and `e2_sigma_low_init` is 100% alive (RESULTS
+addendum 7) — so running `size_control.py` against them would not be testing the
+thing E4 was designed to test; there is no size confound in this battery to
+control for.
+
+**FOUND, 2026-09-05 — retraining is not needed.** The original `ae.pt` weights
+exist on an external drive (`/run/media/system/HDD_1TB/.../Desktop/Top/spar2/
+experiments/`), a prior/parallel session's copy of this project not previously
+searched. Both checkpoints — `TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`
+(baseline) and `VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var`
+(the preprint's actual vSAE, `var_flag=0` — CLAUDE.md landmine 1) — load and run
+cleanly under the current codebase (verified directly: `from_pretrained`, a
+forward pass, correct `dict_size`/`k`/`var_flag`). `config.json` recovers the
+full original hyperparameters: seed 42 (single seed, no replication — matches the
+preprint's own limitation), `total_steps=10001`, `lr` auto-scaled for the larger
+dictionary (`0.000282842712474619`) on the baseline vs. fixed `8e-4` on the vSAE,
+`kl_coeff=1.0`, `auxk_alpha` **0.03125 vs. 0** — CLAUDE.md landmine 3's AuxK
+confound, confirmed present in the actual checkpoints rather than inferred from
+directory names. Checksummed-copied into `experiments/e4_pythia_baseline/seed42/`
+and `experiments/e4_pythia_vsae/seed42/` (each `md5sum`-verified against the
+source). The full per-feature usage array E4's `top_usage` curve needs
+(`feature_selection_counts`, length 8192, 7379 nonzero — exactly matching
+`features_used`) is already sitting in the committed
+`all_histograms_*.npz` for the baseline; nothing further needs computing there.
+
+**What is actually still missing is only the SAEBench-side `scorer` closure** —
+`falsification/size_control.py`'s framework (`select_features`,
+`size_response_curve`, `verdict`) is implemented and tested against synthetic
+scorers; it needs a real function that takes a `keep_indices` array, masks the
+baseline `AutoEncoderTopK`'s encoder/decoder accordingly, and returns an SCR (or
+TPP) score via the vendored `SAEBench-main/sae_bench/evals/scr_and_tpp/main.py`
+against Pythia-70m-deduped. That integration — reading `main.py`'s actual API and
+adapting it to score a masked, in-memory dictionary rather than one loaded from a
+hub — has not been scoped yet and is the next concrete piece of work.
+
+Since both checkpoints are single-seed (matching the preprint exactly), the
+result this produces is necessarily **descriptive** — one baseline curve, one
+vSAE point on it — not a confirmatory permutation test; that is consistent with
+how E4 was designed (the curve comes from masking one dictionary at different
+sizes, not from retraining), but it should be stated as such when reported.
+
+### 1. Desk work — no GPU, no new code
+
+Both items under **Claims worth opening** (#4, the field-level projection claim;
+#5, the seed-count survey) are pure analysis/writing and can be done from a
+remote/no-GPU session.
+
+### 2. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
+
+The beta=0 control (`e2_sampling_only`) makes this much less interesting: if
+94.7% of the damage is the sampling, no smaller beta recovers a healthy model.
+Doing it anyway would close the question formally, but it is a **new
+pre-registration**, not a continuation of this one.
+
+---
+
+## Closed — the official re-evaluation of E2's FVE (2026-09-05)
+
+Full detail in RESULTS addendum 9, and in **What is established** above (E2's
+section and the learned-sigma section). Kept here as the historical record since
+a fresh reader may otherwise look for this under "next steps."
+
+The prior session's addendum 8 fixed a real bug (`scale_biases` corrupting
+`var_encoder.bias`) but measured its consequences with an uncommitted proxy
+script, flagged for official re-measurement. `falsification/reeval_var_flag1.py`
+did that: it re-runs the actual `evaluate()` pipeline on all 37 on-disk
+`var_flag=1` checkpoints with the bug corrected (bias-correction applied
+in-memory after loading; a corrected copy of `evaluation_results.json` is written
+alongside the original rather than overwriting it). The proxy's ≈0.12 FVE
+estimate does not replicate — the official numbers move by ≈0.005 — but E2's
+central finding (94.7%/5.3%, now 93.6%/6.4%) is robust to the correction, which is
+the answer that actually matters for the paper. `compare_arms.py` and
+`frontier.py` now prefer the corrected file automatically, so no other script
+needed updating.
+
+## Closed — E1's decomposition (2026-09-04)
+
+Full detail in RESULTS addenda 4 and 5, and in **What is established** above.
+Kept here only as the historical record of how the stopping rule was resolved,
+since a fresh reader may otherwise look for it under "next steps."
+
+**The decision this closed:** *"Which implementation is E1's claim about — the
+objectives, or the released implementations?"* was blocking because each new
+matched asymmetry arrived unannounced and flipped the verdict, so no reading
+could be committed to without fearing the next factor. The fix was to stop
+matching asymmetries as they were noticed and instead enumerate the full code
+diff between `top_k.py` and `vsae_topk.py` up front, freeze it, and run only what
+was on the list:
+
+1. **Enumerate every difference by reading the two files.** Done — 15
+   differences, frozen in RESULTS addendum 4. 2 matched by config, 2 already run
+   as factors, 2 measured to be no-ops (the dead-feature rule; the ±10 penalty
+   clamp — the only one of the 15 in the *objective* rather than the optimiser,
+   and it never binds, 51x headroom), 7 static no-ops shown by reading, 1 the
+   seed-permutation design already treats as noise, and exactly one — the initial
+   weight draw — never run.
+2. **Run that one factor as an arm, then stop.** Done —
+   `e1_vsae_ref_fullmatch`, 13 seeds, RESULTS addendum 5. `decoder_init_dist` was
+   added to `VSAETopKConfig` as a 2-level factor (default `"gaussian"`,
+   bit-identical to every existing checkpoint). The recorded prediction that it
+   would be null was **wrong** (d = −4.7 on FVE on its own) — and with it
+   matched, `e1_vsae_ref_fullmatch` is indistinguishable from `e1_penalty` on
+   every metric, closing the decomposition.
+
+**What this leaves for a human:** decision (a) under **Open decisions** is
+answered in practice (the entire measured gap was optimiser-side, never
+objective-side); decision (b), the equivalence margin, still needs a number, but
+it now sets how strongly to state a null rather than which way the verdict goes.
+
+## Closed — the Jaccard-overlap instrumentation (2026-09-04)
+
+Full detail in RESULTS addendum 8, and in **What is established** above (E2's
+learned-sigma section). Kept here as the historical record since a fresh reader
+may otherwise look for this under "next steps."
+
+Instrumenting TopK selection instability during early training
+(`read_selection_jaccard.py`, two new arms with dense checkpointing) was built to
+test whether it explains `e2_sigma_low_init`'s residual gap against baseline. A
+first pass at the measurement, on checkpoints not yet known to carry the
+`scale_biases` bug, found the opposite of the prediction. Chasing that anomaly
+down found the bug itself; corrected, the result reverses cleanly and confirms
+Claims-worth-opening #3: `e2_sampling_only`'s true selection instability starts
+at chance level and never fully stabilises, `e2_sigma_low_init` is far more
+stable throughout, and the gap never closes.
+
+---
+
+## Claims worth opening
+
+Ranked by value per unit of cost. The first two need no GPU and no new code beyond
+a script; the third is the most scientifically interesting thing available.
+
+### 1. ~~"The deterministic SAE is the variational SAE's optimum"~~ — ANSWERED, then REVERSED
+
+**No.** Read 2026-09-03, answered "yes, emphatically" from mean raw `log_var` of
+−66.9 against a clamp floor of −6 (100% of 41M values at or below the floor) —
+**this reading was a measurement artifact of the `scale_biases` bug and does not
+survive correction.** See "What is established" above (E2's learned-sigma
+section) and RESULTS addendum 8: corrected, mean `log_var` is ≈ −2.6 to −2.9,
+nowhere near the floor. What the original (wrong) answer opened — the
+sigma-annealing arm — still landed a real result on its own terms (addendum 7),
+and chasing *that* arm's residual gap is what surfaced the bug (addendum 8).
+
+### 2. ~~Is there one liveness–reconstruction frontier?~~ — ANSWERED 2026-09-04
+
+**Both answers, in different regimes.** `falsification/frontier.py`, figure at
+`workshop/figs/frontier.pdf`, full detail in RESULTS addendum 6. Exploratory, not
+pre-registered.
+
+* **Pooled over all 11 replicated arms the two metrics look unrelated**
+  (rho = −0.14, p = 0.69) — which is the condition under which someone would
+  report them as two independent pieces of evidence.
+* **That zero is two opposite-signed relationships cancelling.** Scanning every
+  possible cut rather than choosing one: below the cut rho < 0 at *every* cut,
+  above it rho > 0 at *every* cut, at both thresholds.
+* **Among the 8 working models the frontier is real and slopes UP**: rho = +0.86
+  (p = 0.007) and +0.69 (p = 0.058). Better reconstruction buys **more** near-dead
+  features. 25 of 28 pairs trade.
+
+The consequence is sharper than the double-counting worry that motivated it. Since
+the frontier slopes up, *"architecture A reconstructs better AND has fewer dead
+features"* is not a doubly-supported claim — it asserts A is **off** the frontier,
+which is rarer and stronger than either half, and it is the shape of claim the
+preprint made.
+
+Two things the run corrected. The speculation recorded here — that `gradproj`
+"bought reconstruction and paid in liveness, which is what movement along a
+frontier looks like" — is **wrong**: `fullmatch` bought both, and `gradproj` is
+the only working arm that is dominated outright (by three others). And within the
+E1 family, which shares an objective exactly, the arms scatter instead of tracing
+a curve (rho = +0.40 / −0.30, thresholds disagreeing in sign). **Implementation
+details knock an arm off the frontier rather than sliding it along.**
+
+### 3. ~~"The reparameterisation trick is incompatible with discrete top-k selection,
+not with sparse autoencoders"~~ — CONFIRMED 2026-09-04, second session, continued
+
+**Confirmed.** Selection instability under sampling noise tracks reconstruction
+quality in exactly the predicted direction — see "What is established" above
+(E2's learned-sigma section) and RESULTS addendum 8 for the full account
+(`read_selection_jaccard.py`, the two `_early` arms, the chance-level-to-0.811
+trajectory, and the `scale_biases` bug this measurement surfaced along the way).
+One sub-hypothesis falsified in passing: TopK is *not* forced to pad its
+selection with `mu == 0` features (0% of selections are exactly zero), so the
+instability works through boundary flips among genuinely-positive features, not
+zero-padding.
+
+**Not yet tested — the second half of the original plan, still open:** vary the
+discreteness of the sparsity mechanism itself. `vsae_jump_relu.py` has `var_flag`
+and a *learned threshold* rather than top-k selection; `vsae_batch_topk.py`
+selects discretely but across the batch. Running sampling-on vs. sampling-off for
+each, the way `e2_sampling_only` did for TopK, would test whether the FVE damage
+is large for TopK, intermediate for BatchTopK, and small for JumpReLU — the
+prediction that would generalise this beyond a single architecture and beyond
+this preprint. This is now the natural next step for turning this into a second
+paper's headline, but it is new training against a not-yet-fixed part of the
+codebase's bug exposure (`vsae_jump_relu.py`'s `scale_biases` was fixed
+pre-emptively this session but never tested against a real `var_flag=1` run).
+
+### 4. "A one-line optimiser detail moves reconstruction more than the architecture
+under study" — ~30 min, converts a local finding into a general one
+
+The decoder-gradient projection is worth d = −14.3 on FVE in the vSAE. That is
+larger than most published architectural interventions, and it appears in no
+equations. Right now it reads as a bug in one file. One arm makes it general:
+**turn the projection off in `top_k.py` and train the baseline** — a plain TopK SAE
+with no penalty and no KL.
+
+* Same magnitude there → the projection is a **generic and unreported factor in
+  TopK SAE training**, and any comparison between codebases that differ on it is
+  confounded. That is a claim about the field, not about this repo.
+* **The closing arm strengthened this claim's premise (2026-09-04).** The
+  projection is no longer the only such detail: the *initial weight draw* —
+  normalised Gaussian versus normalised uniform, identical in every summary
+  statistic anyone reports — is worth d = −4.7 on FVE and d = −7.3 on
+  `frac_recovered` on its own (RESULTS addendum 5). Two one-line details, neither
+  in any equations, each larger than many published architectural interventions.
+* Different magnitude → it **interacts with the penalty**, which is already the
+  leading interpretation given that the projection moved the vSAE *away* from
+  `e1_penalty` on liveness (0.1816 → 0.2197 against 0.1836). An interaction between
+  an optimiser detail and a loss term is a subtler and more interesting result.
+
+Either way the E1 decomposition gets a control arm it currently lacks.
+
+### 5. "Most published SAE comparisons cannot reach the significance they imply" —
+desk work
+
+The combinatorial floor is not a subtlety, it is arithmetic: 6 seeds per group
+cannot beat 3.07 sigma however large the effect, and 5 cannot beat 2.6. Survey how
+many training seeds recent SAE papers actually use — the modal answer appears to be
+one — and state the ceiling that implies for each.
+
+This is the empirical hook the methods paper currently lacks: it turns "you should
+pre-register and use permutation tests" from advice into a measured gap. Handle it
+carefully — the point is that the field's *design conventions* cap what its results
+can say, not that particular authors erred.
+
+---
+
+## Open decisions
+
+- **Agentic or fixed battery?** POPPER's novelty is LLM agents *designing* the
+  falsification tests. We could (a) hand-specify a battery — more rigorous, much
+  cheaper, less novel; or (b) have an LLM propose tests against a metric schema —
+  closer to POPPER, more moving parts, and the relevance checker becomes load-
+  bearing. **Recommendation: (a) first.** The statistical contribution stands
+  alone, E0 is meaningful either way, and (b) can be layered on once the fixed
+  battery has established the error rates it should be compared against.
+- ~~**α and κ.**~~ **RESOLVED: α = 0.1, κ = 0.3**, pre-registered. The κ sweep
+  (`kappa_sweep()` in `falsification/simulate.py`) measured worst-case Type-I
+  (5 fully redundant tests) against power at 5 seeds/group:
+
+  | κ | Type-I (worst) | power d=1.0 | d=1.5 | d=2.0 |
+  |---|---|---|---|---|
+  | 0.2 | 0.066 | 0.27 | 0.63 | 0.90 |
+  | **0.3** | **0.086** | **0.29** | **0.66** | **0.92** |
+  | 0.4 | 0.095 | 0.27 | 0.63 | 0.91 |
+  | 0.5 | 0.095 | 0.19 | 0.53 | 0.85 |
+  | 0.7 | 0.061 | 0.01 | 0.08 | 0.27 |
+
+  κ=0.3 maximises power while staying under α. Against the previous κ=0.5 this is
+  free: power at d=1.5 rises 0.53 → 0.66 at 5 seeds, 0.73 → 0.82 at 6. The power
+  table in "What the simulation settled" is κ=0.5 and is superseded by the κ=0.3
+  table in `RUNBOOK.md`.
+- **Equivalence margin for E1.** Needs to be pre-specified. What difference in live
+  fraction would we consider a real departure from degeneracy? This is now the
+  binding constraint on the whole experiment, not a formality: at 13 seeds the
+  across-seed SDs are ~1e-3, so essentially any non-zero difference clears 5 sigma,
+  and E1's verdict has already flipped once on a difference of 0.036 in live
+  fraction. More power cannot supply it, and the numbers are now known, so it can
+  no longer be chosen innocently.
+- ~~**A stopping rule for matching asymmetries (new, 2026-09-03).**~~
+  **RESOLVED 2026-09-04 by enumeration, not by exhaustion.** The rule is: *the
+  factor set is the code diff; run what is on it and stop.* The diff is
+  enumerated and frozen in RESULTS addendum 4 at 14 items, one of which is
+  unrun. Nothing may be added to it without a code difference that justifies it,
+  and the two candidates that arrived after the pilot and looked most alarming
+  (the dead-feature rule, the ±10 clamp) were both closed by measurement rather
+  than by a training run.
+
+  What made this urgent stands as the record of why the rule was needed: matching
+  `project_decoder_grad` **closed 79% of the reconstruction gap and opened a
+  liveness gap that had been closed** (RESULTS addendum 2). "Keep matching until
+  the arms agree" is a garden of forking paths with a pre-registered metric
+  attached. The remaining question is not *when to stop* but which implementation
+  E1's claim is *about*, and it still has to be answered explicitly:
+
+  * the degeneracy is an identity between **objectives** (`0.5*||mu||^2`, verified
+    to six decimals), and says nothing about optimisers, in which case the
+    projection is a nuisance factor and the unprojected arm is a legitimate vSAE;
+  * or the claim is about the **released implementations**, in which case every
+    asymmetry between them is in scope and none of them should be matched at all.
+
+  Those two readings license different arms and currently give different verdicts.
+  Picking one is a human decision, and it should be recorded before the next factor
+  is run.
 ## The thesis
 
 Interpretability makes claims of the form "architecture A produces better features
@@ -61,18 +723,39 @@ wrong in print.
 The unit of analysis for an architecture claim is the training run. That makes an
 exact permutation test the natural instrument, and its floor is brutal:
 
-| seeds/group | distinct splits | min attainable p | e-value (κ=0.5) |
-|---|---|---|---|
-| 3 | 10 | 1.0e-01 | 1.58 |
-| 4 | 35 | 2.9e-02 | 2.96 |
-| 5 | 126 | 7.9e-03 | 5.61 |
-| 6 | 462 | 2.2e-03 | 10.75 |
-| 8 | 6,435 | 1.6e-04 | 40.11 |
+**Corrected 2026-09-02.** The figures below previously used a floor function whose
+one-sided and two-sided branches were swapped, making every one-sided floor 2x too
+pessimistic (`falsification/FINDINGS_2026-09-02.md`, item 1). Corrected values, for
+the one-sided tests this design actually uses:
 
-Validation at α=0.1 needs aggregate E ≥ 10. So **5 seeds per group cannot validate
-on a single test no matter how large the effect** — it maxes out at e=5.61. Either
-6 seeds for one test, or 5 seeds with two independent tests
-(`seeds_required()` computes this).
+| seeds/group | assignments C(2n,n) | min attainable p | e (κ=0.5) | e (κ=0.3) |
+|---|---|---|---|---|
+| 3 | 20 | 5.0e-02 | 2.24 | 2.44 |
+| 4 | 70 | 1.4e-02 | 4.18 | 5.87 |
+| 5 | 252 | 4.0e-03 | 7.94 | **14.39** |
+| 6 | 924 | 1.1e-03 | 15.20 | 35.73 |
+| 8 | 12,870 | 7.8e-05 | 56.72 | 225.85 |
+
+Validation at α=0.1 needs aggregate E ≥ 10.
+
+**The old claim that "5 seeds per group cannot validate on a single test no matter
+how large the effect" no longer holds at the pre-registered κ.** It was computed at
+κ=0.5 from the inverted floor (e = 5.61). Corrected, 5 seeds gives e = 7.94 at
+κ=0.5 — still short — but **e = 14.39 at κ=0.3, which validates**. Since κ=0.3 is
+the pre-registered value, `seeds_required(alpha=0.1, kappa=0.3, n_tests=1)` now
+returns **5**, not 6.
+
+This does not change the direction of the project's advice, only its arithmetic:
+replication across seeds is still what buys evidence, and a single-run-per-condition
+sweep still cannot validate. The power tables elsewhere in this file and in
+RUNBOOK.md are simulation-derived and use real permutation p-values, not the floor,
+so they are unaffected by the correction.
+
+**The measured cost of a run has since changed the planning picture more than any
+of this.** At ~1 min/run on the 3080 (30 runs in 27 min, 2026-09-02), seeds are no
+longer the binding constraint at all — 6 seeds/arm already delivers 2-3.6x the
+required evidence. The binding cost is the 1M-sample feature-usage analysis at
+~6.5 min/checkpoint, i.e. 6.5x the cost of the training run it measures.
 
 The same arithmetic applies to the preprint's cleanest result. Its β dose-response
 is monotone over six orders of magnitude, yet with one run per condition the exact
@@ -132,13 +815,27 @@ should say so rather than run an underpowered arm and report a null.
 Before committing GPU time to an arm, estimate its d from the existing single-seed
 data and read the required seed count off this table.
 
-## Experiments
+
+---
+
+## Experiments — the pre-registration
+
+This is the battery as pre-registered, kept in its original form because that is
+what makes it a pre-registration. The seed counts say 6 and 10; the confirmatory
+battery ran at **13 seeds per arm** after the 6-seed generation hit the 3.07-sigma
+combinatorial floor. Outcomes are **not** recorded here — they are in
+`falsification/RESULTS_2026-09-03.md` and summarised under "What is established"
+above. Where an experiment's design was changed after seeing results, the change is
+noted in the section itself and the arm is marked exploratory.
 
 Every arm is gelu-1l, `blocks.0.hook_resid_post`, d=2048, k=256, auxk=1/32,
 lr=8e-4, 10k steps — the existing sweep configuration — varying only the stated
 intervention and the seed.
 
 ### E0 — Pipeline negative control. 10 runs.
+> **Outcome: never run.** 13 `baseline` seeds exist and are analysed; the split
+> test itself has not been done. See "Pre-registered but never reported".
+
 Train 10 TopK SAEs with **identical config, different seeds**, run the *real*
 metric pipeline over them, split into two arbitrary groups of 5 and ask the
 framework to validate "group A is better organised than group B". Ground truth:
@@ -161,6 +858,10 @@ Error control of the *procedure* is established separately and for free by
 `falsification/simulate.py`, which needs no GPU. See "What the simulation settled".
 
 ### E1 — The degeneracy claim. 6 runs.
+> **Outcome: unresolved, and the reason is a decision.** Confirmed on the
+> pre-registered liveness metric against `e1_vsae_ref_unitinit`, not against
+> `e1_vsae_ref_gradproj`. See "What is established" and Open decisions (a), (b).
+
 Train TopK SAE + explicit `(β/2)·||f||²` activation penalty, 6 seeds. Under the
 degeneracy (`CLAUDE.md`, landmine 1) this should be **indistinguishable** from the
 fixed-variance vSAE at matched β.
@@ -171,18 +872,33 @@ margin, or as a power statement ("we could have detected a difference of size X"
 Do not report a null result as confirmation.
 
 ### E2 — Is it variational at all? 6 runs.
+> **Outcome: landed, stronger than designed** — 94.7% of the damage is the
+> reparameterisation, not the KL. The learned-sigma diagnostic below has been
+> read and corrected twice since (it does **not** collapse; a `scale_biases` bug
+> made it look like it had). See "What is established".
+
 Train with `var_flag=1`, 6 seeds — the experiment the preprint claims to have run
 and did not. Diagnostic of interest is the learned σ: if it collapses toward 0, the
 degeneracy is the *optimum* rather than an implementation accident, which is a
 substantially stronger result.
 
 ### E3 — The masked-KL intervention. 6 runs.
+> **Outcome: landed.** The ReLU confound flagged below was resolved by running
+> `relu_mu` as a two-level factor rather than patching either trainer; the ReLU
+> alone is d = +19.3 / +15.3.
+
 `vsae_topk_masked_kl`, 6 seeds. Tests the preprint's stated death mechanism
 directly. **Beware the confound in landmine 2**: that trainer omits the `F.relu(mu)`
 that `vsae_topk.py` applies, so either patch one to match the other or report the
 comparison as confounded.
 
 ### E4 — Size-matched SCR/TPP control. No training. Implemented in `falsification/size_control.py`.
+> **Outcome: not started, but no longer blocked.** `size_control.py` is fully
+> implemented and tested; the original Pythia checkpoint weights, once believed
+> lost, were found on an external drive and copied in 2026-09-05
+> (`experiments/e4_pythia_baseline/`, `experiments/e4_pythia_vsae/`, seed 42).
+> The only remaining piece is the SAEBench-side scorer. See Next steps #0.
+
 Measure SCR/TPP as a **function of dictionary size** for the baseline SAE, then
 ask where the vSAE's score falls on that curve.
 
@@ -210,8 +926,10 @@ Still to write: the SAEBench-side scorer that turns a kept-index set into an SCR
 score. Everything around it is implemented and tested against synthetic scorers
 with known ground truth.
 
-**Budget:** ~28 training runs. At 20–40 min each on the 3080, roughly 10–19 hours,
-parallelisable across days. E4 needs no training and should start immediately.
+**Budget:** no training runs — masking and re-scoring an existing dictionary at
+each grid point is the whole design, and both checkpoints now exist on disk
+(2026-09-05). The remaining cost is entirely the SAEBench scorer integration and
+however long its SCR/TPP eval takes to run per grid point.
 
 **Pre-registration.** Per simulation finding 2, the battery above and its order are
 fixed before any seeded run is inspected. Adding an arm after seeing results is
@@ -228,30 +946,109 @@ permitted only if reported as exploratory and excluded from the evidence product
 3. **Corrections** to the preprint's record: the degeneracy, the AuxK confound, the
    config mismatches, the self-contradiction between Global and Conclusion.
 
-## Open decisions
+## Landmines specific to continuing this work
 
-- **Agentic or fixed battery?** POPPER's novelty is LLM agents *designing* the
-  falsification tests. We could (a) hand-specify a battery — more rigorous, much
-  cheaper, less novel; or (b) have an LLM propose tests against a metric schema —
-  closer to POPPER, more moving parts, and the relevance checker becomes load-
-  bearing. **Recommendation: (a) first.** The statistical contribution stands
-  alone, E0 is meaningful either way, and (b) can be layered on once the fixed
-  battery has established the error rates it should be compared against.
-- ~~**α and κ.**~~ **RESOLVED: α = 0.1, κ = 0.3**, pre-registered. The κ sweep
-  (`kappa_sweep()` in `falsification/simulate.py`) measured worst-case Type-I
-  (5 fully redundant tests) against power at 5 seeds/group:
+These cost real time this session. They are not in `CLAUDE.md` because they are about
+*operating* the battery, not about the science.
 
-  | κ | Type-I (worst) | power d=1.0 | d=1.5 | d=2.0 |
-  |---|---|---|---|---|
-  | 0.2 | 0.066 | 0.27 | 0.63 | 0.90 |
-  | **0.3** | **0.086** | **0.29** | **0.66** | **0.92** |
-  | 0.4 | 0.095 | 0.27 | 0.63 | 0.91 |
-  | 0.5 | 0.095 | 0.19 | 0.53 | 0.85 |
-  | 0.7 | 0.061 | 0.01 | 0.08 | 0.27 |
+**Never poll for GPU-busy with `pgrep -f '<pattern>'`.** The Bash-tool wrapper
+process's command line contains the entire script text, so a wait loop that greps for
+`run_arm.py` matches *its own parent* and never exits. This deadlocked a job for six
+minutes. If the GPU is already idle, omit the wait entirely.
 
-  κ=0.3 maximises power while staying under α. Against the previous κ=0.5 this is
-  free: power at d=1.5 rises 0.53 → 0.66 at 5 seeds, 0.73 → 0.82 at 6. The power
-  table in "What the simulation settled" is κ=0.5 and is superseded by the κ=0.3
-  table in `RUNBOOK.md`.
-- **Equivalence margin for E1.** Needs to be pre-specified. What difference in live
-  fraction would we consider a real departure from degeneracy?
+**Do not run two GPU jobs concurrently.** Two analysers OOM on the 10GB card
+(each needs ~3.5–3.9 GB with `n_ctxs=3000`). Analysis is serial by necessity. The
+analyser *raises* on OOM so no bad summary is written — but a **training** OOM in
+`loss_recovered()` is swallowed by an `except ... continue` and written as
+`frac_recovered: 0.0` with NaN CE metrics. That failure is silent.
+
+**Calling `analysis_scripts/online_histogram_analyzer.py` directly (bypassing
+`run_analysis.sh`) needs `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set
+by hand.** `run_analysis.sh` exports it (line 16); a bare invocation (e.g. to
+re-analyse one straggler seed after a batch run gets killed) does not inherit it
+and OOMs on allocator fragmentation even with ~9GB nominally free — it needs the
+contiguous block `torch.addmm` wants for the unembed. Confirmed 2026-09-04:
+`read_learned_sigma.py` and other one-off checkpoint-reading scripts likely have
+the same exposure; export it before running any of them standalone.
+
+**A long-running unattended shell command (`run_in_background: true`) can be
+killed by *unrelated* memory pressure on the host, not by anything this repo's
+jobs did.** Twice this session a multi-seed loop was killed mid-run with "system
+is running low on memory" while a completely different project's process
+(`relay_null`, ~8.5GB RSS, 99% CPU, from another Claude Code session on this
+machine) was the actual cause. `ps aux --sort=-%mem` before assuming a killed job
+means *this* repo's config is too heavy — the GPU card itself was never the
+constraint (idle at ~1.3GB used throughout). After a kill, check which seeds
+actually finished (`RUN_COMPLETE.json` / `comprehensive_summary_*.json` on disk)
+before re-running — both `run_arm.py` and `run_analysis.sh`'s per-seed loop are
+naturally resumable from wherever they stopped.
+
+**Shrinking `n_ctxs` to enable parallelism would break comparability** — it changes
+which tokens each checkpoint sees, and the existing runs were all measured at 3000.
+
+**`run_analysis.sh` skips on mtime, not existence.** Retraining an arm leaves the old
+generation's summary next to the new `ae.pt`; the mtime check catches that. If you add
+a step that rewrites checkpoints, make sure `ae.pt` gets a newer mtime than its
+summary or the stale numbers will silently persist.
+
+**Flags that leave no trace in the weights need `config.json`.** `relu_mu`,
+`decoder_init_scale`, `project_decoder_grad` and `decoder_init_dist` all change
+behaviour but not parameter shapes, so none can be recovered from a state dict.
+Each is written into the trainer's `config` property; `relu_mu` is also read back
+in `utils.load_dictionary` because it changes `encode`, the others are provenance
+only. Any new factor of this kind needs the same, and see the next item — writing
+it into `config` is necessary but not sufficient.
+
+**A trainer's `config` is a `@property`: writing to the dict `trainSAE` hands you
+does nothing.** `trainSAE` does `trainer.config["norm_factor"] = norm_factor`
+(`training.py:212`) expecting it to persist, but both `TopKTrainer.config` and
+`VSAETopKTrainer.config` rebuild a fresh dict on every access, so the write lands
+on a temporary and `norm_factor` is in no checkpoint's `config.json` (CLAUDE.md).
+Every *factor* field survives because it is read from `self.model_config` /
+`self.training_config` inside the property, not assigned into the dict from
+outside — that is the pattern to copy, not the assignment `trainSAE` uses.
+
+**`falsification/tests/` was never in git until 2026-09-03.** The stock `tests/`
+rule in `.gitignore` — where it means a coverage artefact directory — matched it,
+so the suite CLAUDE.md calls "must stay green" existed on one machine only. It is
+re-included now (`!falsification/tests/`, with `__pycache__` put back after it,
+since the last matching pattern wins). If you add a directory under `falsification/`
+that the stock ignore list happens to name, check `git status` actually sees it.
+
+**Timings, measured.** Training ≈ 1 min/run. Analysis ≈ 1.1 min/checkpoint at 1M
+samples (was 6 min before `update_histograms` was vectorised — 59 of 60 output arrays
+verified bit-identical after that change). A full 13-seed arm is ≈ 13 min train +
+≈ 15 min analyse.
+
+
+---
+
+## Where the detail lives
+
+| file | what it holds |
+|---|---|
+| **this file** | current state, what is established, next steps, the pre-registration, open decisions |
+| `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
+| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does |
+| `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
+| `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
+| `RUNBOOK.md` | commands, arm table, E4 design |
+| `falsification/frontier.py`, `read_penalty_clamp.py`, `read_learned_sigma.py` | the checkpoint-reading analyses behind addenda 3, 4 and 6 — `read_learned_sigma.py`'s own numbers need the addendum-8 bias correction applied by hand; it does not do this itself |
+| `falsification/read_selection_jaccard.py` | Jaccard-overlap-during-training analysis behind addendum 8; applies the bias correction itself — the pattern to copy for re-reading any other `var_flag=1` checkpoint |
+| `falsification/reeval_var_flag1.py` | official `evaluate()` re-run behind addendum 9; writes `evaluation_results_corrected.json` per checkpoint, which `compare_arms.py` (and `frontier.py`) now prefer automatically |
+| `workshop/figs/frontier.pdf` | the frontier figure (addendum 6) |
+## Verify the environment is sane
+
+```bash
+python falsification/preflight.py                 # says which environment you are in
+python -m pytest falsification/tests/ -q          # 112 passing; must stay green
+python falsification/run_arm.py --check           # validates every arm without torch
+python falsification/report_summaries.py --table  # cross-arm liveness
+python falsification/compare_arms.py e1_penalty e1_vsae_ref_gradproj   # any two arms
+```
+
+`preflight.py` now imports each training module through
+`run_arm.load_training_module()` as well as reading its source as text, which closes
+FINDINGS item 5 — it used to pass on a machine that could not train, because every
+wiring check read source as text and missing packages slipped through. The text
+checks stay: they are what makes preflight useful in an environment without torch.

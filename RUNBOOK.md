@@ -67,66 +67,133 @@ dictionary. Everything else is implemented and tested.
 
 ---
 
-## 2. Seeded training arms
+## 2. Seeded training arms — one command
 
-Configs are **hardcoded** in `create_full_config()`. There are no CLI flags for
-model, beta, or seed — edit the function, run, repeat per seed.
+`run_overnight.sh` drives everything. It is safe to interrupt and re-run:
+completed runs are skipped via their `RUN_COMPLETE.json` marker.
 
-Shared base for every arm (the existing sweep point, so results are comparable):
-
-```python
-model_name = "gelu-1l"
-layer = 0
-hook_name = "blocks.0.hook_resid_post"
-dict_size_multiple = 4.0      # d = 2048
-k_fraction = 0.125            # k = 256
-total_steps = 10000
-lr = 8e-4
-auxk_alpha = 1/32
-var_flag = 0
-seed = <1..6>                 # THE ONLY FIELD THAT CHANGES WITHIN AN ARM
+```bash
+./run_overnight.sh --dry-run          # review the plan; no GPU needed
+nohup ./run_overnight.sh --hours 10 > sweep.out 2>&1 &
 ```
 
-### E0 — baseline, 10 seeds (`training_scripts/train_topk.py`)
-Identical config, seeds 1–10. Doubles as the baseline arm for E1–E3.
+Monitor:
 ```bash
-for s in 1 2 3 4 5 6 7 8 9 10; do
-  # edit seed = $s in create_full_config(), then:
-  python training_scripts/train_topk.py --config full
+tail -f logs/sweep_*/sweep.log
+column -t logs/sweep_*/summary.tsv
+```
+
+It gates on framework tests, arm-config validation and preflight before touching
+the GPU; runs arms in priority order so the most valuable work finishes first;
+refuses to start a run that cannot fit the remaining budget; and logs and skips
+individual failures rather than aborting.
+
+**Do NOT edit `create_full_config()` by hand.** That was the old workflow and it
+cannot be automated. Worse, `get_experiment_name()` omits the seed, so running
+seeds that way makes every seed of an arm overwrite the previous one and you end
+up with a single checkpoint. `falsification/run_arm.py` gives each run its own
+`save_dir`; use it, or `run_overnight.sh` which calls it.
+
+Single arm at a time, if you prefer manual control:
+```bash
+python falsification/run_arm.py --check                      # validate all arms, no torch
+python falsification/run_arm.py --arm baseline --seed 1 --dry-run
+python falsification/run_arm.py --arm baseline --seed 1
+```
+
+Arms, in the priority order the sweep uses:
+
+| arm | script | what it is |
+|---|---|---|
+| `baseline` | `train_topk.py` | clean TopK, `activation_penalty=0.0` (E0) |
+| `e2_learned_var` | `train_vsae_topk.py` | `var_flag=1` — the genuinely variational model (E2) |
+| `e1_penalty` | `train_topk.py` | TopK + L2 penalty matched to the vSAE beta (E1) |
+| `e1_vsae_ref` | `train_vsae_topk.py` | fixed-variance vSAE that E1 should reproduce |
+| `e1_vsae_ref_unitinit` | `train_vsae_topk.py` | the same, `decoder_init_scale=1.0` — matches `top_k.py`'s init (E1) |
+| `e1_vsae_ref_gradproj` | `train_vsae_topk.py` | the same again, plus the decoder-gradient projection (E1) |
+| `e3_masked_kl` | `train_vsae_topk_masked_kl.py` | masked-KL, **no** ReLU — matches the preprint (E3) |
+| `e3_masked_kl_relu` | `train_vsae_topk_masked_kl.py` | masked-KL **with** ReLU — matches the released code (E3) |
+| `e2_beta_pilot_*` | `train_vsae_topk.py` | E2 stage-1 beta pilot, `var_flag=1`, one seed each |
+
+**Verify the first `e1_penalty` run before trusting the arm:** confirm
+`activation_cost` appears in the logged losses and is non-zero. If it is absent or
+zero the penalty is not reaching the trainer and the arm is worthless.
+
+**E3's ReLU is a factor, not a confound (resolved 2026-09-03).**
+`vsae_topk_masked_kl.py` omits the `F.relu(mu)` that `vsae_topk.py` applies, so a
+single masked-vs-unmasked arm mixes the KL mask with the ReLU. The preprint's
+equations show no ReLU and the released code has one, and which is "correct"
+depends on what E3 is meant to test — so neither trainer was changed. Instead
+`relu_mu` is a flag and both arms are run. `e3_masked_kl_relu` is the
+like-for-like comparison against `e1_vsae_ref`; plain `e3_masked_kl` matches the
+preprint. Report both; the difference between them *is* the ReLU's contribution.
+
+**E1's remaining asymmetries are factors, not fixes (same pattern as E3's ReLU).**
+Two differences between `e1_penalty` and the vSAE arm were found after the pilot,
+and neither was silently patched. `decoder_init_scale` (0.1 in `vsae_topk.py`, 1.0
+in `top_k.py`) gave `e1_vsae_ref_unitinit`; matching it is what confirmed E1 on the
+pre-registered liveness metric. `project_decoder_grad` gave `e1_vsae_ref_gradproj`:
+`top_k.py` calls `remove_gradient_parallel_to_decoder_directions` every step,
+`vsae_topk.py` imports it and never calls it, while both renormalise the decoder to
+unit norm — so the radial gradient component is applied and immediately undone.
+Each arm differs from its predecessor in exactly one factor, so the contribution is
+measured. Both flags are training-time only and invisible in a state dict;
+`config.json` is the only record of which arm a checkpoint belongs to.
+
+**E2 needs its beta pilot before its confirmatory seeds.** `kl_coeff` is not a
+shared scale across `var_flag`: at 0 the KL is `0.5‖mu‖²`, at 1 the variance term
+contributes ~220 of a ~225 total loss, and at beta=1.0 the model posterior-collapses
+in all six seeds (mu → 1e-3, FVE = 0.0001). Stage 1 is one seed per beta:
+
+```bash
+for b in 0.0001 0.001 0.01 0.1 1; do
+  python falsification/run_arm.py --arm "e2_beta_pilot_$b" --seed 101
 done
 ```
 
-### E1 — degeneracy control, 6 seeds (`training_scripts/train_topk.py`)
-Same as E0 plus `activation_penalty = 1.0` (newly added to `TopKTrainingConfig`;
-defaults to 0.0 so every other arm is unaffected).
-
-**Verify on the first run before launching all six:** confirm
-`activation_penalty_loss` appears in the logged losses and is non-zero. If it is
-absent or zero, the penalty is not wired through and the arm is worthless.
-
-### E2 — is it variational at all?, 6 seeds (`training_scripts/train_vsae_topk.py`)
-Base config plus `kl_coeff = 1.0`, `var_flag = 1`. Checkpoints should be named
-`_learned_var`, not `_fixed_var` — if they say `fixed_var`, the flag did not take.
-Also record the learned sigma (`get_kl_diagnostics` logs `variance_mean`).
-
-### E3 — masked-KL, 6 seeds (`training_scripts/train_vsae_topk_masked_kl.py`)
-Base config plus `kl_coeff = 1.0`. **Confounded as-is:** this trainer omits the
-`F.relu(mu)` that `vsae_topk.py` applies. Either patch one to match the other
-first, or report the comparison as confounded. Do not skip this decision.
-
----
+The selection rule is fixed in `run_arm.py` **before** any pilot result exists:
+*the largest beta whose `frac_variance_explained` is within 0.02 of the baseline
+arm's mean FVE; if none qualifies, the smallest beta tried.* Stage 2 then runs 6
+confirmatory seeds (1–6) at the selected beta — **disjoint from the pilot's seed
+101**, so no checkpoint contributes to both selection and inference.
 
 ## 3. Measure every checkpoint
 
 ```bash
-for ckpt in experiments/*/; do
-  python analysis_scripts/online_histogram_analyzer.py \
-    --model-path "$ckpt" --n-samples 1000000 --no-individual
-done
+./run_analysis.sh            # every completed run; skips ones already analysed
+./run_analysis.sh --force    # re-analyse regardless
 ```
 
 Live-feature count is `feature_usage_summary.features_used` in each emitted
 `comprehensive_summary_*.json`.
+
+**Do not use the plain `for ckpt in experiments/*/` loop that used to be here.** It
+was wrong in three ways (`falsification/FINDINGS_2026-09-02.md`, item 0), and the
+first was silent:
+
+1. The analyzer writes to `<output-dir>/<model_name>/`, and `model_name` comes from
+   the checkpoint directory, which `get_experiment_name()` builds **without the
+   seed**. Every seed of an arm therefore resolves to the same output path, so with
+   the default `--output-dir` each seed overwrote the last and you were left with
+   one summary per arm instead of six. This is the landmine from `CLAUDE.md`
+   resurfacing at the one step where `run_arm.py`'s per-seed `save_dir` does not
+   protect you. Pass `--output-dir` per seed.
+2. `--model-path` must be the `trainer_0/` directory that actually holds `ae.pt`
+   and `config.json`, not its parent.
+3. The script needed a `sys.path` bootstrap to import `dictionary_learning` when
+   invoked from the repo root (now added), and `seaborn` must be installed.
+
+Single checkpoint, if you need one by hand:
+
+```bash
+python analysis_scripts/online_histogram_analyzer.py \
+  --model-path experiments/<arm>/seed<N>/<ckpt>/trainer_0 \
+  --output-dir experiments/<arm>/seed<N> \
+  --n-samples 1000000 --no-individual
+```
+
+`--n-samples 1000000` for every checkpoint without exception: `features_used` is
+sample-size dependent and cross-arm comparability depends on it.
 
 ---
 
@@ -136,6 +203,20 @@ Live-feature count is `feature_usage_summary.features_used` in each emitted
 python falsification/worked_example.py     # sanity: framework still runs
 python -m pytest falsification/tests/ -q   # must stay green
 ```
+
+Cross-arm tables and any two-arm comparison:
+
+```bash
+python falsification/report_summaries.py --table
+python falsification/compare_e1.py --ref gradproj|unitinit|current|aprilmode|klwarmup
+python falsification/compare_arms.py e1_vsae_ref_unitinit e1_vsae_ref_gradproj
+```
+
+`compare_arms.py` is the general form and defaults to `--n-perm 4e6`. At 13 seeds
+the exact enumeration limit is exceeded, so the test goes Monte Carlo and the
+library's 100k default would cap every p at 1e-5 (4.42 sigma) whatever the effect
+size — an underpowered *analysis* of a fully powered design. It prints both
+pre-registered liveness thresholds and marks any p that is sitting on its floor.
 
 Then per arm, with κ = 0.3 as pre-registered:
 

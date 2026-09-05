@@ -13,6 +13,15 @@ Key Features:
 - Minimal storage footprint
 """
 
+import sys
+from pathlib import Path
+
+# analysis_scripts/ is not a package and running this file directly puts that
+# directory on sys.path rather than the repo root, so `import dictionary_learning`
+# fails for the exact invocation documented in RUNBOOK.md and used by
+# run_overnight.sh. Same bootstrap as falsification/run_arm.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,7 +29,6 @@ import seaborn as sns
 import json
 import argparse
 import logging
-from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 from dataclasses import dataclass, asdict
 from tqdm import tqdm
@@ -102,6 +110,42 @@ class OnlineStatistics:
         
         self.min_val = min(self.min_val, value)
         self.max_val = max(self.max_val, value)
+
+    def update_batch(self, values: np.ndarray) -> None:
+        """Vectorised equivalent of calling update() on each element in order.
+
+        The scalar loop this replaces was the single hottest line in the analysis:
+        65,536 Python method calls per batch, ~256 million per checkpoint, which
+        alone accounted for roughly half of `update_histograms`.
+
+        Combines the batch's moments with the running ones using Chan et al.'s
+        parallel variance formula. This is NOT bit-identical to sequential Welford
+        -- floating-point addition is not associative, so the order of operations
+        differs -- but it is the standard pairwise merge and is typically *more*
+        accurate at large n, not less. count, min and max are exact; mean and m2
+        agree with the scalar path to ~1e-12 relative (asserted in the equivalence
+        check that accompanied this change). sum_val is a plain sum either way.
+        """
+        values = np.asarray(values, dtype=np.float64).ravel()
+        n_b = values.size
+        if n_b == 0:
+            return
+
+        mean_b = values.mean()
+        # m2 about the batch's own mean, i.e. sum((x - mean_b)^2).
+        m2_b = ((values - mean_b) ** 2).sum()
+
+        n_a, mean_a, m2_a = self.count, self.mean, self.m2
+        n = n_a + n_b
+        delta = mean_b - mean_a
+
+        self.count = n
+        self.sum_val += values.sum()
+        self.mean = mean_a + delta * (n_b / n)
+        self.m2 = m2_a + m2_b + delta * delta * (n_a * n_b / n)
+
+        self.min_val = min(self.min_val, float(values.min()))
+        self.max_val = max(self.max_val, float(values.max()))
     
     @property
     def variance(self) -> float:
@@ -459,9 +503,9 @@ class ComprehensiveHistogramAnalyzer:
             hist, _ = np.histogram(log_values, bins=self.log_activation_bin_edges)
             self.log_activation_histogram += hist
         
-        # Update overall statistics
-        for val in nonzero_values:
-            self.overall_stats.update(float(val))
+        # Update overall statistics. Vectorised; see OnlineStatistics.update_batch
+        # for why this is not bit-identical to the scalar loop it replaces.
+        self.overall_stats.update_batch(nonzero_values)
         
         # 2. Per-sample statistics
         sample_max_activations = np.max(np.abs(sparse_values), axis=1)
@@ -523,73 +567,63 @@ class ComprehensiveHistogramAnalyzer:
         self.sample_effective_features_histogram += hist
         
         # 3. Feature usage statistics (accumulate for later histogram computation)
-        for i in range(batch_size):
-            indices = sparse_indices[i]
-            values = sparse_values[i]
-            
-            # Remove zero-padded values
-            valid_mask = values != 0
-            if not np.any(valid_mask):
-                continue
-                
-            valid_indices = indices[valid_mask]
-            valid_values = values[valid_mask]
-            
-            # Count selections
-            self.feature_selection_counts[valid_indices] += 1
-            
-            # Sum activation values and squares for mean and variance calculation
-            self.feature_activation_sums[valid_indices] += valid_values
-            self.feature_activation_counts[valid_indices] += 1
-            self.feature_activation_sum_squares[valid_indices] += valid_values ** 2
-            
-            # Track max activations
-            for idx, val in zip(valid_indices, valid_values):
-                self.feature_max_activations[idx] = max(self.feature_max_activations[idx], abs(val))
-            
-            # Count positive activations
-            positive_mask = valid_values > 0
-            self.feature_positive_counts[valid_indices[positive_mask]] += 1
+        #
+        # Vectorised over the whole batch. The per-sample loop this replaces used
+        # `self.feature_selection_counts[valid_indices] += 1`, which is only correct
+        # because TopK selects each feature at most once WITHIN a sample -- fancy-
+        # index += silently drops duplicates. Flattened across the batch indices do
+        # repeat, so this must use bincount (or np.add.at); plain += would undercount.
+        #
+        # Counts are exact. The float sums differ from the per-sample version only in
+        # summation order, at ~1e-15 relative on float64 accumulators.
+        n_feat = self.feature_selection_counts.shape[0]
+        flat_mask = sparse_values != 0
+        fi = sparse_indices[flat_mask].astype(np.intp, copy=False)
+        fv = sparse_values[flat_mask].astype(np.float64, copy=False)
+
+        if fi.size:
+            ones = np.bincount(fi, minlength=n_feat)
+            self.feature_selection_counts += ones
+            self.feature_activation_counts += ones
+            self.feature_activation_sums += np.bincount(fi, weights=fv, minlength=n_feat)
+            self.feature_activation_sum_squares += np.bincount(
+                fi, weights=fv * fv, minlength=n_feat)
+
+            # np.maximum.at is the unbuffered form; plain fancy indexing would keep
+            # only the last write per repeated index rather than the running max.
+            np.maximum.at(self.feature_max_activations, fi, np.abs(fv))
+
+            self.feature_positive_counts += np.bincount(fi[fv > 0], minlength=n_feat)
         
         # 4. 2D histograms and new 1D distributions
-        # Feature index vs activation value
-        for i in range(batch_size):
-            indices = sparse_indices[i]
-            values = sparse_values[i]
-            
-            valid_mask = values != 0
-            if np.any(valid_mask):
-                valid_indices = indices[valid_mask]
-                valid_values = values[valid_mask]
-                
-                # 2D histogram
-                hist2d, _, _ = np.histogram2d(valid_indices, valid_values, 
-                                            bins=[self.feature_index_edges, self.activation_2d_edges])
-                self.feature_index_activation_2d += hist2d
-                
-                # New 1D histogram: Feature index distribution (which features are being selected)
-                hist, _ = np.histogram(valid_indices, bins=self.feature_index_distribution_bin_edges)
-                self.feature_index_distribution_histogram += hist
+        #
+        # One histogram over the flattened batch instead of one per sample. A
+        # histogram is a count, and counts are additive over a partition of the
+        # points, so summing per-sample histograms and histogramming the union give
+        # bit-identical integer results -- this is exact, not an approximation.
+        # It removes 512 np.histogram2d calls per batch, each of which cost far more
+        # in per-call overhead than in actual binning.
+        if fi.size:
+            hist2d, _, _ = np.histogram2d(
+                fi, fv, bins=[self.feature_index_edges, self.activation_2d_edges])
+            self.feature_index_activation_2d += hist2d
+
+            # Feature index distribution (which features are being selected)
+            hist, _ = np.histogram(fi, bins=self.feature_index_distribution_bin_edges)
+            self.feature_index_distribution_histogram += hist
         
-        # Position vs activation value (if positions provided)
+        # Position vs activation value (if positions provided). Same exact-additivity
+        # argument as the feature-index histograms above.
         if positions is not None:
-            for i in range(batch_size):
-                sample_positions = positions[i]
-                values = sparse_values[i]
-                
-                valid_mask = values != 0
-                if np.any(valid_mask):
-                    valid_positions = sample_positions[valid_mask]
-                    valid_values = values[valid_mask]
-                    
-                    # 2D histogram  
-                    hist2d, _, _ = np.histogram2d(valid_positions, valid_values,
-                                                bins=[self.position_edges, self.position_activation_edges])
-                    self.position_activation_2d += hist2d
-                    
-                    # New 1D histogram: Position distribution (which positions have activations)
-                    hist, _ = np.histogram(valid_positions, bins=self.position_distribution_bin_edges)
-                    self.position_distribution_histogram += hist
+            fp = positions[flat_mask]
+            if fp.size:
+                hist2d, _, _ = np.histogram2d(
+                    fp, fv, bins=[self.position_edges, self.position_activation_edges])
+                self.position_activation_2d += hist2d
+
+                # Position distribution (which positions have activations)
+                hist, _ = np.histogram(fp, bins=self.position_distribution_bin_edges)
+                self.position_distribution_histogram += hist
         
         self.samples_processed += batch_size
         

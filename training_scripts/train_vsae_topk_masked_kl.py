@@ -13,6 +13,9 @@ Key improvements:
 import torch
 import os
 import time
+import math          # used by evaluate_model()'s NaN/inf guard; its absence made
+                     # every evaluation die with NameError after the metrics were
+                     # already computed, so no evaluation_results.json was written
 import logging
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -46,6 +49,12 @@ class ExperimentConfig:
     # Model-specific config
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
+    # Apply relu to mu after the encoder. trainers/vsae_topk.py does this
+    # unconditionally and this trainer never did, so E3 confounded the KL mask with
+    # the ReLU (CLAUDE.md landmine 2). The preprint shows no ReLU and the released
+    # code has one; rather than declare either correct, both are run as arms
+    # (e3_masked_kl and e3_masked_kl_relu in falsification/run_arm.py).
+    relu_mu: bool = False
     threshold_beta: float = 0.999
     threshold_start_step: Optional[int] = None
     
@@ -58,6 +67,14 @@ class ExperimentConfig:
     # Schedule configuration
     warmup_steps: Optional[int] = None
     sparsity_warmup_steps: Optional[int] = None
+    # Linear ramp applied to the KL term: total_loss multiplies kl_coeff by
+    # kl_scale = step/kl_warmup_steps until the ramp completes. None keeps the
+    # trainer default of int(0.1 * steps) = 1000 at 10k steps. Set 0 for no ramp.
+    # This matters for E1: the TopK activation penalty has no equivalent ramp, so
+    # leaving this at its default makes a nominally "matched beta" comparison
+    # differ in the schedule of the very quantity being matched
+    # (falsification/FINDINGS_2026-09-02.md, item 7).
+    kl_warmup_steps: Optional[int] = None
     decay_start_step: Optional[int] = None
     
     # Buffer configuration
@@ -205,6 +222,7 @@ class ExperimentRunner:
             k=k,
             var_flag=self.config.var_flag,
             use_april_update_mode=self.config.use_april_update_mode,
+            relu_mu=self.config.relu_mu,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )
@@ -221,6 +239,7 @@ class ExperimentRunner:
             steps=self.config.total_steps,
             lr=self.config.lr,
             kl_coeff=self.config.kl_coeff,
+            kl_warmup_steps=self.config.kl_warmup_steps,
             auxk_alpha=self.config.auxk_alpha,
             warmup_steps=self.config.warmup_steps,
             sparsity_warmup_steps=self.config.sparsity_warmup_steps,
@@ -273,7 +292,7 @@ class ExperimentRunner:
         # var_suffix = "_learned_var" if self.config.var_flag == 1 else "_fixed_var"
         
         return (
-            f"MaskedVSAETopK_{clean_model_name}_"
+            f"MaskedVSAETopK{'_relu' if self.config.relu_mu else ''}_{clean_model_name}_"
             f"d{int(self.config.dict_size_multiple * 512)}_"
             f"k{k_value}_lr{self.config.lr}_kl{self.config.kl_coeff}_"
             f"aux{self.config.auxk_alpha}"
@@ -495,6 +514,7 @@ def create_full_config() -> ExperimentConfig:
         # Model settings
         var_flag=0,  # Fixed variance for memory efficiency
         use_april_update_mode=True,
+        relu_mu=False,
         threshold_beta=0.999,
         
         # OPTIMIZED buffer settings for consistent speed

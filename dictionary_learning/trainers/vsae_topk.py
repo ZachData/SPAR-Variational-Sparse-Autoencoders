@@ -16,6 +16,8 @@ Flow: x → encoder → μ,σ² → reparameterize → z → Top-K(|z|) → spar
                                                 ↳ KL(z)     ↳ L2(x,x̂)
 """
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -98,6 +100,64 @@ class VSAETopKConfig:
     k: int
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
+    # Column norm the tied encoder/decoder weights are initialised to.
+    #
+    # This trainer has always used 0.1; top_k.py calls set_decoder_norm_to_unit_norm
+    # and so uses 1.0. That is a 10x difference in initial decoder scale between the
+    # two arms of E1, and initial scale shapes which features win the TopK
+    # competition early in training -- i.e. exactly the feature-usage distribution
+    # E1's liveness metric measures. It is the last identified difference between
+    # arms whose LOSSES are numerically identical (511.895264 both, six decimals).
+    #
+    # Default 0.1 preserves every existing checkpoint's behaviour. E1 runs it as a
+    # 2-level factor (e1_vsae_ref at 0.1, e1_vsae_ref_unitinit at 1.0) so the init's
+    # contribution is measured rather than assumed, the same way relu_mu is handled
+    # in vsae_topk_masked_kl.py.
+    decoder_init_scale: float = 0.1
+    # Whether to project the component of the decoder gradient parallel to each
+    # decoder column out before the optimiser step.
+    #
+    # top_k.py does this every step (top_k.py:588) and then renormalises the decoder
+    # to unit norm. vsae_topk.py IMPORTS remove_gradient_parallel_to_decoder_directions
+    # and never calls it, while still renormalising whenever
+    # use_april_update_mode=False -- which is exactly the setting both E1 vSAE arms
+    # run under. Renormalising without projecting means the radial part of the
+    # gradient is applied by the optimiser and then immediately undone by the
+    # constraint, so each column's effective learning rate depends on how much of its
+    # gradient happened to point radially. That is a per-feature, data-dependent
+    # perturbation of the learning rate, and it is the leading candidate for E1's
+    # remaining reconstruction gap (FVE differs by 0.0181 with the init matched).
+    #
+    # Default False preserves every existing checkpoint's behaviour. Like relu_mu and
+    # decoder_init_scale, this runs as a measured factor rather than a silent fix:
+    # e1_vsae_ref_gradproj is e1_vsae_ref_unitinit with it enabled.
+    #
+    # Training-time only -- it changes no parameter shape and no forward pass, so it
+    # is invisible in a state dict and config.json is its only record. It does NOT
+    # need reading back in utils.load_dictionary (unlike relu_mu, which changes
+    # encode); it is recorded for provenance, the same way decoder_init_scale is.
+    project_decoder_grad: bool = False
+    # Distribution the tied encoder/decoder columns are drawn from before they are
+    # normalised to `decoder_init_scale`.
+    #
+    # This is the LAST item on E1's frozen code diff (RESULTS addendum 4, item 7).
+    # top_k.py builds its decoder as an nn.Linear and normalises the columns of the
+    # default init, which is kaiming_uniform_(a=sqrt(5)), i.e. i.i.d.
+    # U(-1/sqrt(fan_in), +1/sqrt(fan_in)). vsae_topk.py has always drawn i.i.d.
+    # standard normals. Both give unit-norm columns once normalised, so they differ
+    # only in the DIRECTION distribution -- normalised i.i.d. Gaussian is exactly
+    # uniform on the sphere, normalised i.i.d. uniform is not quite. The bound
+    # itself is irrelevant: it divides out under the column normalisation, which is
+    # why "uniform" can be drawn on (-1, 1) and still match top_k.py exactly.
+    #
+    # Default "gaussian" preserves every existing checkpoint's behaviour. Like
+    # decoder_init_scale and project_decoder_grad this runs as a measured factor
+    # rather than a silent fix: e1_vsae_ref_fullmatch is e1_vsae_ref_gradproj with
+    # it set to "uniform", at which point NO item on the frozen diff is unmatched.
+    #
+    # Not recoverable from a state dict -- it only shapes the initial draw --
+    # so config.json is the only record of which arm a checkpoint belongs to.
+    decoder_init_dist: str = "gaussian"
     dtype: torch.dtype = torch.bfloat16
     device: Optional[torch.device] = None
     log_var_init: float = -2.0  # Initialize log_var around exp(-2) ≈ 0.135 variance
@@ -186,13 +246,47 @@ class VSAETopK(Dictionary, nn.Module):
         dtype = self.config.dtype
         
         # Tied initialization for encoder and decoder
-        w = torch.randn(
-            self.activation_dim, 
-            self.dict_size, 
-            dtype=dtype,
-            device=device
-        )
-        w = w / w.norm(dim=0, keepdim=True) * 0.1
+        dist = getattr(self.config, "decoder_init_dist", "gaussian")
+        if dist == "gaussian":
+            w = torch.randn(
+                self.activation_dim, 
+                self.dict_size, 
+                dtype=dtype,
+                device=device
+            )
+        elif dist == "uniform":
+            # top_k.py's draw, reproduced exactly: its decoder is
+            # nn.Linear(dict_size, activation_dim), whose default init is
+            # kaiming_uniform_(a=sqrt(5)) -- i.i.d. U(-b, +b) with
+            # b = sqrt(6 / ((1 + 5) * fan_in)) = 1/sqrt(fan_in) and fan_in =
+            # dict_size -- and it is then passed through
+            # set_decoder_norm_to_unit_norm.
+            #
+            # The bound has to be the real one, not a convenient (-1, 1). It would
+            # divide out under an exact normalisation, but the shared helper divides
+            # by `norm + eps` with eps = finfo(dtype).eps, and in bfloat16 that eps
+            # is 0.0078 against a column norm of ~0.29 -- so top_k.py's decoder
+            # actually starts at column norm 0.9737, not 1.0, and the offset depends
+            # on the absolute scale of the draw. Drawing on (-1, 1) would land at
+            # 0.9994 instead and quietly reintroduce a scale difference while
+            # claiming to remove one.
+            bound = 1.0 / math.sqrt(self.dict_size)
+            w = torch.empty(
+                self.activation_dim,
+                self.dict_size,
+                dtype=dtype,
+                device=device,
+            ).uniform_(-bound, bound)
+        else:
+            raise ValueError(
+                f"decoder_init_dist must be 'gaussian' or 'uniform', got {dist!r}"
+            )
+        if dist == "uniform":
+            # Same helper top_k.py calls, so the eps is applied identically.
+            w = set_decoder_norm_to_unit_norm(w, self.activation_dim, self.dict_size)
+            w = w * self.config.decoder_init_scale
+        else:
+            w = w / w.norm(dim=0, keepdim=True) * self.config.decoder_init_scale
         
         with torch.no_grad():
             # Set encoder and decoder weights (tied)
@@ -449,16 +543,46 @@ class VSAETopK(Dictionary, nn.Module):
             return analysis
 
     def scale_biases(self, scale: float):
-        """Scale all bias parameters by a given factor."""
+        """Convert the model between activations normalised to unit mean squared
+        norm and raw activations, so a checkpoint saved with `scale=norm_factor`
+        is correct when fed raw activations directly (trainSAE's convention).
+
+        encoder.bias and decoder.bias (or self.bias) sit additively on the same
+        axis as x and mu, related to their normalised-space counterparts by a
+        uniform `scale` multiplier throughout the whole affine-plus-ReLU path
+        (ReLU is positive-homogeneous, so mu_raw = scale * mu_normalised exactly
+        once only these biases are scaled) -- multiplying the bias is exactly
+        right for them.
+
+        log_var is different: it parameterises sigma = exp(0.5*clamp(log_var)),
+        and clamp+exp are not scale-homogeneous, so there is no bias-only
+        transformation that reproduces "the same model, evaluated on activations
+        `scale` times larger" the way there is for encoder/decoder. This used to
+        multiply var_encoder.bias by `scale` too, which was a bug: with scale =
+        norm_factor (~26 for gelu-1l layer 0), log_var_init=-2.0 got saved as
+        -51.5, and reading that checkpoint's log_var on raw activations reports a
+        fully collapsed posterior it never earned (RESULTS addendum 8).
+
+        The fix is to leave var_encoder.bias untouched and instead rescale
+        var_encoder.WEIGHT by 1/scale: log_var = W_var @ x + b_var is exactly
+        preserved under x -> scale*x, W_var -> W_var/scale, b_var unchanged,
+        because that composition is linear (unlike log_var's own downstream
+        clamp+exp, the map x -> log_var has no nonlinearity to break scale
+        consistency). So log_var(raw x) after this method equals log_var(the
+        SAME token's normalised x) before it -- the true trained value, readable
+        directly on raw activations like everything else in this codebase,
+        without a caller needing to know to normalise activations specially for
+        this one sub-module.
+        """
         with torch.no_grad():
             self.encoder.bias.mul_(scale)
             if self.use_april_update_mode:
                 self.decoder.bias.mul_(scale)
             else:
                 self.bias.mul_(scale)
-                
+
             if self.var_flag == 1:
-                self.var_encoder.bias.mul_(scale)
+                self.var_encoder.weight.div_(scale)
 
     def normalize_decoder(self) -> None:
         """
@@ -710,6 +834,9 @@ class VSAETopKTrainer(SAETrainer):
         auxk_alpha: Optional[float] = None,
         var_flag: Optional[int] = None,
         use_april_update_mode: Optional[bool] = None,
+        decoder_init_scale: Optional[float] = None,
+        project_decoder_grad: Optional[bool] = None,
+        decoder_init_dist: Optional[str] = None,
         device: Optional[str] = None,
         **kwargs  # Catch any other parameters
     ):
@@ -727,6 +854,9 @@ class VSAETopKTrainer(SAETrainer):
                 k=k,
                 var_flag=var_flag or 0,
                 use_april_update_mode=use_april_update_mode if use_april_update_mode is not None else True,
+                decoder_init_scale=decoder_init_scale if decoder_init_scale is not None else 0.1,
+                project_decoder_grad=project_decoder_grad if project_decoder_grad is not None else False,
+                decoder_init_dist=decoder_init_dist if decoder_init_dist is not None else "gaussian",
                 device=device_obj
             )
         
@@ -983,7 +1113,18 @@ class VSAETopKTrainer(SAETrainer):
         # Calculate loss and backpropagate
         loss = self.loss(activations, step=step)
         loss.backward()
-        
+
+        # Remove the decoder-gradient component parallel to each decoder column,
+        # before clipping, matching top_k.py's ordering (project -> clip -> step ->
+        # renormalise). Off by default; see project_decoder_grad on VSAETopKConfig.
+        if self.model_config.project_decoder_grad:
+            self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
+                self.ae.decoder.weight,
+                self.ae.decoder.weight.grad,
+                self.ae.activation_dim,
+                self.ae.dict_size,
+            )
+
         # Apply gradient clipping
         torch.nn.utils.clip_grad_norm_(
             self.ae.parameters(), 
@@ -1013,6 +1154,15 @@ class VSAETopKTrainer(SAETrainer):
             'k': self.model_config.k,
             'var_flag': self.model_config.var_flag,
             'use_april_update_mode': self.model_config.use_april_update_mode,
+            # Init scale is not recoverable from trained weights; config.json is the
+            # only record of which E1 init arm a checkpoint belongs to.
+            'decoder_init_scale': self.model_config.decoder_init_scale,
+            # Training-time only and invisible in the state dict; recorded so a
+            # checkpoint's E1 gradient-projection arm is recoverable.
+            'project_decoder_grad': self.model_config.project_decoder_grad,
+            # Shapes only the initial draw, so it is invisible in the state dict;
+            # recorded so a checkpoint's E1 init-distribution arm is recoverable.
+            'decoder_init_dist': self.model_config.decoder_init_dist,
             'log_var_init': self.model_config.log_var_init,
             'dtype': str(self.model_config.dtype),
             'device': str(self.model_config.device),

@@ -43,7 +43,10 @@ class ExperimentConfig:
     lr: Optional[float] = None  # Auto-computed if None
     warmup_steps: Optional[int] = None  # Will be auto-computed if None
     auxk_alpha: float = 1/32  # Dead feature resurrection coefficient
-    # feature_penalty_alpha: float = 0.01  # L2 penalty on features (KL-style)
+    # L2 penalty on the full pre-TopK activation vector, in units directly
+    # comparable to the vSAE's kl_coeff. 0.0 = clean TopK baseline (E0);
+    # set to the vSAE's beta for the degeneracy control (E1).
+    activation_penalty: float = 0.0
     threshold_beta: float = 0.999  # Threshold EMA coefficient
     threshold_start_step: int = 1000  # When to start threshold updates
     
@@ -194,7 +197,7 @@ class ExperimentRunner:
             steps=self.config.total_steps,
             lr=self.config.lr,  # Will be auto-computed if None
             auxk_alpha=self.config.auxk_alpha,
-            # feature_penalty_alpha=self.config.feature_penalty_alpha,
+            activation_penalty=self.config.activation_penalty,
             threshold_beta=self.config.threshold_beta,
             threshold_start_step=self.config.threshold_start_step,
             warmup_steps=warmup_steps,  # Explicitly override the problematic default
@@ -234,7 +237,7 @@ class ExperimentRunner:
             f"TopK_KL_{clean_model_name}_"
             f"d{int(self.config.dict_size_multiple * 512)}_"  # Assuming d_model=512 for gelu-1l
             f"k{self.config.k}_auxk{self.config.auxk_alpha}_"
-            f"lossadd_0.01"
+            f"pen{self.config.activation_penalty}"
             f"{lr_str}"
         )
         
