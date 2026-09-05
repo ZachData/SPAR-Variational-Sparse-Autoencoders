@@ -10,27 +10,48 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-05. Next steps #0 from the prior session is now closed:
-`falsification/reeval_var_flag1.py` re-ran the official `evaluate()` pipeline on
-all 37 on-disk `var_flag=1` checkpoints with the `scale_biases` bug corrected.
-**The result is reassuring, not alarming**: officially-reported FVE moves by
-≈0.003-0.006 once corrected, not the ≈0.12 a pre-existing uncommitted proxy script
-had estimated — that proxy figure does not survive contact with the real pipeline
-and is superseded (RESULTS addendum 9). The 94.7%/5.3% reparameterisation/KL split
-that is E2's headline finding is essentially unchanged (93.6%/6.4% corrected).
-`evaluate()`'s own small-sample `frac_alive` did move a lot (0.85→1.00 for
-`e2_confirm`) but the pre-registered liveness thresholds are untouched by this bug
-entirely, because the histogram analyzer that computes them never samples
-(`training=False` unconditionally). Corrected results are written to
-`evaluation_results_corrected.json` alongside every affected checkpoint's original
-file (left untouched for the record); `compare_arms.py` and `frontier.py` now
-prefer the corrected file automatically. Branch `claude/falsification-framework`,
-GPU idle, not pushed to origin. 11 arms, 153 checkpoints on disk.
+Last updated: 2026-09-05. Two things landed this session, in order:
+
+1. **Next steps #0 from the prior session is closed.**
+   `falsification/reeval_var_flag1.py` re-ran the official `evaluate()` pipeline
+   on all 37 on-disk `var_flag=1` checkpoints with the `scale_biases` bug
+   corrected. **The result is reassuring, not alarming**: officially-reported FVE
+   moves by ≈0.003-0.006 once corrected, not the ≈0.12 a pre-existing uncommitted
+   proxy script had estimated — that proxy figure does not survive contact with
+   the real pipeline and is superseded (RESULTS addendum 9). The 94.7%/5.3%
+   reparameterisation/KL split that is E2's headline finding is essentially
+   unchanged (93.6%/6.4% corrected). `evaluate()`'s own small-sample `frac_alive`
+   did move a lot (0.85→1.00 for `e2_confirm`) but the pre-registered liveness
+   thresholds are untouched by this bug entirely, because the histogram analyzer
+   that computes them never samples (`training=False` unconditionally). Corrected
+   results are written to `evaluation_results_corrected.json` alongside every
+   affected checkpoint's original file (left untouched for the record);
+   `compare_arms.py` and `frontier.py` now prefer the corrected file
+   automatically.
+2. **E4's "missing weights" blocker is resolved — the checkpoints were found, not
+   retrained.** A search of other drives mounted on this machine turned up a
+   prior/parallel copy of this project on `HDD_1TB` holding the actual `ae.pt`
+   files for both the preprint's Pythia baseline
+   (`TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`) and its actual vSAE
+   (`VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var`, `var_flag=0`).
+   Both verified to load and run under the current codebase, checksummed and
+   copied into `experiments/e4_pythia_baseline/seed42/` and
+   `experiments/e4_pythia_vsae/seed42/`. `config.json` recovers the original
+   hyperparameters directly (single seed 42; `auxk_alpha` 0.03125 vs. 0, CLAUDE.md
+   landmine 3's confound confirmed in the checkpoint itself). The per-feature
+   usage array E4's size-response curve needs was already sitting in the
+   committed `all_histograms_*.npz`. **No retraining decision was needed after
+   all** — the only remaining gap is writing the SAEBench-side scorer (Next steps
+   #0; not yet scoped).
+
+Branch `claude/falsification-framework`, GPU idle, pushed to origin and merged to
+`master`. 11 arms in the confirmatory battery (153 checkpoints) plus the 2 newly
+recovered single-seed Pythia checkpoints for E4.
 
 Prior session (2026-09-04, second session), for context: (1) the sigma-annealing
 arm (`e2_sigma_low_init`, addendum 7) closed 84% of E2's FVE gap to baseline; (2)
-E4 turned out to be **blocked** on missing Pythia checkpoint weights, not merely
-unstarted; (3) building the Jaccard-overlap instrumentation to explain (1)'s
+E4 was believed **blocked** on missing Pythia checkpoint weights (later found —
+see above); (3) building the Jaccard-overlap instrumentation to explain (1)'s
 residual gap surfaced **a real bug** in `scale_biases` that corrupted every saved
 `var_flag=1` checkpoint's learned sigma (addendum 8) — corrected, RESULTS
 addendum 3's "the posterior collapses completely" and "sampling noise is harmless
@@ -47,14 +68,15 @@ numbers were unaffected.
 | Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
 | Newest result | **The official `evaluate()` re-run (addendum 9) shows the `scale_biases` bug moved reported FVE by ≈0.005, not the ≈0.12 an uncommitted proxy had estimated; E2's 94.7%/5.3% split is essentially unchanged (93.6%/6.4%)** |
-| Blocking | Nothing blocked on compute. Next steps #0 is closed. See Next steps for the current priority order |
+| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered from an external drive (2026-09-05); the SAEBench scorer is the one remaining piece — see Next steps #0 |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
 
 The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
 on every comparison. E1, E2 and E3 have all landed; E0 and E4 have never been
-reported (E4 is now known to be blocked, not just unstarted — see Next steps #0).
+reported (E4's checkpoints are now recovered — see Next steps #0 — but the
+SAEBench scorer is still unwritten).
 
 **How E1 landed.** The code diff between the two arms was enumerated by reading
 `top_k.py` and `vsae_topk.py` against each other, plus the two training scripts,
@@ -333,10 +355,10 @@ learned sigma" above and RESULTS addendum 8.
 ## Next steps, in priority order
 
 The official re-evaluation is done (RESULTS addendum 9 — see "Closed" below).
-Nothing on this list is blocked on compute right now; E4 is blocked on data that
-does not exist on this machine.
+E4's missing-weights blocker is resolved (found on an external drive, 2026-09-05);
+nothing on this list is blocked on compute or data right now.
 
-### 0. E4 is blocked on missing weights, not on the scorer function
+### 0. E4 — write the SAEBench SCR/TPP scorer against the recovered checkpoints
 
 Checked 2026-09-04 (second session). `falsification/size_control.py` is fully
 implemented and tested; the missing piece was believed to be only the
@@ -359,19 +381,41 @@ addendum 7) — so running `size_control.py` against them would not be testing t
 thing E4 was designed to test; there is no size confound in this battery to
 control for.
 
-**Two ways forward, both real experiments, neither a quick pickup:**
-* Retrain the Pythia baseline + vSAE at the preprint's original scale
-  (d=8192, layer 3, matching `auxk0.03125` on both arms this time to also close
-  the AuxK confound CLAUDE.md flags) — a new pre-registration decision (beta,
-  seed count, whether to fix AuxK or preserve the original confound for a direct
-  preprint comparison), and substantially more GPU time than anything else in
-  this battery (4x the dictionary size, a bigger LM).
-* Or locate the original checkpoints if they exist somewhere off this machine
-  (a prior session's disk, cloud storage) and copy them in — cheapest if
-  available, unverified whether they exist anywhere at all.
+**FOUND, 2026-09-05 — retraining is not needed.** The original `ae.pt` weights
+exist on an external drive (`/run/media/system/HDD_1TB/.../Desktop/Top/spar2/
+experiments/`), a prior/parallel session's copy of this project not previously
+searched. Both checkpoints — `TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`
+(baseline) and `VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var`
+(the preprint's actual vSAE, `var_flag=0` — CLAUDE.md landmine 1) — load and run
+cleanly under the current codebase (verified directly: `from_pretrained`, a
+forward pass, correct `dict_size`/`k`/`var_flag`). `config.json` recovers the
+full original hyperparameters: seed 42 (single seed, no replication — matches the
+preprint's own limitation), `total_steps=10001`, `lr` auto-scaled for the larger
+dictionary (`0.000282842712474619`) on the baseline vs. fixed `8e-4` on the vSAE,
+`kl_coeff=1.0`, `auxk_alpha` **0.03125 vs. 0** — CLAUDE.md landmine 3's AuxK
+confound, confirmed present in the actual checkpoints rather than inferred from
+directory names. Checksummed-copied into `experiments/e4_pythia_baseline/seed42/`
+and `experiments/e4_pythia_vsae/seed42/` (each `md5sum`-verified against the
+source). The full per-feature usage array E4's `top_usage` curve needs
+(`feature_selection_counts`, length 8192, 7379 nonzero — exactly matching
+`features_used`) is already sitting in the committed
+`all_histograms_*.npz` for the baseline; nothing further needs computing there.
 
-Until one of those happens, E4 stays on the list but is not actionable in a
-normal continuation session.
+**What is actually still missing is only the SAEBench-side `scorer` closure** —
+`falsification/size_control.py`'s framework (`select_features`,
+`size_response_curve`, `verdict`) is implemented and tested against synthetic
+scorers; it needs a real function that takes a `keep_indices` array, masks the
+baseline `AutoEncoderTopK`'s encoder/decoder accordingly, and returns an SCR (or
+TPP) score via the vendored `SAEBench-main/sae_bench/evals/scr_and_tpp/main.py`
+against Pythia-70m-deduped. That integration — reading `main.py`'s actual API and
+adapting it to score a masked, in-memory dictionary rather than one loaded from a
+hub — has not been scoped yet and is the next concrete piece of work.
+
+Since both checkpoints are single-seed (matching the preprint exactly), the
+result this produces is necessarily **descriptive** — one baseline curve, one
+vSAE point on it — not a confirmatory permutation test; that is consistent with
+how E4 was designed (the curve comes from masking one dictionary at different
+sizes, not from retraining), but it should be stated as such when reported.
 
 ### 1. Desk work — no GPU, no new code
 
@@ -849,9 +893,11 @@ that `vsae_topk.py` applies, so either patch one to match the other or report th
 comparison as confounded.
 
 ### E4 — Size-matched SCR/TPP control. No training. Implemented in `falsification/size_control.py`.
-> **Outcome: not started.** `size_control.py` is fully implemented and tested;
-> blocked on the original Pythia checkpoint weights, which do not exist anywhere
-> on this machine. See Next steps #0.
+> **Outcome: not started, but no longer blocked.** `size_control.py` is fully
+> implemented and tested; the original Pythia checkpoint weights, once believed
+> lost, were found on an external drive and copied in 2026-09-05
+> (`experiments/e4_pythia_baseline/`, `experiments/e4_pythia_vsae/`, seed 42).
+> The only remaining piece is the SAEBench-side scorer. See Next steps #0.
 
 Measure SCR/TPP as a **function of dictionary size** for the baseline SAE, then
 ask where the vSAE's score falls on that curve.
@@ -880,8 +926,10 @@ Still to write: the SAEBench-side scorer that turns a kept-index set into an SCR
 score. Everything around it is implemented and tested against synthetic scorers
 with known ground truth.
 
-**Budget:** ~28 training runs. At 20–40 min each on the 3080, roughly 10–19 hours,
-parallelisable across days. E4 needs no training and should start immediately.
+**Budget:** no training runs — masking and re-scoring an existing dictionary at
+each grid point is the whole design, and both checkpoints now exist on disk
+(2026-09-05). The remaining cost is entirely the SAEBench scorer integration and
+however long its SCR/TPP eval takes to run per grid point.
 
 **Pre-registration.** Per simulation finding 2, the battery above and its order are
 fixed before any seeded run is inspected. Adding an arm after seeing results is
