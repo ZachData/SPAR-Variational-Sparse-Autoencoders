@@ -78,6 +78,20 @@ def _by_seed(root: Path, pattern: str) -> list[tuple[int, str]]:
     return [(s, out[s]) for s in sorted(out)]
 
 
+def _corrected_or_original(f: str) -> str:
+    """Prefer evaluation_results_corrected.json when present.
+
+    RESULTS addendum 8 / reeval_var_flag1.py: every var_flag=1 checkpoint saved
+    before the scale_biases fix has its official evaluation_results.json computed
+    against a corrupted var_encoder.bias, which understates sampling noise. The
+    corrected re-evaluation is written alongside it rather than overwriting it
+    (the original stays as the historical record), so this is the one place that
+    needs to know to prefer the corrected file.
+    """
+    corrected = f.replace("evaluation_results.json", "evaluation_results_corrected.json")
+    return corrected if Path(corrected).exists() else f
+
+
 def arm_values(root: Path) -> tuple[dict[str, dict[int, float]], list[int]]:
     """Per-seed metric values, keyed by seed so two arms can be paired honestly.
 
@@ -88,7 +102,7 @@ def arm_values(root: Path) -> tuple[dict[str, dict[int, float]], list[int]]:
     vals: dict[str, dict[int, float]] = {k: {} for k in EVAL_KEYS + LIVENESS_KEYS}
     seeds: set[int] = set()
     for seed, f in _by_seed(root, "seed*/*/evaluation_results.json"):
-        d = json.load(open(f))
+        d = json.load(open(_corrected_or_original(f)))
         seeds.add(seed)
         for k in EVAL_KEYS:
             if k in d:

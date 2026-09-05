@@ -10,37 +10,51 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-04 (second session). Three things landed this session, in
-order: (1) the sigma-annealing arm (`e2_sigma_low_init`, addendum 7) closed 84% of
-E2's FVE gap to baseline; (2) E4 turned out to be **blocked** on missing Pythia
-checkpoint weights, not merely unstarted; (3) building the Jaccard-overlap
-instrumentation to explain (1)'s residual gap surfaced **a real bug** in
-`scale_biases` that corrupted every saved `var_flag=1` checkpoint's learned sigma
-(addendum 8) — corrected, RESULTS addendum 3's "the posterior collapses
-completely" and "sampling noise is harmless at eval time" both reverse, and the
-corrected Jaccard read then confirms Claims-worth-opening #3 cleanly. **Read
-addendum 8 before trusting anything addendum 3 claimed.** Bug fixed in the
-trainer code; addendum 7's own numbers are unaffected. Full detail under **What is
-established** below. Branch `claude/falsification-framework`, GPU idle, not pushed
-to origin. 11 arms, 153 checkpoints on disk.
+Last updated: 2026-09-05. Next steps #0 from the prior session is now closed:
+`falsification/reeval_var_flag1.py` re-ran the official `evaluate()` pipeline on
+all 37 on-disk `var_flag=1` checkpoints with the `scale_biases` bug corrected.
+**The result is reassuring, not alarming**: officially-reported FVE moves by
+≈0.003-0.006 once corrected, not the ≈0.12 a pre-existing uncommitted proxy script
+had estimated — that proxy figure does not survive contact with the real pipeline
+and is superseded (RESULTS addendum 9). The 94.7%/5.3% reparameterisation/KL split
+that is E2's headline finding is essentially unchanged (93.6%/6.4% corrected).
+`evaluate()`'s own small-sample `frac_alive` did move a lot (0.85→1.00 for
+`e2_confirm`) but the pre-registered liveness thresholds are untouched by this bug
+entirely, because the histogram analyzer that computes them never samples
+(`training=False` unconditionally). Corrected results are written to
+`evaluation_results_corrected.json` alongside every affected checkpoint's original
+file (left untouched for the record); `compare_arms.py` and `frontier.py` now
+prefer the corrected file automatically. Branch `claude/falsification-framework`,
+GPU idle, not pushed to origin. 11 arms, 153 checkpoints on disk.
+
+Prior session (2026-09-04, second session), for context: (1) the sigma-annealing
+arm (`e2_sigma_low_init`, addendum 7) closed 84% of E2's FVE gap to baseline; (2)
+E4 turned out to be **blocked** on missing Pythia checkpoint weights, not merely
+unstarted; (3) building the Jaccard-overlap instrumentation to explain (1)'s
+residual gap surfaced **a real bug** in `scale_biases` that corrupted every saved
+`var_flag=1` checkpoint's learned sigma (addendum 8) — corrected, RESULTS
+addendum 3's "the posterior collapses completely" and "sampling noise is harmless
+at eval time" both reverse, and the corrected Jaccard read then confirms
+Claims-worth-opening #3 cleanly. Bug fixed in the trainer code; addendum 7's own
+numbers were unaffected.
 
 ## Status
 
 | | |
 |---|---|
-| Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism has been corrected twice this session (addenda 7, then 8) |
+| Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
-| Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms |
+| Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **A `scale_biases` bug corrupted every saved `var_flag=1` checkpoint's learned sigma; corrected, the posterior never collapses and eval-time sampling noise costs ≈0.12 FVE, not ≈0** — RESULTS addendum 8 |
-| Blocking | Nothing blocked on compute. E2's officially-reported FVE for every `var_flag=1` arm except `e2_sigma_low_init` needs re-evaluation with the bug fixed — see Next steps #0 |
+| Newest result | **The official `evaluate()` re-run (addendum 9) shows the `scale_biases` bug moved reported FVE by ≈0.005, not the ≈0.12 an uncommitted proxy had estimated; E2's 94.7%/5.3% split is essentially unchanged (93.6%/6.4%)** |
+| Blocking | Nothing blocked on compute. Next steps #0 is closed. See Next steps for the current priority order |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
 
 The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
 on every comparison. E1, E2 and E3 have all landed; E0 and E4 have never been
-reported (E4 is now known to be blocked, not just unstarted — see Next steps #1).
+reported (E4 is now known to be blocked, not just unstarted — see Next steps #0).
 
 **How E1 landed.** The code diff between the two arms was enumerated by reading
 `top_k.py` and `vsae_topk.py` against each other, plus the two training scripts,
@@ -171,24 +185,31 @@ normalised to unit mean squared norm and the clamp acts there, but checkpoints a
 saved with biases scaled back up by `norm_factor`. In the saved space the maximum
 reads 4.96 and the headroom looks like a factor of 2 rather than 51.
 
-### E2 — it is the sampling, not the KL (94.7% / 5.3%)
+### E2 — it is the sampling, not the KL (93.6% / 6.4%, corrected)
 
 `kl_coeff` is not a shared scale across `var_flag`. A pre-registered two-stage design
 (pilot at seed 101, confirmatory at seeds disjoint from it) found that **no beta in
 {1e-4 … 1} puts a `var_flag=1` model within 0.02 FVE of baseline** — FVE degrades
 monotonically (0.4581 → 0.0001) and never approaches baseline's 0.9003.
 
-The decisive run was a control with **sampling on and the KL entirely off**:
+The decisive run was a control with **sampling on and the KL entirely off**. Numbers
+below are from the official `evaluate()` re-run with the `scale_biases` bug
+corrected (RESULTS addendum 9); the originally-reported (buggy) values were
+0.460658 and 0.484106 and gave a 94.7%/5.3% split — the corrected split below is
+essentially the same:
 
-| config | FVE (13 seeds) |
+| config | FVE (13 seeds, corrected) |
 |---|---|
 | baseline (deterministic) | 0.900159 ± 0.0006 |
-| `var_flag=1`, beta=1e-4 | 0.460894 ± 0.0025 |
-| `var_flag=1`, **beta=0** | 0.484106 ± 0.0022 |
+| `var_flag=1`, beta=1e-4 (`e2_confirm`) | 0.458146 ± 0.0040 |
+| `var_flag=1`, **beta=0** (`e2_sampling_only`) | 0.486276 ± 0.0068 |
 
-Removing the KL entirely recovers **5.3%** of the gap. The other **94.7% is the
+Removing the KL entirely recovers **6.4%** of the gap. The other **93.6% is the
 reparameterisation**. This is a claim about the architecture, not a hyperparameter,
-and it is much stronger than the beta-tuning story E2 was built on.
+and it is much stronger than the beta-tuning story E2 was built on. **The split is
+robust to the `scale_biases` correction** — it moved by ~1 percentage point, well
+inside this design's noise floor, which is itself worth stating plainly: the bug
+that reversed the collapse story (addendum 8) left this headline number alone.
 
 Caveats that must travel with any E2 statement:
 * `e2_confirm` characterises a model at FVE ≈ 0.46, not a healthy one. Liveness on it
@@ -239,11 +260,15 @@ revision.
 
 **And the "harmless at eval time" claim inverts too.** Recomputed with corrected
 sigma (a reconstruction-quality proxy, 5 seeds each, addendum 8 — not yet the
-official `evaluate()` pipeline, see Next steps #0): turning sampling off recovers
-≈**0.12 FVE** for both `e2_confirm` and `e2_sampling_only`, not 0.000012. A real
-share of E2's damage is paid every time the sampled model is evaluated, because it
-never actually stops sampling with meaningful noise — it only *looked* like it had
-in the buggy reading.
+official `evaluate()` pipeline): turning sampling off recovers ≈**0.12 FVE** for
+both `e2_confirm` and `e2_sampling_only`, not 0.000012. **This specific 0.12
+figure did not survive the official re-run (addendum 9, Next steps #0, now
+closed)** — the real `evaluate()` pipeline, run on the same corrected checkpoints,
+moves reported FVE by only ≈0.005 relative to the buggy version, an order of
+magnitude below the proxy's estimate, and its own absolute numbers do not match
+either side of the proxy's comparison. What does survive is the *qualitative*
+claim the proxy was built to support — the posterior does not collapse and eval
+still samples with real noise — just not this specific magnitude.
 
 E2's "94.7% is the reparameterisation" was built on the (now-corrected) prediction
 that sigma starts at exp(−1) = 0.368 (`log_var_init = −2.0`) when mu is still
@@ -256,11 +281,12 @@ should recover most of the gap if a bad initial noise scale is the whole story.
 0.484 → **0.834** against baseline's 0.900 — **84.1%** of the gap closes — and
 `frac_alive` reaches **1.0000**, exceeding baseline's 0.9934. A real 5-sigma
 residual against baseline remains (d = +103 on FVE). Because `e2_sigma_low_init`'s
-own measurement is unaffected by the bug, **this finding stands as reported** —
-and if anything the true gap it closes is larger than 84%, not smaller, since
-`e2_sampling_only`'s reported 0.484 (the baseline this closes *against*) was
-itself measured with artificially-suppressed noise and likely overstates that
-arm's true reconstruction quality.
+own measurement is unaffected by the bug, **this finding stands as reported**.
+The speculation that `e2_sampling_only`'s reported 0.484 baseline was itself
+suppressed by the bug, and so understated the true residual gap, **did not pan
+out**: the official re-run (addendum 9) puts `e2_sampling_only`'s corrected FVE at
+0.486, essentially identical to the buggy 0.484 it is compared against — so
+addendum 7's 84.1% and its residual gap stand exactly as reported, not larger.
 
 **The residual gap is now explained too — addendum 8.** Building the Jaccard-
 overlap instrumentation this correction was found inside of (Next steps #1, now
@@ -273,6 +299,20 @@ never closes. Selection instability tracks reconstruction quality in exactly the
 predicted direction, confirming Claims-worth-opening #3's mechanism (a first pass
 at this same measurement, using the not-yet-discovered-as-buggy checkpoints, had
 found the opposite and is superseded).
+
+**The official re-evaluation is done — addendum 9, 2026-09-05.**
+`falsification/reeval_var_flag1.py` re-ran the real `evaluate()` pipeline (not a
+proxy) on all 37 on-disk `var_flag=1` checkpoints with the bug corrected. The
+result: officially-reported FVE moves by ≈0.003-0.006, not the ≈0.12 the
+uncommitted proxy script had estimated — that number is retracted as a measure of
+what the *official* pipeline reports, though the qualitative posterior-does-not-
+collapse finding it was built on stands. `evaluate()`'s own small-sample
+`frac_alive` did rise substantially (0.85→1.00 for `e2_confirm`), but the
+pre-registered liveness thresholds are untouched, because `online_histogram_
+analyzer.py` calls `encode(..., training=False)` unconditionally and never
+samples. The 94.7%/5.3% split is essentially unchanged at 93.6%/6.4% corrected.
+See "E2 — it is the sampling, not the KL" above and RESULTS addendum 9 for the
+full table.
 
 ### Pre-registered but never reported
 
@@ -292,34 +332,11 @@ learned sigma" above and RESULTS addendum 8.
 
 ## Next steps, in priority order
 
-The Jaccard-overlap instrumentation is done (RESULTS addendum 8 — see "Closed"
-below) and its byproduct, the `scale_biases` bug fix, is the new top priority.
+The official re-evaluation is done (RESULTS addendum 9 — see "Closed" below).
+Nothing on this list is blocked on compute right now; E4 is blocked on data that
+does not exist on this machine.
 
-### 0. Re-evaluate E2's officially-reported FVE with the `scale_biases` bug fixed
-
-RESULTS addendum 8: every saved `var_flag=1` checkpoint's `var_encoder.bias` was
-corrupted by a bug in `scale_biases` (fixed 2026-09-04, second session), and the
-standard `evaluate()` pipeline reads it uncorrected. A proxy metric (not the
-official `loss_recovered` pipeline) suggests the officially-reported FVE for
-`e2_confirm`, `e2_sampling_only`, `e2_learned_var` and the `e2_beta_pilot_*` arms
-understates how much sampling costs — by ≈0.12 FVE in the proxy, on the same
-checkpoints already on disk. **No retraining is needed**: only `var_encoder.bias`
-and `var_encoder.weight` need correcting (encoder/decoder are untouched by the
-bug), so this is a re-evaluation pass over existing checkpoints, not a new
-training run.
-
-What this needs: script that (1) loads each existing checkpoint, (2) applies the
-bias-correction (divide `var_encoder.bias` and `var_encoder.weight` by
-`norm_factor`, exactly as `read_selection_jaccard.py`'s `mean_jaccard` does),
-(3) re-saves a corrected copy (or evaluates in-memory), and (4) re-runs the
-official `evaluate()`/`loss_recovered()` on it with `normalize_batch=True` fed
-correctly-scaled activations, so the number is directly comparable to everything
-else `compare_arms.py` reports. Until this is done, treat every reported FVE for
-a `var_flag=1` arm **except `e2_sigma_low_init`** (whose sigma saturates the
-clamp floor regardless of the bug, so its own numbers needed no correction) as a
-likely-optimistic lower bound on how much sampling actually costs.
-
-### 1. E4 is blocked on missing weights, not on the scorer function
+### 0. E4 is blocked on missing weights, not on the scorer function
 
 Checked 2026-09-04 (second session). `falsification/size_control.py` is fully
 implemented and tested; the missing piece was believed to be only the
@@ -356,13 +373,13 @@ control for.
 Until one of those happens, E4 stays on the list but is not actionable in a
 normal continuation session.
 
-### 2. Desk work — no GPU, no new code
+### 1. Desk work — no GPU, no new code
 
 Both items under **Claims worth opening** (#4, the field-level projection claim;
 #5, the seed-count survey) are pure analysis/writing and can be done from a
 remote/no-GPU session.
 
-### 3. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
+### 2. Optional — extend the E2 beta grid downward (1e-5, 1e-6)
 
 The beta=0 control (`e2_sampling_only`) makes this much less interesting: if
 94.7% of the damage is the sampling, no smaller beta recovers a healthy model.
@@ -370,6 +387,25 @@ Doing it anyway would close the question formally, but it is a **new
 pre-registration**, not a continuation of this one.
 
 ---
+
+## Closed — the official re-evaluation of E2's FVE (2026-09-05)
+
+Full detail in RESULTS addendum 9, and in **What is established** above (E2's
+section and the learned-sigma section). Kept here as the historical record since
+a fresh reader may otherwise look for this under "next steps."
+
+The prior session's addendum 8 fixed a real bug (`scale_biases` corrupting
+`var_encoder.bias`) but measured its consequences with an uncommitted proxy
+script, flagged for official re-measurement. `falsification/reeval_var_flag1.py`
+did that: it re-runs the actual `evaluate()` pipeline on all 37 on-disk
+`var_flag=1` checkpoints with the bug corrected (bias-correction applied
+in-memory after loading; a corrected copy of `evaluation_results.json` is written
+alongside the original rather than overwriting it). The proxy's ≈0.12 FVE
+estimate does not replicate — the official numbers move by ≈0.005 — but E2's
+central finding (94.7%/5.3%, now 93.6%/6.4%) is robust to the correction, which is
+the answer that actually matters for the paper. `compare_arms.py` and
+`frontier.py` now prefer the corrected file automatically, so no other script
+needed updating.
 
 ## Closed — E1's decomposition (2026-09-04)
 
@@ -813,7 +849,9 @@ that `vsae_topk.py` applies, so either patch one to match the other or report th
 comparison as confounded.
 
 ### E4 — Size-matched SCR/TPP control. No training. Implemented in `falsification/size_control.py`.
-> **Outcome: not started.** Blocked only on the SAEBench-side scorer. Next steps #2.
+> **Outcome: not started.** `size_control.py` is fully implemented and tested;
+> blocked on the original Pythia checkpoint weights, which do not exist anywhere
+> on this machine. See Next steps #0.
 
 Measure SCR/TPP as a **function of dictionary size** for the baseline SAE, then
 ask where the vSAE's score falls on that curve.
@@ -943,12 +981,13 @@ verified bit-identical after that change). A full 13-seed arm is ≈ 13 min trai
 |---|---|
 | **this file** | current state, what is established, next steps, the pre-registration, open decisions |
 | `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
-| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3 |
+| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does |
 | `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
 | `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
 | `RUNBOOK.md` | commands, arm table, E4 design |
 | `falsification/frontier.py`, `read_penalty_clamp.py`, `read_learned_sigma.py` | the checkpoint-reading analyses behind addenda 3, 4 and 6 — `read_learned_sigma.py`'s own numbers need the addendum-8 bias correction applied by hand; it does not do this itself |
 | `falsification/read_selection_jaccard.py` | Jaccard-overlap-during-training analysis behind addendum 8; applies the bias correction itself — the pattern to copy for re-reading any other `var_flag=1` checkpoint |
+| `falsification/reeval_var_flag1.py` | official `evaluate()` re-run behind addendum 9; writes `evaluation_results_corrected.json` per checkpoint, which `compare_arms.py` (and `frontier.py`) now prefer automatically |
 | `workshop/figs/frontier.pdf` | the frontier figure (addendum 6) |
 ## Verify the environment is sane
 
