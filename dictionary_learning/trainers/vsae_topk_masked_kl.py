@@ -75,16 +75,26 @@ class VSAETopK(nn.Module):
         self._initialize_weights()
 
     def scale_biases(self, scale: float) -> None:
-        """Scale biases by a factor (for activation normalization)."""
+        """Scale the activation-space biases by a factor (for activation
+        normalization). var_encoder.bias is left unscaled and var_encoder.weight
+        is divided by `scale` instead -- see the long comment on
+        VSAETopK.scale_biases in vsae_topk.py and RESULTS addendum 8. Multiplying
+        the bias (the old behaviour) corrupts the learned-sigma reading of any
+        saved var_flag=1 checkpoint; rescaling the weight instead preserves
+        log_var's true trained value when the checkpoint is read on raw
+        activations, the same as every other quantity here. Dormant for every arm
+        actually trained with this trainer so far (E3 runs at var_flag=0), fixed
+        for consistency and so the bug is not there waiting.
+        """
         with torch.no_grad():
             self.encoder.bias.mul_(scale)
             if self.use_april_update_mode:
                 self.decoder.bias.mul_(scale)
             else:
                 self.bias.mul_(scale)
-                
+
             if self.var_flag == 1:
-                self.var_encoder.bias.mul_(scale)
+                self.var_encoder.weight.div_(scale)
     
     def _initialize_weights(self):
         device = self.config.get_device()

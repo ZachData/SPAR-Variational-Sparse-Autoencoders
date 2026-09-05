@@ -301,6 +301,32 @@ ARMS["e2_sigma_low_init"] = {
                   "log_var_init": -8.0},
 }
 
+# Dense early checkpointing for the Jaccard-overlap instrumentation (PROJECT.md,
+# Next steps #1). RESULTS addendum 7 closed 84% of E2's gap by pinning sigma at
+# the clamp floor from step 0, but left a real 5-sigma residual -- Claims-worth-
+# opening #3's hypothesis is that TopK selection instability under sampling noise
+# is that residual's mechanism, and addendum 3 already showed it is invisible on
+# converged checkpoints (sampling on/off moves FVE by 0.000012 at convergence), so
+# it has to be read DURING training, while mu is still small. trainSAE's
+# `save_steps` mechanism (training.py:233) already writes an intermediate
+# `checkpoints/ae_{step}.pt` per requested step, so this is the same two arms with
+# the schedule densified over the region addendum 3 flags as the risk window
+# (before ~1000 steps) and sparser after. `checkpoint_steps=(10000,)` is
+# create_full_config()'s default upper bound; the final ae.pt is always written
+# regardless of what's in this tuple, so 10000 need not be repeated here.
+_EARLY_SCHEDULE = (0, 25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2500, 4000, 6000, 8500)
+
+ARMS["e2_sampling_only_early"] = {
+    "script": "train_vsae_topk.py",
+    "overrides": {**ARMS["e2_sampling_only"]["overrides"],
+                  "checkpoint_steps": _EARLY_SCHEDULE},
+}
+ARMS["e2_sigma_low_init_early"] = {
+    "script": "train_vsae_topk.py",
+    "overrides": {**ARMS["e2_sigma_low_init"]["overrides"],
+                  "checkpoint_steps": _EARLY_SCHEDULE},
+}
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.

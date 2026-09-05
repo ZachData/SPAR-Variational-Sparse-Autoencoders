@@ -86,6 +86,25 @@ re-estimate it** as `sqrt(mean ||x||^2)`, the estimator `get_norm_factor` uses
 (≈ 25.54 for gelu-1l layer 0). Skipping that step rescales every activation by 25x;
 `falsification/read_penalty_clamp.py` does it correctly and says why.
 
+**`var_encoder.bias` (`b_enc_var` for JumpReLU) was corrupted by `scale_biases` in
+every checkpoint saved before 2026-09-04 (second session).** The same save-time
+rescaling that correctly converts `encoder.bias`/`decoder.bias` to raw-activation
+space was, until fixed, ALSO applied to the log-variance bias — mathematically
+wrong (log_var isn't on the additive x/mu axis; clamp+exp aren't scale-homogeneous)
+and it drives every saved `var_flag=1` checkpoint's `log_var` to appear fully
+clamp-collapsed regardless of what was actually learned (RESULTS addendum 8:
+`log_var_init=-2.0` saved as `-51.5`). This is why addendum 3's "the posterior
+collapses completely" and "sampling noise is harmless at eval time" both turned
+out to be measurement artifacts, not findings — read addendum 8 before trusting
+either claim. Now fixed (weight is rescaled instead of bias, preserving log_var's
+true value on raw activations for anything trained after the fix), but **every
+checkpoint already on disk still needs the correction applied by hand** when its
+`log_var` is read: divide both `var_encoder.bias` and `var_encoder.weight` by
+`norm_factor` before calling `encode()` — see `read_selection_jaccard.py`'s
+`mean_jaccard` for the pattern. `e2_sigma_low_init` is the one arm this doesn't
+change: `log_var_init=-8.0` already sits below the clamp floor, so it saturates
+identically whether or not the bug's multiplication is applied.
+
 **`frac_recovered = 0.0` in a summary file usually means an OOM, not a result.**
 `loss_recovered()` OOMs at the default eval batch size on a 10GB card, the failure
 is swallowed by an `except ... continue`, and the run reports success with the

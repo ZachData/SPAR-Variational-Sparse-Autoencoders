@@ -543,16 +543,46 @@ class VSAETopK(Dictionary, nn.Module):
             return analysis
 
     def scale_biases(self, scale: float):
-        """Scale all bias parameters by a given factor."""
+        """Convert the model between activations normalised to unit mean squared
+        norm and raw activations, so a checkpoint saved with `scale=norm_factor`
+        is correct when fed raw activations directly (trainSAE's convention).
+
+        encoder.bias and decoder.bias (or self.bias) sit additively on the same
+        axis as x and mu, related to their normalised-space counterparts by a
+        uniform `scale` multiplier throughout the whole affine-plus-ReLU path
+        (ReLU is positive-homogeneous, so mu_raw = scale * mu_normalised exactly
+        once only these biases are scaled) -- multiplying the bias is exactly
+        right for them.
+
+        log_var is different: it parameterises sigma = exp(0.5*clamp(log_var)),
+        and clamp+exp are not scale-homogeneous, so there is no bias-only
+        transformation that reproduces "the same model, evaluated on activations
+        `scale` times larger" the way there is for encoder/decoder. This used to
+        multiply var_encoder.bias by `scale` too, which was a bug: with scale =
+        norm_factor (~26 for gelu-1l layer 0), log_var_init=-2.0 got saved as
+        -51.5, and reading that checkpoint's log_var on raw activations reports a
+        fully collapsed posterior it never earned (RESULTS addendum 8).
+
+        The fix is to leave var_encoder.bias untouched and instead rescale
+        var_encoder.WEIGHT by 1/scale: log_var = W_var @ x + b_var is exactly
+        preserved under x -> scale*x, W_var -> W_var/scale, b_var unchanged,
+        because that composition is linear (unlike log_var's own downstream
+        clamp+exp, the map x -> log_var has no nonlinearity to break scale
+        consistency). So log_var(raw x) after this method equals log_var(the
+        SAME token's normalised x) before it -- the true trained value, readable
+        directly on raw activations like everything else in this codebase,
+        without a caller needing to know to normalise activations specially for
+        this one sub-module.
+        """
         with torch.no_grad():
             self.encoder.bias.mul_(scale)
             if self.use_april_update_mode:
                 self.decoder.bias.mul_(scale)
             else:
                 self.bias.mul_(scale)
-                
+
             if self.var_flag == 1:
-                self.var_encoder.bias.mul_(scale)
+                self.var_encoder.weight.div_(scale)
 
     def normalize_decoder(self) -> None:
         """
