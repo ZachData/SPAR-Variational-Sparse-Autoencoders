@@ -10,22 +10,19 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-04 (second session, continued). Building the Jaccard-overlap
-instrumentation (Next steps #1) found **a real bug**: `scale_biases` was
-corrupting every saved `var_flag=1` checkpoint's `var_encoder.bias`, and correcting
-for it **reverses two of RESULTS addendum 3's central claims** — the learned
-posterior does **not** collapse (true `log_var` sits ≈ −2.6 to −2.9, nowhere near
-the clamp floor), and eval-time sampling noise is **not** harmless (turning it off
-recovers ≈0.12 FVE, not 0.000012). The Jaccard-overlap read, redone with the
-correction, now **confirms** Claims-worth-opening #3 cleanly: `e2_sampling_only`'s
-true selection instability starts at chance level and never fully stabilises.
-Bug fixed in the trainer code; addendum 7's own numbers are **unaffected** (the
-one arm it measured saturates the clamp floor regardless of the bug). Full detail
-in RESULTS addendum 8 — **read it before trusting anything addendum 3 claimed**.
-Earlier this session: the sigma-annealing arm landed (addendum 7), E4 turned out
-to be blocked on missing Pythia weights, and (previous session) the E1 code diff
-was enumerated and closed and the liveness/reconstruction frontier was read.
-Branch `claude/falsification-framework`, GPU idle. 11 arms, 153 checkpoints on disk.
+Last updated: 2026-09-04 (second session). Three things landed this session, in
+order: (1) the sigma-annealing arm (`e2_sigma_low_init`, addendum 7) closed 84% of
+E2's FVE gap to baseline; (2) E4 turned out to be **blocked** on missing Pythia
+checkpoint weights, not merely unstarted; (3) building the Jaccard-overlap
+instrumentation to explain (1)'s residual gap surfaced **a real bug** in
+`scale_biases` that corrupted every saved `var_flag=1` checkpoint's learned sigma
+(addendum 8) — corrected, RESULTS addendum 3's "the posterior collapses
+completely" and "sampling noise is harmless at eval time" both reverse, and the
+corrected Jaccard read then confirms Claims-worth-opening #3 cleanly. **Read
+addendum 8 before trusting anything addendum 3 claimed.** Bug fixed in the
+trainer code; addendum 7's own numbers are unaffected. Full detail under **What is
+established** below. Branch `claude/falsification-framework`, GPU idle, not pushed
+to origin. 11 arms, 153 checkpoints on disk.
 
 ## Status
 
@@ -42,9 +39,8 @@ Branch `claude/falsification-framework`, GPU idle. 11 arms, 153 checkpoints on d
 ## Where things stand
 
 The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
-on every comparison. E2 and E3 landed earlier and are stronger than they were
-designed to be. **E1 has now landed too.** E0 and E4 have never been reported at
-all. **The learned sigma has been read** and it collapses completely — see below.
+on every comparison. E1, E2 and E3 have all landed; E0 and E4 have never been
+reported (E4 is now known to be blocked, not just unstarted — see Next steps #1).
 
 **How E1 landed.** The code diff between the two arms was enumerated by reading
 `top_k.py` and `vsae_topk.py` against each other, plus the two training scripts,
@@ -55,34 +51,25 @@ never run. That last one — the initial weight draw — was then run as
 `e1_vsae_ref_fullmatch` (RESULTS addendum 5), and **with every enumerated
 difference matched the two implementations are indistinguishable on all four
 metrics** (largest effect d = 0.8, nothing significant) at the power where every
-previous generation of the arm was detected at 5 sigma.
+previous generation of the arm was detected at 5 sigma. The factor set was fixed
+by the code diff *before* the arm ran, so this is confirmatory rather than a
+garden of forking paths, and the recorded prediction for the closing arm (that it
+would be null) was **wrong** — d = −4.7 on FVE on its own.
 
-The order matters as much as the result. The factor set was fixed by a code diff
-*before* the arm ran, so the arm is confirmatory rather than another step in a
-garden of forking paths, and the prediction recorded for it (that the init draw
-would be null) was **wrong** — it is worth d = −4.7 on FVE on its own. E1 stops
-here because the list is empty, not because the arms finally agreed.
+The liveness/reconstruction frontier ("Claims worth opening" #2) has been read too
+— RESULTS addendum 6.
 
-The liveness/reconstruction frontier ("Claims worth opening" 2) has been read too
-— see there and RESULTS addendum 6.
-
-**The sigma-annealing arm has landed (RESULTS addendum 7).** `log_var_init` is now
-a factor on `VSAETopKConfig`/`ExperimentConfig`; `e2_sigma_low_init` sets it to
-−8.0 (below the `[-6, 2]` reparameterise clamp, so sigma is pinned at
-`exp(-3) = 0.0498` from step 0 rather than declining there over training) with
-`kl_coeff=0.0`, `var_flag=1` — otherwise identical to `e2_sampling_only`. 13 seeds:
-FVE rises 0.484 → **0.834** (baseline 0.900, so **84.1%** of the gap closes) and
-`frac_alive` reaches **1.0000** — better than baseline's own 0.9934. A real 5-sigma
-residual against baseline remains (FVE d = +103), so the reparameterisation is not
-entirely free, but the dominant story — "94.7% of the damage is the
-reparameterisation" — turns out to be substantially an **initialisation artifact**,
-not an architectural incompatibility between sampling and discrete TopK selection.
-`read_learned_sigma.py` confirms the mechanism: 100% of measured values sit at the
-clamp floor from the first checkpoint onward, i.e. this arm is
-deterministic-equivalent throughout, and that alone is what recovers most of the
-gap. **E4 was checked next and turned out to be blocked** on missing Pythia
-checkpoint weights, not merely unstarted — see Next steps #0. What's left is the
-Jaccard-overlap instrumentation (#1) or desk work (#2).
+**E2's story changed twice this session, in two directions.** The sigma-annealing
+arm (addendum 7) first closed 84% of E2's FVE gap to baseline by pinning sigma at
+the reparameterise clamp floor from step 0, leaving a real 5-sigma residual.
+Building the instrumentation to explain that residual then found a genuine bug in
+`scale_biases` (addendum 8) that had been corrupting every saved `var_flag=1`
+checkpoint's learned sigma since `var_flag=1` was added — corrected, RESULTS
+addendum 3's "posterior collapses completely" and "eval-time noise is harmless"
+both reverse, and the corrected Jaccard-overlap read then confirms
+Claims-worth-opening #3 (selection instability under sampling noise) cleanly.
+Addendum 7's own numbers are unaffected. Full account under **What is
+established** below, in the E2 section.
 
 ## What is established
 
@@ -298,18 +285,15 @@ One item in the battery's design still appears nowhere in
   has not been run. It is the only check that the real pipeline is exchangeable
   across seeds, and every downstream p-value assumes it is.
 
-~~The learned sigma.~~ **Done 2026-09-03** — see the section immediately above.
+~~The learned sigma.~~ **Read 2026-09-03, corrected 2026-09-04** — see "E2's
+learned sigma" above and RESULTS addendum 8.
 
 ---
 
 ## Next steps, in priority order
 
-The Jaccard-overlap instrumentation (previously #1) landed this session and, in
-the process of building it, found and fixed a real bug that corrects two of
-RESULTS addendum 3's central claims — see RESULTS addendum 8 and "What is
-established" above. **That correction opens a new, higher-priority item (#0
-below) than anything else on this list.** E4 (previously #2) is blocked, not
-merely unstarted — see #1.
+The Jaccard-overlap instrumentation is done (RESULTS addendum 8 — see "Closed"
+below) and its byproduct, the `scale_biases` bug fix, is the new top priority.
 
 ### 0. Re-evaluate E2's officially-reported FVE with the `scale_biases` bug fixed
 
@@ -372,13 +356,6 @@ control for.
 Until one of those happens, E4 stays on the list but is not actionable in a
 normal continuation session.
 
-~~The residual E2 gap — instrument Jaccard overlap during early training.~~
-**Done 2026-09-04, second session, continued — RESULTS addendum 8.** Confirmed
-Claims-worth-opening #3's mechanism cleanly once the `scale_biases` bug (found
-while building this) was corrected: `e2_sampling_only`'s true selection
-instability starts at chance level and never fully stabilises, `e2_sigma_low_init`
-is far more stable throughout, and the gap never closes.
-
 ### 2. Desk work — no GPU, no new code
 
 Both items under **Claims worth opening** (#4, the field-level projection claim;
@@ -428,7 +405,21 @@ answered in practice (the entire measured gap was optimiser-side, never
 objective-side); decision (b), the equivalence margin, still needs a number, but
 it now sets how strongly to state a null rather than which way the verdict goes.
 
----
+## Closed — the Jaccard-overlap instrumentation (2026-09-04)
+
+Full detail in RESULTS addendum 8, and in **What is established** above (E2's
+learned-sigma section). Kept here as the historical record since a fresh reader
+may otherwise look for this under "next steps."
+
+Instrumenting TopK selection instability during early training
+(`read_selection_jaccard.py`, two new arms with dense checkpointing) was built to
+test whether it explains `e2_sigma_low_init`'s residual gap against baseline. A
+first pass at the measurement, on checkpoints not yet known to carry the
+`scale_biases` bug, found the opposite of the prediction. Chasing that anomaly
+down found the bug itself; corrected, the result reverses cleanly and confirms
+Claims-worth-opening #3: `e2_sampling_only`'s true selection instability starts
+at chance level and never fully stabilises, `e2_sigma_low_init` is far more
+stable throughout, and the gap never closes.
 
 ---
 
@@ -437,12 +428,16 @@ it now sets how strongly to state a null rather than which way the verdict goes.
 Ranked by value per unit of cost. The first two need no GPU and no new code beyond
 a script; the third is the most scientifically interesting thing available.
 
-### 1. ~~"The deterministic SAE is the variational SAE's optimum"~~ — ANSWERED
+### 1. ~~"The deterministic SAE is the variational SAE's optimum"~~ — ANSWERED, then REVERSED
 
-**Yes, emphatically.** Read 2026-09-03; see "What is established" above and RESULTS
-addendum 3. Mean raw `log_var` is −66.9 against a clamp floor of −6, with 100% of
-41M values at or below the floor. What it opened instead is the annealing arm under
-Next steps #1, and a correction to the method proposed for claim 3 below.
+**No.** Read 2026-09-03, answered "yes, emphatically" from mean raw `log_var` of
+−66.9 against a clamp floor of −6 (100% of 41M values at or below the floor) —
+**this reading was a measurement artifact of the `scale_biases` bug and does not
+survive correction.** See "What is established" above (E2's learned-sigma
+section) and RESULTS addendum 8: corrected, mean `log_var` is ≈ −2.6 to −2.9,
+nowhere near the floor. What the original (wrong) answer opened — the
+sigma-annealing arm — still landed a real result on its own terms (addendum 7),
+and chasing *that* arm's residual gap is what surfaced the bug (addendum 8).
 
 ### 2. ~~Is there one liveness–reconstruction frontier?~~ — ANSWERED 2026-09-04
 
@@ -474,38 +469,18 @@ E1 family, which shares an objective exactly, the arms scatter instead of tracin
 a curve (rho = +0.40 / −0.30, thresholds disagreeing in sign). **Implementation
 details knock an arm off the frontier rather than sliding it along.**
 
-### 3. "The reparameterisation trick is incompatible with discrete top-k selection,
-not with sparse autoencoders" — CONFIRMED 2026-09-04, second session, continued
+### 3. ~~"The reparameterisation trick is incompatible with discrete top-k selection,
+not with sparse autoencoders"~~ — CONFIRMED 2026-09-04, second session, continued
 
-**Confirmed.** E2 established **that** 94.7% of the damage is the sampling rather
-than the KL; RESULTS addendum 7 then showed 84% of *that* is an initialisation
-artifact; this item asked what explains the remaining residual, and the answer is
-selection instability, measured directly.
-
-**Hypothesis (confirmed).** TopK selection is a discrete argmax over noisy scores.
-Sampling `z = mu + sigma*eps` before selection means the selected index set
-changes between forward passes for the same input, so the decoder is asked to
-reconstruct from an inconsistent feature assignment and every feature's decoder
-column is trained on a moving target. The damage is a property of *discrete
-selection under noise*, not of variational inference as such.
-
-**How it was tested.** `read_selection_jaccard.py`, two new arms with dense early
-checkpointing (`e2_sampling_only_early`, `e2_sigma_low_init_early`, 5 seeds each),
-Jaccard overlap of TopK-selected indices between two independent stochastic
-forward passes on the same fixed batch, at 15 points from step 0 to 10000. The
-FIRST pass at this (on checkpoints not yet known to be bug-affected) found the
-opposite of the prediction — the two arms looked nearly identical and
-`e2_sigma_low_init` was marginally *less* stable — which turned out to be because
-both arms appeared clamp-saturated from step 0 regardless of `log_var_init`, an
-artifact of the `scale_biases` bug (RESULTS addendum 8) discovered in the course
-of chasing that anomaly down. **Corrected, the result reverses cleanly:**
-`e2_sampling_only`'s selection starts at essentially chance level (Jaccard 0.069
-against a random-subset reference of 0.067) and never fully stabilises (0.811 at
-step 10000, ~19% churn even at convergence); `e2_sigma_low_init` is far more
-stable throughout (0.431 → 0.952) and the gap never closes. One sub-hypothesis
-remains falsified in passing: TopK is *not* forced to pad its selection with
-`mu == 0` features (0% of selections are exactly zero), so the instability works
-through boundary flips among genuinely-positive features, not zero-padding.
+**Confirmed.** Selection instability under sampling noise tracks reconstruction
+quality in exactly the predicted direction — see "What is established" above
+(E2's learned-sigma section) and RESULTS addendum 8 for the full account
+(`read_selection_jaccard.py`, the two `_early` arms, the chance-level-to-0.811
+trajectory, and the `scale_biases` bug this measurement surfaced along the way).
+One sub-hypothesis falsified in passing: TopK is *not* forced to pad its
+selection with `mu == 0` features (0% of selections are exactly zero), so the
+instability works through boundary flips among genuinely-positive features, not
+zero-padding.
 
 **Not yet tested — the second half of the original plan, still open:** vary the
 discreteness of the sparsity mechanism itself. `vsae_jump_relu.py` has `var_flag`
@@ -818,8 +793,9 @@ Do not report a null result as confirmation.
 
 ### E2 — Is it variational at all? 6 runs.
 > **Outcome: landed, stronger than designed** — 94.7% of the damage is the
-> reparameterisation, not the KL. The learned-sigma diagnostic below has now
-> been read: it collapses past the clamp floor. See "What is established".
+> reparameterisation, not the KL. The learned-sigma diagnostic below has been
+> read and corrected twice since (it does **not** collapse; a `scale_biases` bug
+> made it look like it had). See "What is established".
 
 Train with `var_flag=1`, 6 seeds — the experiment the preprint claims to have run
 and did not. Diagnostic of interest is the learned σ: if it collapses toward 0, the
