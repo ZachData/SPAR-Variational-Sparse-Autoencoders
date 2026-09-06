@@ -85,8 +85,8 @@ numbers were unaffected.
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **E4's SAEBench SCR scorer is written and run (addendum 10): the vSAE's SCR score sits above the baseline's own best-N-features curve at every tested dictionary size — not explained by size alone** |
-| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered (2026-09-05) and its SCR scorer is now written and run (2026-09-05, addendum 10); TPP and the second SAEBench dataset are the remaining E4 extensions, not blockers — see Next steps |
+| Newest result | **E4's SCR and TPP scorers disagree (addenda 10, 11): SCR says the vSAE's advantage is not explained by dictionary size, TPP says it is — a live instance of the thesis's Failure 1 (no principled way to combine metrics that disagree)** |
+| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered and both its SCR and TPP scorers are written and run (2026-09-05/06, addenda 10-11); the second SAEBench dataset is the remaining extension, not a blocker — see Next steps |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -266,26 +266,41 @@ as arms. no-ReLU vs ReLU: **d = +19.3 (0.1x) and +15.3 (0.5x)**, both thresholds
 agreeing, 5.03σ. Had either trainer simply been patched, every E3 number would have
 silently inherited a d ≈ 20 effect attributed to the KL mask.
 
-### E4 — a first reading: the SCR advantage is not explained by dictionary size
+### E4 — SCR and TPP disagree, and that disagreement IS the finding
 
-RESULTS addendum 10, 2026-09-05. Masking the recovered Pythia baseline
-(`experiments/e4_pythia_baseline/seed42/`) down to a grid of N features by usage
-and scoring SCR (bias_in_bios, professor/nurse) at each point traces a curve
-that stays flat and near zero across two orders of magnitude of N (0.004 at
-N=100 to 0.033 at N=5000, non-monotonic — pythia-70m gives this dataset/pair
-little headroom). The recovered vSAE (`experiments/e4_pythia_vsae/seed42/`),
-scored once, unmasked, at its own natural 1474-feature live count, gets 0.102 —
-above every point on the baseline's own best-N-features curve and above every
-one of 90 random-subset draws bracketing it from below.
+RESULTS addenda 10 (SCR) and 11 (TPP), 2026-09-05/06. Masking the recovered
+Pythia baseline (`experiments/e4_pythia_baseline/seed42/`) down to a grid of N
+features by usage and scoring each metric at every point, then scoring the
+recovered vSAE (`experiments/e4_pythia_vsae/seed42/`) once, unmasked, at its own
+natural 1474-feature live count:
+
+| metric | baseline curve shape | vSAE score | vs. `top_usage` reference at n=1474 | verdict |
+|---|---|---|---|---|
+| SCR (professor/nurse) | flat, noisy, 0.004–0.033 | 0.1017 | 0.0201 (margin **+0.082**) | **not** explained by size |
+| TPP (5 classes) | clean, near-monotonic, 0.087–0.212 | 0.1055 | 0.1905 (margin **−0.085**) | explained by size |
+
+Both hold under the `random`-subset bracket too (SCR margin +0.133, TPP margin
+−0.051) — this is not an artifact of which reference was chosen.
+
+**This is not a contradiction to resolve by picking a favorite metric — it is
+CLAUDE.md's thesis Failure 1, reproduced fresh.** The preprint's own Global and
+Conclusion sections reached opposite verdicts on the same hypothesis "because
+there was no rule for combining heterogeneous evidence." SCR and TPP disagreeing
+here, on the same two checkpoints, same dataset, same masking grid, same day, is
+that exact situation. Reporting only SCR ("the vSAE beats the size-matched
+baseline") or only TPP ("the vSAE is explained by size") would each be a true
+statement about one metric and a misleading one about the vSAE's features in
+general.
 
 **This is a first reading, not the full E4 design.** Single seed each side
 (matches the preprint's own limitation — descriptive, not a permutation test,
 exactly as PROJECT.md's E4 design anticipated when it specified this budget).
-One dataset, one class pair (professor/nurse); TPP and the second SAEBench
-dataset are not yet run. And it says nothing about CLAUDE.md landmine 3: the
-baseline still has `auxk_alpha=0.03125` against the vSAE's 0, and ruling out
-dictionary size as the explanation does not rule out AuxK as a contributing
-one — the two confounds are independent and this result controls only the
+One dataset for both metrics; the second SAEBench dataset
+(`canrager/amazon_reviews_mcauley_1and5`) and the other three bias_in_bios class
+pairs are not yet run. And neither result says anything about CLAUDE.md
+landmine 3: the baseline still has `auxk_alpha=0.03125` against the vSAE's 0,
+and ruling out dictionary size as the explanation (or not) does not rule AuxK in
+or out — the two confounds are independent and this design controls only the
 first.
 
 ### The method earned its keep twice
@@ -395,26 +410,32 @@ learned sigma" above and RESULTS addendum 8.
 ## Next steps, in priority order
 
 The official re-evaluation is done (RESULTS addendum 9). E4's checkpoints were
-recovered and its SCR scorer is written and run (RESULTS addendum 10 — see
-"Closed" below for both). Nothing on this list is blocked on compute or data.
+recovered and both its SCR and TPP scorers are written and run, and they
+disagree (RESULTS addenda 10-11 — see "Closed" below for all three). Nothing on
+this list is blocked on compute or data.
 
-### 0. E4 — extend the SCR reading, and add TPP
+### 0. E4 — the second SAEBench dataset and the other three class pairs
 
-Addendum 10 (2026-09-05) is SCR only, on one dataset (`LabHC/bias_in_bios_
-class_set1`) and one class pair (professor/nurse), restricted to keep the
-masking grid affordable. Two natural extensions, both cheap now that
-`falsification/run_e4_scr.py` exists and the LLM-activation/probe cache
-(`falsification/e4_scr_artifacts/`, gitignored) is warm for this dataset/pair:
+Addenda 10-11 (2026-09-05/06) run one dataset (`LabHC/bias_in_bios_class_set1`)
+for both metrics; SCR additionally restricts to one class pair
+(professor/nurse). With SCR and TPP already disagreeing on this single
+dataset/pair, the open question is whether that disagreement is a property of
+*this* dataset or holds more broadly. Cheap now that `falsification/
+run_e4_scr.py`/`run_e4_tpp.py` exist and the LLM-activation/probe cache
+(`falsification/e4_scr_artifacts/`, `e4_tpp_artifacts/`, both gitignored) is
+warm:
 
-* **TPP** (`perform_scr=False` in `ScrAndTppEvalConfig`) — the preprint's other
-  headline metric, not yet run at all for E4.
-* **The second SAEBench dataset** (`canrager/amazon_reviews_mcauley_1and5`) and
-  the other three `bias_in_bios` class pairs — would turn "one first reading"
-  into something closer to the full SAEBench SCR/TPP surface, still single-seed
-  and still descriptive (no seeds to permute), but broader than one dataset/pair.
+* **The other three `bias_in_bios` class pairs** for SCR (architect/journalist,
+  surgeon/psychologist, attorney/teacher) — cheapest extension, same cache,
+  same dataset.
+* **The second SAEBench dataset** (`canrager/amazon_reviews_mcauley_1and5`) for
+  both metrics — a genuinely independent dataset, needed before "SCR and TPP
+  disagree" can be said to generalise beyond bias_in_bios.
 
-Neither changes the verdict machinery in `falsification/size_control.py` or
-`run_e4_scr.py` — both are `ScrAndTppEvalConfig` field changes plus a rerun.
+Still single-seed, still descriptive (no seeds to permute) — this widens
+*coverage*, not statistical power. Neither extension changes the verdict
+machinery in `falsification/size_control.py` — both are `ScrAndTppEvalConfig`
+field changes plus a rerun of the existing scripts.
 
 ### 1. Desk work — no GPU, no new code
 
@@ -431,11 +452,11 @@ pre-registration**, not a continuation of this one.
 
 ---
 
-## Closed — E4's checkpoint recovery and SCR scorer (2026-09-05)
+## Closed — E4's checkpoint recovery and SCR/TPP scorers (2026-09-05/06)
 
-Full detail in RESULTS addendum 10, and in **What is established** above (E4's
-section). Kept here as the historical record since a fresh reader may otherwise
-look for this under "next steps."
+Full detail in RESULTS addenda 10 (SCR) and 11 (TPP), and in **What is
+established** above (E4's section). Kept here as the historical record since a
+fresh reader may otherwise look for this under "next steps."
 
 The original preprint's Pythia checkpoints had no `ae.pt` on this machine;
 `comprehensive_histogram_analysis/` held only their derived analysis outputs.
@@ -444,13 +465,14 @@ A search of other drives found a prior/parallel copy of this project on
 `experiments/e4_pythia_baseline/seed42/` and `experiments/e4_pythia_vsae/seed42/`.
 `config.json` confirmed CLAUDE.md landmine 3's AuxK confound directly in the
 recovered checkpoints (`auxk_alpha` 0.03125 vs. 0) rather than by inference from
-directory names. With the weights in hand, `falsification/e4_local_sae.py` and
-`falsification/run_e4_scr.py` closed the remaining gap — a real SCR scorer
-wired to `falsification/size_control.py`'s tested-but-scorer-less framework —
-and produced a first reading: the vSAE's SCR score is not explained by
-dictionary size alone. See "What is established" (E4) and RESULTS addendum 10
-for the numbers and every caveat (single seed, one dataset/class-pair,
-AuxK not controlled).
+directory names. With the weights in hand, `falsification/e4_local_sae.py`,
+`falsification/run_e4_scr.py` and `falsification/run_e4_tpp.py` closed the
+remaining gap — real SCR and TPP scorers wired to `falsification/size_control.
+py`'s tested-but-scorer-less framework — and produced two readings that
+disagree: SCR says the vSAE's advantage is not explained by dictionary size,
+TPP says it is. See "What is established" (E4) and RESULTS addenda 10-11 for
+the numbers and every caveat (single seed, bias_in_bios only so far, AuxK not
+controlled).
 
 ## Closed — the official re-evaluation of E2's FVE (2026-09-05)
 
@@ -913,12 +935,13 @@ that `vsae_topk.py` applies, so either patch one to match the other or report th
 comparison as confounded.
 
 ### E4 — Size-matched SCR/TPP control. No training. Implemented in `falsification/size_control.py`.
-> **Outcome: SCR landed, TPP not yet run.** `falsification/run_e4_scr.py`
-> wires `size_control.py` to a real SAEBench SCR scorer against the recovered
-> checkpoints (`experiments/e4_pythia_baseline/`, `experiments/e4_pythia_vsae/`,
-> seed 42): the vSAE's SCR score is not explained by dictionary size alone,
-> on one dataset/class-pair (RESULTS addendum 10). TPP and the rest of the
-> SAEBench SCR surface are the remaining extension — see Next steps #0.
+> **Outcome: both metrics landed, and they disagree.** `falsification/
+> run_e4_scr.py` and `run_e4_tpp.py` wire `size_control.py` to real SAEBench
+> scorers against the recovered checkpoints (`experiments/e4_pythia_baseline/`,
+> `experiments/e4_pythia_vsae/`, seed 42), on `LabHC/bias_in_bios_class_set1`:
+> SCR says the vSAE's advantage is not explained by dictionary size, TPP says
+> it is (RESULTS addenda 10-11). The second SAEBench dataset and the other
+> three class pairs are the remaining extension — see Next steps #0.
 
 Measure SCR/TPP as a **function of dictionary size** for the baseline SAE, then
 ask where the vSAE's score falls on that curve.
@@ -1050,14 +1073,14 @@ verified bit-identical after that change). A full 13-seed arm is ≈ 13 min trai
 |---|---|
 | **this file** | current state, what is established, next steps, the pre-registration, open decisions |
 | `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
-| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does. 10: E4's SCR scorer — the vSAE's SCR score is not explained by dictionary size |
+| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does. 10: E4's SCR scorer — the vSAE's SCR score is not explained by dictionary size. 11: E4's TPP scorer — reverses addendum 10's verdict, a live case of the thesis's Failure 1 |
 | `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
 | `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
 | `RUNBOOK.md` | commands, arm table, E4 design |
 | `falsification/frontier.py`, `read_penalty_clamp.py`, `read_learned_sigma.py` | the checkpoint-reading analyses behind addenda 3, 4 and 6 — `read_learned_sigma.py`'s own numbers need the addendum-8 bias correction applied by hand; it does not do this itself |
 | `falsification/read_selection_jaccard.py` | Jaccard-overlap-during-training analysis behind addendum 8; applies the bias correction itself — the pattern to copy for re-reading any other `var_flag=1` checkpoint |
 | `falsification/reeval_var_flag1.py` | official `evaluate()` re-run behind addendum 9; writes `evaluation_results_corrected.json` per checkpoint, which `compare_arms.py` (and `frontier.py`) now prefer automatically |
-| `falsification/e4_local_sae.py`, `falsification/run_e4_scr.py` | E4's local (non-Hub) checkpoint loaders and the SCR masking-grid/scorer/verdict behind addendum 10; `run_e4_scr.py --smoke` for a fast pipeline check before a full run |
+| `falsification/e4_local_sae.py`, `falsification/run_e4_scr.py`, `falsification/run_e4_tpp.py` | E4's local (non-Hub) checkpoint loaders and the SCR/TPP masking-grid/scorer/verdict behind addenda 10-11; either runner's `--smoke` flag gives a fast pipeline check before a full run |
 | `workshop/figs/frontier.pdf` | the frontier figure (addendum 6) |
 ## Verify the environment is sane
 

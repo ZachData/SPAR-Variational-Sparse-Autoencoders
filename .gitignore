@@ -203,3 +203,4 @@ workshop/*.blg
 archive/
 sweep.out
 falsification/e4_scr_artifacts/
+falsification/e4_tpp_artifacts/
