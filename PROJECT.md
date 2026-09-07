@@ -10,7 +10,18 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-06. Four things landed across the last two sessions, in order:
+Last updated: 2026-09-07. **This session:** Next steps #0 box (1) — the E4
+per-threshold logging gap (Claims-worth-opening #6a) — is closed.
+`run_e4_scr.py`/`run_e4_tpp.py` now store the full per-`n_value` breakdown at
+every baseline grid point; both rerun against the warm caches and reproduced
+addenda 10–11's mean verdicts exactly, and
+`falsification/e4_per_threshold_analysis.py` shows the SCR/TPP disagreement is
+**not an averaging artifact** — SCR is "not explained by size" at all four
+ablation thresholds, TPP is "explained by size" at all four (decisively only at
+N≤10; a tie at N=20). RESULTS addendum 12. Boxes (2)–(5) of Next steps #0 are
+still open; pick up at (2), the bootstrap error bars.
+
+The four things that landed across the prior two sessions, in order:
 
 1. **Next steps #0 from the prior session is closed.**
    `falsification/reeval_var_flag1.py` re-ran the official `evaluate()` pipeline
@@ -101,16 +112,17 @@ numbers were unaffected.
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **E4's SCR and TPP scorers disagree (addenda 10, 11): SCR says the vSAE's advantage is not explained by dictionary size, TPP says it is — a live instance of the thesis's Failure 1 (no principled way to combine metrics that disagree)** |
-| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered and both its SCR and TPP scorers are written and run (2026-09-05/06, addenda 10-11); **Next steps #0 is a 5-item TODO checklist to understand why they disagree, planned but not started — pick up there** |
+| Newest result | **E4's SCR/TPP disagreement is not an averaging artifact (addendum 12): rerun with the per-`n_value` breakdown stored, SCR is "not explained by size" at all four ablation thresholds and TPP is "explained by size" at all four — the disagreement survives the per-threshold cut, so it is a property of the two metrics, not of aggregating them** |
+| Blocking | Nothing blocked on compute or data. **Next steps #0 box (1) is done (addendum 12); boxes (2)–(5) open — pick up at (2), the bootstrap error bars from the warm caches** |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
 
 The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
 on every comparison. E1, E2 and E3 have all landed; E0 has never been reported.
-E4 has a first reading (addendum 10, SCR only, one dataset/class-pair, single
-seed each side, descriptive by design) — see "What is established" below.
+E4 has a first reading (addenda 10–12, SCR and TPP, one dataset/class-pair,
+single seed each side, descriptive by design; the two metrics disagree and that
+disagreement is threshold-uniform) — see "What is established" below.
 
 **How E1 landed.** The code diff between the two arms was enumerated by reading
 `top_k.py` and `vsae_topk.py` against each other, plus the two training scripts,
@@ -298,6 +310,16 @@ natural 1474-feature live count:
 Both hold under the `random`-subset bracket too (SCR margin +0.133, TPP margin
 −0.051) — this is not an artifact of which reference was chosen.
 
+**And it is not an artifact of averaging across ablation thresholds either
+(addendum 12).** Rerun with the per-`n_value` breakdown stored at every grid
+point, the verdict is re-derived once per threshold: SCR is "not explained by
+size" at all of N=2/5/10/20 (`top_usage` margins +0.047 to +0.153), TPP is
+"explained by size" at all four — though TPP is decisive only at N≤10 (margins
+−0.07 to −0.13) and a near-tie at N=20 (−0.006 vs `top_usage`, +0.006 vs
+`random`). Each metric's verdict is its own at every point on SAEBench's
+within-eval ablation sweep, so the disagreement is a property of the two
+metrics, not of collapsing them to a mean.
+
 **This is not a contradiction to resolve by picking a favorite metric — it is
 CLAUDE.md's thesis Failure 1, reproduced fresh.** The preprint's own Global and
 Conclusion sections reached opposite verdicts on the same hypothesis "because
@@ -432,10 +454,9 @@ this list is blocked on compute or data.
 
 ### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
-**STATUS: TODO — planned 2026-09-06, not yet started.** The prior session ran
-out of time to execute any of this; it is queued for a future session with GPU
-time, in the order below. Nothing here needs re-deriving — the reasoning is
-written out in Claims-worth-opening #6, this is just the checklist.
+**STATUS: item (1) done 2026-09-07 (RESULTS addendum 12); (2)–(5) open.** Box (1)
+is checked below; pick up at box (2). Nothing here needs re-deriving — the
+reasoning is written out in Claims-worth-opening #6, this is just the checklist.
 
 Addenda 10-11 (2026-09-05/06) found SCR and TPP give opposite verdicts on the
 same two checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same
@@ -445,16 +466,18 @@ checkbox is one of that entry's lettered options — and check items off as they
 land, recording the result in a new RESULTS addendum the way every prior step
 has been:
 
-- [ ] **(1) Fix the logging gap, then rerun** (Claims-worth-opening #6a).
-  Neither `run_e4_scr.py` nor `run_e4_tpp.py` currently saves the baseline
-  curve's per-`n_value` breakdown, only the mean across `n_values=[2,5,10,20]`
-  — see "Landmines specific to continuing this work" below. Before drawing any
-  further conclusion from this design, store the full per-threshold dict at
-  every grid point and rerun against the warm caches (no new LLM/SAE forward
-  passes needed logic-wise). This is the same shape-behind-a-scalar risk the
-  two-threshold liveness rule (F8b) exists to catch, applied to a place this
-  session didn't apply it. **Do this one first** — it changes what (2) and (3)
-  below are even looking at.
+- [x] **(1) Fix the logging gap, then rerun** (Claims-worth-opening #6a) —
+  **done 2026-09-07, RESULTS addendum 12.** Both runners now store the full
+  per-threshold dict at every baseline grid point
+  (`baseline_curve[i]["per_threshold"]`); both rerun against the warm caches and
+  reproduced addenda 10–11's mean verdicts exactly.
+  `falsification/e4_per_threshold_analysis.py` redoes the verdict once per
+  threshold. **Result: the disagreement is not an averaging artifact.** SCR is
+  "NOT explained by size" at all of N=2/5/10/20 (`top_usage` margins +0.047 to
+  +0.153); TPP is "explained by size" at all four, though only decisively at
+  N≤10 (margins −0.07 to −0.13) — at N=20 it is a tie (−0.006 vs `top_usage`,
+  +0.006 vs `random`). Closes 6a as an *explanation* for the disagreement and
+  sharpens the case for (2) and (3).
 - [ ] **(2) Bootstrap error bars from the cached activations**
   (Claims-worth-opening #6b) — tests whether SCR's flat curve is a real
   absence of size-response or statistically indistinguishable from noise
@@ -476,10 +499,12 @@ has been:
   trained-small" as a live confound in the reference curve itself, at the cost
   of a real training run.
 
-None of these are scoped in code yet — they are the plan, recorded before
+Boxes (2)–(5) are not scoped in code yet — they are the plan, recorded before
 picking one, per this project's own working style. When starting a fresh
 session on this: read this checklist, Claims-worth-opening #6 in full, and
-RESULTS addenda 10-11, then pick up at the first unchecked box.
+RESULTS addenda 10-12, then pick up at box (2). Note from (1): TPP's own
+verdict is a genuine tie at N=20, so (2)'s bootstrap error bar there will
+likely straddle zero — the "explained by size" reading already rests on N≤10.
 
 ### 1. Desk work — no GPU, no new code
 
@@ -708,6 +733,13 @@ CLAUDE.md's thesis Failure 1, reproduced fresh — but it also raises a question
 worth its own investigation: is it a real property of the two architectures'
 features, or an artifact of how the two metrics happen to be measured here?
 Four hypotheses, roughly cheapest-to-test first, none mutually exclusive:
+
+**(a) — TESTED 2026-09-07, RESULTS addendum 12: it is not hiding one.** Both
+runners now store the per-`n_value` breakdown; rerun against the warm caches,
+each metric's verdict is threshold-uniform (SCR "not explained by size" at all
+four thresholds, TPP "explained by size" at all four, decisive only at N≤10).
+The disagreement survives the per-threshold cut. The original text is kept below
+as the record of why the check was needed.
 
 **(a) The mean-of-thresholds aggregate may be hiding a shape change, the way
 liveness's single-threshold summary did twice before (F8b).** Neither
@@ -1191,17 +1223,17 @@ samples (was 6 min before `update_histograms` was vectorised — 59 of 60 output
 verified bit-identical after that change). A full 13-seed arm is ≈ 13 min train +
 ≈ 15 min analyse.
 
-**`run_e4_scr.py` and `run_e4_tpp.py` currently discard the per-threshold
-breakdown at every baseline grid point, keeping only the mean across
-`n_values`.** Only the vSAE's own per-threshold scores are saved
-(`vsae.per_threshold` in each JSON); `baseline_curve[i]["scores"]` is one
-aggregate float per draw. This is exactly the shape-behind-a-scalar risk the
-two-threshold liveness rule (F8b) exists to catch elsewhere in this project,
-applied to a place this session didn't apply it — see Claims-worth-opening #6a.
-Before drawing a threshold-specific conclusion from E4, extend the scorer to
-return the full per-`n_value` dict and rerun; the warm caches
-(`e4_scr_artifacts/`, `e4_tpp_artifacts/`) mean this does not need new LLM or
-SAE forward passes for anything already scored, only new bookkeeping.
+**~~`run_e4_scr.py` and `run_e4_tpp.py` discard the per-threshold breakdown at
+every baseline grid point.~~ FIXED 2026-09-07 (RESULTS addendum 12).** Both
+runners now store `baseline_curve[i]["per_threshold"]` — a list of the full
+`{scr,tpp}_metric_threshold_N` dict, one entry per draw — reconstructed from
+`size_response_curve`'s call order after the fact (the `Scorer` signature it
+takes is a bare `keep_indices -> float`, so the per-threshold dict is captured
+in a closure-local list and re-walked against `points`, not threaded through).
+`falsification/e4_per_threshold_analysis.py` consumes it. Left here as the
+record: the mean-across-`n_values` collapse was a real shape-behind-a-scalar
+risk (F8b), it just turned out not to be masking anything — both verdicts are
+threshold-uniform.
 
 **SCR's per-threshold score is a ratio; TPP's is a difference.**
 `get_scr_plotting_dict` divides by `(clean_acc − original_acc)`, which can be
@@ -1221,14 +1253,15 @@ lost.
 |---|---|
 | **this file** | current state, what is established, next steps, the pre-registration, open decisions |
 | `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
-| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does. 10: E4's SCR scorer — the vSAE's SCR score is not explained by dictionary size. 11: E4's TPP scorer — reverses addendum 10's verdict, a live case of the thesis's Failure 1 |
+| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does. 10: E4's SCR scorer — the vSAE's SCR score is not explained by dictionary size. 11: E4's TPP scorer — reverses addendum 10's verdict, a live case of the thesis's Failure 1. 12: the SCR/TPP disagreement is threshold-uniform, not an artifact of averaging across `n_values` |
 | `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
 | `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
 | `RUNBOOK.md` | commands, arm table, E4 design |
 | `falsification/frontier.py`, `read_penalty_clamp.py`, `read_learned_sigma.py` | the checkpoint-reading analyses behind addenda 3, 4 and 6 — `read_learned_sigma.py`'s own numbers need the addendum-8 bias correction applied by hand; it does not do this itself |
 | `falsification/read_selection_jaccard.py` | Jaccard-overlap-during-training analysis behind addendum 8; applies the bias correction itself — the pattern to copy for re-reading any other `var_flag=1` checkpoint |
 | `falsification/reeval_var_flag1.py` | official `evaluate()` re-run behind addendum 9; writes `evaluation_results_corrected.json` per checkpoint, which `compare_arms.py` (and `frontier.py`) now prefer automatically |
-| `falsification/e4_local_sae.py`, `falsification/run_e4_scr.py`, `falsification/run_e4_tpp.py` | E4's local (non-Hub) checkpoint loaders and the SCR/TPP masking-grid/scorer/verdict behind addenda 10-11; either runner's `--smoke` flag gives a fast pipeline check before a full run |
+| `falsification/e4_local_sae.py`, `falsification/run_e4_scr.py`, `falsification/run_e4_tpp.py` | E4's local (non-Hub) checkpoint loaders and the SCR/TPP masking-grid/scorer/verdict behind addenda 10-12; either runner's `--smoke` flag gives a fast pipeline check before a full run. Both now store `baseline_curve[i]["per_threshold"]` |
+| `falsification/e4_per_threshold_analysis.py` | re-derives the E4 size verdict once per ablation threshold from the stored per-`n_value` breakdown (addendum 12) |
 | `workshop/figs/frontier.pdf` | the frontier figure (addendum 6) |
 ## Verify the environment is sane
 

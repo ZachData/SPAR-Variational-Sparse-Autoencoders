@@ -154,6 +154,7 @@ def main():
     print("LLM loaded")
 
     n_calls = 0
+    per_call_thresholds: list[dict[str, float]] = []
 
     def scorer(keep_indices: np.ndarray) -> float:
         nonlocal n_calls
@@ -163,6 +164,7 @@ def main():
             config, baseline, model, device, artifacts_folder, save_activations=True
         )
         scores = score_from_results(results)
+        per_call_thresholds.append(scores)
         score = float(np.mean(list(scores.values())))
         print(f"  scorer call {n_calls}: n={len(keep_indices)} score={score:.4f} ({scores})")
         return score
@@ -175,6 +177,16 @@ def main():
         n_draws=args.random_draws,
         seed=0,
     )
+
+    # `size_response_curve` calls `scorer` in exactly the order it appends points
+    # -- for each strategy, for each n, `draws` times (1 for top_usage, n_draws
+    # for random) -- so re-walking that order reattaches each call's full
+    # per-threshold dict to its grid point. Without this only the mean across
+    # n_values survives, which is the shape-behind-a-scalar risk the two-threshold
+    # liveness rule (F8b) exists to catch (PROJECT.md Claims-worth-opening #6a).
+    _calls = iter(per_call_thresholds)
+    per_point_thresholds = [[next(_calls) for _ in pt.scores] for pt in points]
+    assert next(_calls, None) is None, "per-call threshold log did not line up with curve points"
 
     print("scoring vSAE, unmasked, at its own live count")
     vsae_results, _ = scr_and_tpp.run_eval_single_sae(
@@ -196,8 +208,14 @@ def main():
         "n_values": config.n_values,
         "smoke": args.smoke,
         "baseline_curve": [
-            {"n_features": pt.n_features, "strategy": pt.strategy, "scores": pt.scores, "mean": pt.mean}
-            for pt in points
+            {
+                "n_features": pt.n_features,
+                "strategy": pt.strategy,
+                "scores": pt.scores,
+                "mean": pt.mean,
+                "per_threshold": thr,
+            }
+            for pt, thr in zip(points, per_point_thresholds)
         ],
         "vsae": {
             "live_n": vsae_live_n,
