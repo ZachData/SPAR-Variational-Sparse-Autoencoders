@@ -414,28 +414,45 @@ recovered and both its SCR and TPP scorers are written and run, and they
 disagree (RESULTS addenda 10-11 — see "Closed" below for all three). Nothing on
 this list is blocked on compute or data.
 
-### 0. E4 — the second SAEBench dataset and the other three class pairs
+### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
-Addenda 10-11 (2026-09-05/06) run one dataset (`LabHC/bias_in_bios_class_set1`)
-for both metrics; SCR additionally restricts to one class pair
-(professor/nurse). With SCR and TPP already disagreeing on this single
-dataset/pair, the open question is whether that disagreement is a property of
-*this* dataset or holds more broadly. Cheap now that `falsification/
-run_e4_scr.py`/`run_e4_tpp.py` exist and the LLM-activation/probe cache
-(`falsification/e4_scr_artifacts/`, `e4_tpp_artifacts/`, both gitignored) is
-warm:
+Addenda 10-11 (2026-09-05/06) found SCR and TPP give opposite verdicts on the
+same two checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same
+masking grid. Claims-worth-opening #6 (below) works through *why* they might
+disagree and lays out four diagnostics, cheapest first. In priority order —
+each numbered step here is one of that entry's lettered options:
 
-* **The other three `bias_in_bios` class pairs** for SCR (architect/journalist,
-  surgeon/psychologist, attorney/teacher) — cheapest extension, same cache,
-  same dataset.
-* **The second SAEBench dataset** (`canrager/amazon_reviews_mcauley_1and5`) for
-  both metrics — a genuinely independent dataset, needed before "SCR and TPP
-  disagree" can be said to generalise beyond bias_in_bios.
+1. **Fix the logging gap, then rerun** (Claims-worth-opening #6a). Neither
+   `run_e4_scr.py` nor `run_e4_tpp.py` currently save the baseline curve's
+   per-`n_value` breakdown, only the mean across `n_values=[2,5,10,20]` — see
+   "Landmines specific to continuing this work" below. Before drawing any
+   further conclusion from this design, store the full per-threshold dict at
+   every grid point and rerun against the warm caches (no new LLM/SAE forward
+   passes needed logic-wise). This is the same shape-behind-a-scalar risk the
+   two-threshold liveness rule (F8b) exists to catch, applied to a place this
+   session didn't apply it.
+2. **Bootstrap error bars from the cached activations** (Claims-worth-opening
+   #6b) — tests whether SCR's flat curve is a real absence of size-response or
+   statistically indistinguishable from noise around zero, which bears directly
+   on how much weight addendum 10's verdict should carry relative to addendum
+   11's. No new LLM or SAE forward passes; resample indices into
+   `falsification/e4_scr_artifacts/`/`e4_tpp_artifacts/`.
+3. **Read which features SCR's and TPP's own effect computation selects**
+   (Claims-worth-opening #6c) — a mechanistic look at whether the same vSAE
+   features get reused across TPP's five classes (overloading) while SCR's
+   selected features are disjoint from all of them (a dedicated axis). A read
+   of existing artifacts, not a new run.
+4. **The second SAEBench dataset and the other three `bias_in_bios` class
+   pairs** — cheap now that both scripts exist and the caches are warm, and the
+   natural way to check whether the disagreement generalises beyond this one
+   dataset/pair. Still single-seed, still descriptive — this widens *coverage*,
+   not statistical power.
+5. **Train a size-matched baseline from scratch** (Claims-worth-opening #6d,
+   most expensive) — removes "masked vs. trained-small" as a live confound in
+   the reference curve itself, at the cost of a real training run.
 
-Still single-seed, still descriptive (no seeds to permute) — this widens
-*coverage*, not statistical power. Neither extension changes the verdict
-machinery in `falsification/size_control.py` — both are `ScrAndTppEvalConfig`
-field changes plus a rerun of the existing scripts.
+None of these are scoped or started yet — they are the plan, recorded before
+picking one, per this project's own working style.
 
 ### 1. Desk work — no GPU, no new code
 
@@ -653,6 +670,89 @@ This is the empirical hook the methods paper currently lacks: it turns "you shou
 pre-register and use permutation tests" from advice into a measured gap. Handle it
 carefully — the point is that the field's *design conventions* cap what its results
 can say, not that particular authors erred.
+
+### 6. Why do SCR and TPP disagree on E4? — four diagnostics, cheapest first
+
+RESULTS addenda 10-11 found SCR and TPP give opposite verdicts on the same two
+checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same masking grid:
+SCR says the vSAE's advantage is not explained by dictionary size, TPP says it
+is. That disagreement is the addenda's finding on its own terms — it is
+CLAUDE.md's thesis Failure 1, reproduced fresh — but it also raises a question
+worth its own investigation: is it a real property of the two architectures'
+features, or an artifact of how the two metrics happen to be measured here?
+Four hypotheses, roughly cheapest-to-test first, none mutually exclusive:
+
+**(a) The mean-of-thresholds aggregate may be hiding a shape change, the way
+liveness's single-threshold summary did twice before (F8b).** Neither
+`run_e4_scr.py` nor `run_e4_tpp.py` currently saves the baseline curve's
+per-`n_value` breakdown — only the mean across `n_values=[2,5,10,20]` is stored
+in `e4_{scr,tpp}_results.json` (`baseline_curve[i]["scores"]` is one aggregate
+float per draw). The vSAE's own per-threshold scores *are* saved, and by
+inspection SCR's "not explained by size" verdict holds at every individual
+threshold for the vSAE against the n=1474 baseline point (0.157/0.089/0.093/
+0.068 vs. 0.004/0.034/0.047/−0.004) — but the baseline curve itself was never
+saved at that granularity, so whether TPP's "explained by size" verdict is
+threshold-uniform or driven by one or two large thresholds (its own
+per-threshold vSAE scores range from 0.008 at N=2 to 0.252 at N=20, a much
+wider spread than SCR's) is currently unknown. **Cheapest fix**: extend both
+scorers to return/store the full per-threshold dict at every grid point, not
+just its mean, and rerun against the warm caches — a bookkeeping change, no new
+LLM/SAE forward passes needed logic-wise.
+
+**(b) SCR's score is a ratio, TPP's is a difference — that alone could explain
+why one curve is noisy/flat and the other clean/monotonic.**
+`get_scr_plotting_dict` divides by `(clean_acc − original_acc)`, a denominator
+that is small and noisy whenever the spurious correlation itself is weak on a
+given draw, and can swing the score sharply on measurement noise alone;
+`create_tpp_plotting_dict`'s `total_metric` is a plain accuracy-drop
+difference, no division. If this is the whole story, the SCR/TPP disagreement
+says less about the vSAE's features than about which of the two published
+metrics is measured more reliably at this model scale — worth knowing
+regardless of what it implies about the vSAE. **Testable cheaply**:
+bootstrap-resample the cached test-set activations
+(`falsification/e4_scr_artifacts/`, `e4_tpp_artifacts/` are already on disk) to
+put an error bar on every grid point and the vSAE's own score, for both
+metrics, without any new LLM or SAE forward passes — just resampled indices
+into what is already cached. If SCR's "flat" curve turns out to be
+statistically indistinguishable from noise around zero, that changes how much
+weight addendum 10's verdict should carry relative to addendum 11's.
+
+**(c) Specialisation vs. coverage.** SCR here asks for one clean axis
+(professor/nurse, net of gender); TPP asks for five simultaneously-separable
+classes from the same feature budget. A dictionary with far fewer live
+features (the vSAE, 1474) might still find one dedicated feature for a single
+salient axis while being forced to overload features across five classes it
+was never specifically pushed toward — SCR would look great, TPP would look
+worse, on the same underlying representation, for a real mechanistic reason
+rather than a metric artifact. **Testable**: read which specific features SCR's
+and TPP's own effect computation (`get_effects_per_class_precomputed_acts`)
+selects as top-effect for each class, at the vSAE's natural size, and check
+overlap — do the same handful of vSAE features get selected as top-effect for
+*multiple* TPP classes (evidence for overloading) while SCR's top-effect set is
+disjoint from all of them (evidence for a dedicated axis)? A read of existing
+per-run artifacts, not a new training run.
+
+**(d) The baseline's masked-from-8192 curve may not be a fair reference for a
+dictionary that was never trained at that size.** Every point on the
+baseline's `size_control.py` curve is the *same* 8192-wide dictionary with
+entries zeroed out post hoc; the vSAE's 1474 features were learned together,
+with the rest of its capacity never used for anything else. A dictionary
+trained from scratch at `dict_size=1474` might organise its limited capacity
+differently — more efficiently, or less — than a masked subset of a bigger
+one, and `size_control.py`'s own
+`test_random_subset_null_would_falsely_confirm_the_hypothesis` already proves
+this kind of reference-choice sensitivity matters a great deal for this
+design. **Most expensive of the four**: train a plain TopK baseline at
+`dict_size=1474` on Pythia-70m layer 3 (same config otherwise) and score it
+directly, no masking. A real training run, not just a rerun of the existing
+scorers — single-seed the same way E4's other checkpoints are, so still
+descriptive rather than confirmatory, but it removes "masked vs. trained-small"
+as a live confound in the comparison itself, which (a)-(c) do not.
+
+None of these would overturn RESULTS addenda 10-11's central finding — SCR and
+TPP disagree on this dataset today — they would narrow down *why*, which is
+exactly the kind of gap Failure 1 exists to force into the open rather than
+paper over. See Next steps #0 for the priority order this implies.
 
 ---
 
@@ -1064,6 +1164,27 @@ samples (was 6 min before `update_histograms` was vectorised — 59 of 60 output
 verified bit-identical after that change). A full 13-seed arm is ≈ 13 min train +
 ≈ 15 min analyse.
 
+**`run_e4_scr.py` and `run_e4_tpp.py` currently discard the per-threshold
+breakdown at every baseline grid point, keeping only the mean across
+`n_values`.** Only the vSAE's own per-threshold scores are saved
+(`vsae.per_threshold` in each JSON); `baseline_curve[i]["scores"]` is one
+aggregate float per draw. This is exactly the shape-behind-a-scalar risk the
+two-threshold liveness rule (F8b) exists to catch elsewhere in this project,
+applied to a place this session didn't apply it — see Claims-worth-opening #6a.
+Before drawing a threshold-specific conclusion from E4, extend the scorer to
+return the full per-`n_value` dict and rerun; the warm caches
+(`e4_scr_artifacts/`, `e4_tpp_artifacts/`) mean this does not need new LLM or
+SAE forward passes for anything already scored, only new bookkeeping.
+
+**SCR's per-threshold score is a ratio; TPP's is a difference.**
+`get_scr_plotting_dict` divides by `(clean_acc − original_acc)`, which can be
+small and noisy on any single draw; `create_tpp_plotting_dict`'s `total_metric`
+is a plain subtraction. Observed consequence: the baseline `top_usage` SCR
+curve is flat and noisy (0.004–0.033 across N=100–7379) while the equivalent
+TPP curve is clean and near-monotonic (0.087–0.212) — plausibly a property of
+how the two metrics are constructed rather than of the two dictionaries being
+compared. Not yet verified (Claims-worth-opening #6b); flagged here so it isn't
+lost.
 
 ---
 
