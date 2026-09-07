@@ -10,7 +10,7 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-05. Three things landed this session, in order:
+Last updated: 2026-09-06. Four things landed across the last two sessions, in order:
 
 1. **Next steps #0 from the prior session is closed.**
    `falsification/reeval_var_flag1.py` re-ran the official `evaluate()` pipeline
@@ -61,6 +61,22 @@ Last updated: 2026-09-05. Three things landed this session, in order:
    anticipated; see RESULTS addendum 10 for the full table and caveats,
    including what this does *not* rule out (CLAUDE.md landmine 3's AuxK
    confound).
+4. **E4's TPP scorer reverses the SCR verdict — SCR and TPP disagree on
+   whether size explains the vSAE's advantage.** `falsification/run_e4_tpp.py`
+   mirrors the SCR runner for TPP; the vSAE's own TPP score (0.106) sits
+   *below* the baseline's same-size `top_usage` curve (0.190 at n=1474) and
+   below the `random` reference too (RESULTS addendum 11) — the opposite of
+   addendum 10. This is CLAUDE.md's thesis Failure 1 (no principled way to
+   combine metrics that disagree) reproduced fresh, on the same two
+   checkpoints, same day. **Time ran out before any follow-up could be
+   executed**, so the session instead worked out *why* the two metrics might
+   disagree — four hypotheses (a logging gap that collapsed a per-threshold
+   shape into one scalar; SCR's ratio-based score vs. TPP's difference-based
+   one; specialisation-vs-coverage; a masked-vs-trained-small confound in the
+   reference curve) — and recorded them as Claims-worth-opening #6 and a
+   5-item TODO checklist at Next steps #0, in priority order, cheapest first.
+   **Nothing in that checklist has been started** — it is queued for the next
+   session with GPU time.
 
 Branch `claude/falsification-framework`, GPU idle, pushed to origin and merged to
 `master`. 11 arms in the confirmatory battery (153 checkpoints) plus the 2
@@ -86,7 +102,7 @@ numbers were unaffected.
 | Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
 | Newest result | **E4's SCR and TPP scorers disagree (addenda 10, 11): SCR says the vSAE's advantage is not explained by dictionary size, TPP says it is — a live instance of the thesis's Failure 1 (no principled way to combine metrics that disagree)** |
-| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered and both its SCR and TPP scorers are written and run (2026-09-05/06, addenda 10-11); the second SAEBench dataset is the remaining extension, not a blocker — see Next steps |
+| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered and both its SCR and TPP scorers are written and run (2026-09-05/06, addenda 10-11); **Next steps #0 is a 5-item TODO checklist to understand why they disagree, planned but not started — pick up there** |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -416,43 +432,54 @@ this list is blocked on compute or data.
 
 ### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
+**STATUS: TODO — planned 2026-09-06, not yet started.** The prior session ran
+out of time to execute any of this; it is queued for a future session with GPU
+time, in the order below. Nothing here needs re-deriving — the reasoning is
+written out in Claims-worth-opening #6, this is just the checklist.
+
 Addenda 10-11 (2026-09-05/06) found SCR and TPP give opposite verdicts on the
 same two checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same
-masking grid. Claims-worth-opening #6 (below) works through *why* they might
-disagree and lays out four diagnostics, cheapest first. In priority order —
-each numbered step here is one of that entry's lettered options:
+masking grid. Claims-worth-opening #6 works through *why* they might disagree
+and lays out four diagnostics, cheapest first. Run in this order — each
+checkbox is one of that entry's lettered options — and check items off as they
+land, recording the result in a new RESULTS addendum the way every prior step
+has been:
 
-1. **Fix the logging gap, then rerun** (Claims-worth-opening #6a). Neither
-   `run_e4_scr.py` nor `run_e4_tpp.py` currently save the baseline curve's
-   per-`n_value` breakdown, only the mean across `n_values=[2,5,10,20]` — see
-   "Landmines specific to continuing this work" below. Before drawing any
-   further conclusion from this design, store the full per-threshold dict at
-   every grid point and rerun against the warm caches (no new LLM/SAE forward
-   passes needed logic-wise). This is the same shape-behind-a-scalar risk the
-   two-threshold liveness rule (F8b) exists to catch, applied to a place this
-   session didn't apply it.
-2. **Bootstrap error bars from the cached activations** (Claims-worth-opening
-   #6b) — tests whether SCR's flat curve is a real absence of size-response or
-   statistically indistinguishable from noise around zero, which bears directly
-   on how much weight addendum 10's verdict should carry relative to addendum
-   11's. No new LLM or SAE forward passes; resample indices into
-   `falsification/e4_scr_artifacts/`/`e4_tpp_artifacts/`.
-3. **Read which features SCR's and TPP's own effect computation selects**
-   (Claims-worth-opening #6c) — a mechanistic look at whether the same vSAE
-   features get reused across TPP's five classes (overloading) while SCR's
-   selected features are disjoint from all of them (a dedicated axis). A read
-   of existing artifacts, not a new run.
-4. **The second SAEBench dataset and the other three `bias_in_bios` class
-   pairs** — cheap now that both scripts exist and the caches are warm, and the
-   natural way to check whether the disagreement generalises beyond this one
-   dataset/pair. Still single-seed, still descriptive — this widens *coverage*,
-   not statistical power.
-5. **Train a size-matched baseline from scratch** (Claims-worth-opening #6d,
-   most expensive) — removes "masked vs. trained-small" as a live confound in
-   the reference curve itself, at the cost of a real training run.
+- [ ] **(1) Fix the logging gap, then rerun** (Claims-worth-opening #6a).
+  Neither `run_e4_scr.py` nor `run_e4_tpp.py` currently saves the baseline
+  curve's per-`n_value` breakdown, only the mean across `n_values=[2,5,10,20]`
+  — see "Landmines specific to continuing this work" below. Before drawing any
+  further conclusion from this design, store the full per-threshold dict at
+  every grid point and rerun against the warm caches (no new LLM/SAE forward
+  passes needed logic-wise). This is the same shape-behind-a-scalar risk the
+  two-threshold liveness rule (F8b) exists to catch, applied to a place this
+  session didn't apply it. **Do this one first** — it changes what (2) and (3)
+  below are even looking at.
+- [ ] **(2) Bootstrap error bars from the cached activations**
+  (Claims-worth-opening #6b) — tests whether SCR's flat curve is a real
+  absence of size-response or statistically indistinguishable from noise
+  around zero, which bears directly on how much weight addendum 10's verdict
+  should carry relative to addendum 11's. No new LLM or SAE forward passes;
+  resample indices into `falsification/e4_scr_artifacts/`/`e4_tpp_artifacts/`.
+- [ ] **(3) Read which features SCR's and TPP's own effect computation
+  selects** (Claims-worth-opening #6c) — a mechanistic look at whether the
+  same vSAE features get reused across TPP's five classes (overloading) while
+  SCR's selected features are disjoint from all of them (a dedicated axis). A
+  read of existing artifacts, not a new run.
+- [ ] **(4) The second SAEBench dataset and the other three `bias_in_bios`
+  class pairs** — cheap now that both scripts exist and the caches are warm,
+  and the natural way to check whether the disagreement generalises beyond
+  this one dataset/pair. Still single-seed, still descriptive — this widens
+  *coverage*, not statistical power.
+- [ ] **(5) Train a size-matched baseline from scratch**
+  (Claims-worth-opening #6d, most expensive) — removes "masked vs.
+  trained-small" as a live confound in the reference curve itself, at the cost
+  of a real training run.
 
-None of these are scoped or started yet — they are the plan, recorded before
-picking one, per this project's own working style.
+None of these are scoped in code yet — they are the plan, recorded before
+picking one, per this project's own working style. When starting a fresh
+session on this: read this checklist, Claims-worth-opening #6 in full, and
+RESULTS addenda 10-11, then pick up at the first unchecked box.
 
 ### 1. Desk work — no GPU, no new code
 
