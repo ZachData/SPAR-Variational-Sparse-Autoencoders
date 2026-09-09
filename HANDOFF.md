@@ -46,7 +46,16 @@ Two lines of work:
 ### Next task — E4 diagnostics, `PROJECT.md` Next steps #0 boxes (3)–(5)
 
 Boxes (1)–(2) are closed. The remaining three, cheapest first (read
-Claims-worth-opening #6 and RESULTS addenda 10–13 before picking one):
+Claims-worth-opening #6 and RESULTS addenda 10–13 before picking one).
+
+**Also available (needs a free GPU):** `e4_bootstrap.py --metric scr
+--resample-train --n-grid 1474` — the full (non-conditional) bootstrap that
+closes addendum 13's stated caveat about SCR's thin +0.082 margin. The
+`--resample-train` path now has 10GB-card memory handling (2026-09-09) but has
+**not been run** — the attempt was blocked by a concurrent ~3GB GPU job
+(`main.py GeoDeepLearning/*`) on the machine, not by the code. Smoke first
+(`--smoke --resample-train --sae-batch-size 32`) to confirm it fits and measure
+the per-draw rate, then size `--boot` (est. ~1–2 h at grid `[1474]`).
 
 - **(3)** read which features SCR's/TPP's own effect computation selects
   (`get_effects_per_class_precomputed_acts`) — do the same vSAE features get

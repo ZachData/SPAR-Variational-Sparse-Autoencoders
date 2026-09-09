@@ -357,7 +357,12 @@ subset of the baseline. The bootstrap makes TPP's side the sturdier of the two
 without making SCR's vanish. Caveat: the conditional bootstrap fixes feature
 selection, so these CIs are lower bounds on the true uncertainty — a full
 `--resample-train` bootstrap (not run) would widen them and could push SCR's
-thin mean margin over zero.
+thin mean margin over zero. `e4_bootstrap.py`'s `--resample-train` path now has
+the memory handling to fit a 10GB card (test set CPU-resident, a resampled train
+copy staged and freed per draw, `--sae-batch-size` lever) but has **not been
+run end to end** — the one attempt was blocked by a concurrent ~3GB GPU job on
+the machine, not by the code. Needs a free GPU: smoke first to size `--boot` to
+the block, then `--metric scr --resample-train --n-grid 1474`.
 
 **This is not a contradiction to resolve by picking a favorite metric — it is
 CLAUDE.md's thesis Failure 1, reproduced fresh.** The preprint's own Global and
@@ -1331,7 +1336,7 @@ disagreement is not purely a metric-construction artifact.
 | `falsification/reeval_var_flag1.py` | official `evaluate()` re-run behind addendum 9; writes `evaluation_results_corrected.json` per checkpoint, which `compare_arms.py` (and `frontier.py`) now prefer automatically |
 | `falsification/e4_local_sae.py`, `falsification/run_e4_scr.py`, `falsification/run_e4_tpp.py` | E4's local (non-Hub) checkpoint loaders and the SCR/TPP masking-grid/scorer/verdict behind addenda 10-12; either runner's `--smoke` flag gives a fast pipeline check before a full run. Both now store `baseline_curve[i]["per_threshold"]` |
 | `falsification/e4_per_threshold_analysis.py` | re-derives the E4 size verdict once per ablation threshold from the stored per-`n_value` breakdown (addendum 12) |
-| `falsification/e4_bootstrap.py`, `falsification/e4_bootstrap_{scr,tpp}_results.json` | E4's test-set bootstrap error bars (addendum 13); conditional bootstrap over SAEBench's own scoring internals, `--smoke` for a fast check, `.partial` checkpoint every 10 draws with resume, `--resample-train` for the (slower, unrun) full bootstrap |
+| `falsification/e4_bootstrap.py`, `falsification/e4_bootstrap_{scr,tpp}_results.json` | E4's test-set bootstrap error bars (addendum 13); conditional bootstrap over SAEBench's own scoring internals, `--smoke` for a fast check, `.partial` checkpoint every 10 draws with resume. `--resample-train` (the slower full bootstrap) has 10GB-card memory handling but is **not yet run end to end** — needs a free GPU |
 | `workshop/figs/frontier.pdf` | the frontier figure (addendum 6) |
 ## Verify the environment is sane
 

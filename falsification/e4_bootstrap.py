@@ -207,7 +207,11 @@ def main():
     # storage), so `.clone()` every tensor to trim it before anything goes to GPU.
     acts = torch.load(acts_path, map_location="cpu")
     train_acts = {k: v.clone().contiguous() for k, v in acts["train"].items()}  # kept on CPU
-    test_acts = {k: v.clone().contiguous().to(device) for k, v in acts["test"].items()}
+    # Conditional bootstrap keeps the test set resident on GPU (every draw resamples it).
+    # Under --resample-train the GPU also has to hold a ~3GB resampled train copy per draw,
+    # so keep test on CPU too and stage each draw's resampled copy (10GB card can't hold both).
+    _test_dev = "cpu" if args.resample_train else device
+    test_acts = {k: v.clone().contiguous().to(_test_dev) for k, v in acts["test"].items()}
     del acts
     gc.collect()
     with open(probes_path, "rb") as f:
@@ -238,9 +242,12 @@ def main():
 
     # Node effects from the full train set, once per context (the conditional-bootstrap default).
     # Train acts live on CPU; stage them on the GPU only for as long as this phase needs.
-    train_gpu = {k: v.to(device) for k, v in train_acts.items()}
+    # Under --resample-train the full train set is NOT kept resident: a resampled copy is
+    # staged per draw instead (train + test + a resampled train copy all on GPU at once
+    # OOMs the 10GB card on SCR's 6-class 2000/class train set).
     fixed_node_effects = {}
     if not args.resample_train:
+        train_gpu = {k: v.to(device) for k, v in train_acts.items()}
         for label, sae, keep in contexts:
             torch.manual_seed(config.random_seed)
             fixed_node_effects[label] = node_effects_for(sae, keep, train_gpu)
@@ -288,8 +295,15 @@ def main():
     for b in range(start_b, boot):
         boot_rng = np.random.default_rng(1000 + b)
         test_b = resample_acts(test_acts, boot_rng)
+        if args.resample_train:
+            test_b = {k: v.to(device) for k, v in test_b.items()}  # test_acts is on CPU in this mode
         meaned_test_b = activation_collection.create_meaned_model_activations(test_b)
-        train_b = resample_acts(train_gpu, boot_rng) if args.resample_train else None
+        # resample on CPU, then stage just this draw's copy on the GPU
+        train_b = (
+            {k: v.to(device) for k, v in resample_acts(train_acts, boot_rng).items()}
+            if args.resample_train
+            else None
+        )
 
         for label, sae, keep in contexts:
             torch.manual_seed(config.random_seed)  # pair prepare_probe_data's internal RNG across contexts
@@ -326,6 +340,9 @@ def main():
                 raw[label][tk].append(scores.get(tk, float("nan")))
 
         del test_b, meaned_test_b, train_b
+        if args.resample_train:
+            gc.collect()
+            torch.cuda.empty_cache()  # the ~3GB per-draw train copy must not fragment the 10GB card
         if (b + 1) % 10 == 0:
             gc.collect()
             torch.cuda.empty_cache()
