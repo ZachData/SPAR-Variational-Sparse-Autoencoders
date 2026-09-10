@@ -28,34 +28,26 @@ Two lines of work:
 | `RUNBOOK.md` | Copy-pasteable commands, ordered so failures surface cheaply. |
 | `OVERVIEW.md` | Plain-language "what is this project" for a non-specialist. |
 
-## Current state (2026-09-09)
+## Current state (2026-09-10)
 
 - Confirmatory battery **complete at 13 seeds/arm**, 5σ on every comparison.
   11 arms, 153 checkpoints, 0 failures. Framework: 115 tests green.
 - **E1, E2, E3 have landed.** E0 pre-registered, never reported.
-- **E4 has a first reading** (RESULTS addenda 10–13): SCR and TPP give opposite
+- **E4 has a first reading** (RESULTS addenda 10–14): SCR and TPP give opposite
   verdicts on the same two Pythia checkpoints; the disagreement is
-  threshold-uniform (addendum 12) and survives a test-set bootstrap
-  (addendum 13) — though SCR's side of it is ~15× wider and rests on the N=2
-  ablation threshold alone. Single seed each side, one dataset/class-pair —
-  descriptive by design, not a permutation test.
-- **`PROJECT.md` Next steps #0 boxes (1) and (2) are done** (addenda 12–13).
+  threshold-uniform (addendum 12) and survives both the conditional
+  (addendum 13) and the full `--resample-train` (addendum 14) bootstrap — though
+  SCR's side of it is ~15× wider and rests on the N=2 ablation threshold alone.
+  Single seed each side, one dataset/class-pair — descriptive by design, not a
+  permutation test.
+- **`PROJECT.md` Next steps #0 boxes (1) and (2) are done** (addenda 12–14).
   Boxes (3)–(5) are open and not scoped in code — pick up there.
 - Branch `claude/falsification-framework`, pushed to origin, merged to `master`.
 
 ### Next task — E4 diagnostics, `PROJECT.md` Next steps #0 boxes (3)–(5)
 
 Boxes (1)–(2) are closed. The remaining three, cheapest first (read
-Claims-worth-opening #6 and RESULTS addenda 10–13 before picking one).
-
-**Also available (needs a free GPU):** `e4_bootstrap.py --metric scr
---resample-train --n-grid 1474` — the full (non-conditional) bootstrap that
-closes addendum 13's stated caveat about SCR's thin +0.082 margin. The
-`--resample-train` path now has 10GB-card memory handling (2026-09-09) but has
-**not been run** — the attempt was blocked by a concurrent ~3GB GPU job
-(`main.py GeoDeepLearning/*`) on the machine, not by the code. Smoke first
-(`--smoke --resample-train --sae-batch-size 32`) to confirm it fits and measure
-the per-draw rate, then size `--boot` (est. ~1–2 h at grid `[1474]`).
+Claims-worth-opening #6 and RESULTS addenda 10–14 before picking one):
 
 - **(3)** read which features SCR's/TPP's own effect computation selects
   (`get_effects_per_class_precomputed_acts`) — do the same vSAE features get
@@ -68,20 +60,24 @@ the per-draw rate, then size `--boot` (est. ~1–2 h at grid `[1474]`).
   Pythia-70m layer 3 — removes "masked vs. trained-small" as a confound. A real
   training run (LOCAL GPU), single-seed.
 
-### Done 2026-09-09 — box (2), the bootstrap error bars (addendum 13)
+### Done 2026-09-09/10 — box (2), the bootstrap error bars (addenda 13–14)
 
-TPP bootstrap ran to completion on the 5-point grid `500 1000 1474 2000 3000`
-(200 draws, 5.06 h) after a ~15-line fix to `e4_bootstrap.py`: it now writes
-`e4_bootstrap_tpp_results.json.partial` every 10 draws and resumes from it on
-restart (draw RNG seeded by draw index, so resume is exact). Both 2026-09-08 TPP
-attempts had been lost because the script only wrote on completion.
+**Conditional bootstrap (addendum 13, both metrics).** TPP ran to completion on
+the 5-point grid `500 1000 1474 2000 3000` (200 draws, 5.06 h) after a ~15-line
+fix: `e4_bootstrap.py` now writes `*_results.json.partial` every 10 draws and
+resumes from it exactly (draw RNG seeded by draw index). Both
+`vsae − top_usage@1474` margins clear zero — SCR **+0.082 [+0.024, +0.150]**,
+TPP **−0.086 [−0.090, −0.081]** — so the disagreement is not a test-set-noise
+artifact. SCR's CI is ~15× wider, per threshold clears zero only at N=2; TPP
+clears zero at N=2/5/10.
 
-Result: both `vsae − top_usage@1474` margins clear zero under test-set
-resampling — SCR **+0.082 [+0.024, +0.150]**, TPP **−0.086 [−0.090, −0.081]** —
-so the disagreement is not a test-set-noise artifact. But SCR's CI is ~15×
-wider and per threshold clears zero only at N=2 (N=5/10/20 straddle it); TPP
-clears zero at N=2/5/10. Conditional bootstrap (node effects fixed) — CIs are
-lower bounds; `--resample-train` (unrun) would widen them.
+**Full `--resample-train` bootstrap (addendum 14, SCR).** Node effects
+re-derived from a train-set resample every draw — 200 draws, full 9-point grid,
+7.2 h — after adding 10GB-card memory handling to `e4_bootstrap.py`'s
+`--resample-train` path. SCR's mean margin widens to **+0.088 [+0.008, +0.171]**
+but does NOT cross zero: addendum 13's caveat is resolved. SCR's N=2/N=5 feature
+selection is bit-identical between the two bootstraps; all extra CI width is
+N≥10. `falsification/e4_bootstrap_scr_resample_train_results.json`.
 
 ## What is established (one line each — detail in RESULTS + PROJECT.md)
 
@@ -98,16 +94,17 @@ lower bounds; `--resample-train` (unrun) would widen them.
 - **E4:** SCR says the vSAE's advantage is *not* explained by dictionary size;
   TPP says it *is*. Same checkpoints, same grid. The disagreement is the finding
   (thesis Failure 1, reproduced fresh). It is threshold-uniform (addendum 12)
-  and survives a test-set bootstrap in both directions (addendum 13) — but
-  SCR's margin CI is ~15× wider than TPP's and rests on the N=2 threshold alone.
+  and survives both the conditional (addendum 13) and the full `--resample-train`
+  (addendum 14) bootstrap in both directions — but SCR's margin CI is ~15×
+  wider than TPP's and rests on the N=2 threshold alone.
 
 ## Next action
 
 `PROJECT.md` Next steps **#0**, boxes (3)–(5), cheapest first — boxes (1)–(2) are
-done (addenda 12–13). (3) read which features SCR's/TPP's own effect computation
+done (addenda 12–14). (3) read which features SCR's/TPP's own effect computation
 selects; (4) the second SAEBench dataset + other 3 class pairs; (5) train a
 size-matched baseline from scratch. None are scoped in code — read
-Claims-worth-opening #6 in full and RESULTS addenda 10–13 before picking one.
+Claims-worth-opening #6 in full and RESULTS addenda 10–14 before picking one.
 
 ## Environment
 

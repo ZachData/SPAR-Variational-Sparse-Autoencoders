@@ -12,24 +12,29 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-09. **This session:** finished Next steps #0 box (2), the
-E4 bootstrap error bars — **RESULTS addendum 13**. The TPP half (which had been
-killed twice on 2026-09-08 with no partial output) now ran to completion on the
-5-point grid `500 1000 1474 2000 3000` in 5.06 h, after a ~15-line fix to
-`falsification/e4_bootstrap.py` that dumps a `.partial` checkpoint every 10 draws
-and resumes from it. **Answer to #6b:** both metrics' paired margins
-(`vsae − top_usage@1474`) are resolved away from zero under test-set resampling
-in opposite directions — SCR **+0.082 [+0.024, +0.150]**, TPP
-**−0.086 [−0.090, −0.081]** — so the SCR/TPP disagreement is not a test-set-noise
-artifact. But the two sides are not equally sturdy: SCR's CI is ~15× wider and
-its mean-level significance rests on the N=2 ablation threshold alone (N=5/10/20
-straddle zero), while TPP's margin clears zero at N=2/5/10. Box (2) **done**;
-boxes (3)–(5) untouched.
+Last updated: 2026-09-10. **This session:** ran the full (non-conditional)
+`--resample-train` SCR bootstrap — **RESULTS addendum 14** — the one thing
+addendum 13 flagged as unrun. 200 draws, full 9-point grid, 7.2 h, after adding
+10GB-card memory handling to `e4_bootstrap.py`'s `--resample-train` path.
+**Result: SCR's mean margin `vsae − top_usage@1474` widens from +0.082
+[+0.024, +0.150] to +0.088 [+0.008, +0.171] but does NOT cross zero** — the
+addendum-13 caveat is resolved, the verdict survives. New sub-finding: SCR's
+N=2 and N=5 feature selection is *bit-identical* between the conditional and
+full bootstrap (resampling the train set doesn't change which top-2/top-5
+features get picked); all the extra CI width comes from N≥10. Box (2) fully
+done; boxes (3)–(5) untouched.
 
-Prior session (2026-09-08): (a) re-added a short `HANDOFF.md` as a cold-start
-table of contents; (b) started box (2) — the **SCR half completed**
-(`falsification/e4_bootstrap_scr_results.json`, 200 draws, full 9-point grid,
-~5.7 h); the TPP half was killed twice by session/machine limits.
+Prior session (2026-09-09): finished box (2)'s conditional bootstrap — **RESULTS
+addendum 13**. TPP ran to completion on the 5-point grid `500 1000 1474 2000
+3000` in 5.06 h after a ~15-line `.partial`/resume fix to `e4_bootstrap.py`.
+Both metrics' paired margins are resolved away from zero under test-set
+resampling in opposite directions — SCR **+0.082 [+0.024, +0.150]**, TPP
+**−0.086 [−0.090, −0.081]** — so the SCR/TPP disagreement is not a test-set-noise
+artifact. SCR's side is much thinner and rests on the N=2 ablation threshold
+alone (N=5/10/20 straddle zero); TPP's clears zero at N=2/5/10. The SCR half's
+conditional run had completed 2026-09-08 (`e4_bootstrap_scr_results.json`, full
+9-point grid, ~5.7 h); the TPP half was killed twice by session/machine limits
+before the fix.
 
 Prior session (2026-09-07): Next steps #0 box (1) — the E4 per-threshold logging
 gap (Claims-worth-opening #6a) — closed. `run_e4_scr.py`/`run_e4_tpp.py` now
@@ -131,20 +136,20 @@ numbers were unaffected.
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **E4 bootstrap error bars (addendum 13): the SCR/TPP disagreement is not a test-set-noise artifact — both paired margins `vsae − top_usage@1474` clear zero under test-set resampling in opposite directions (SCR +0.082 [+0.024, +0.150]; TPP −0.086 [−0.090, −0.081]). But SCR's CI is ~15× wider and rests on the N=2 ablation threshold alone (N=5/10/20 straddle zero); TPP's clears zero at N=2/5/10. TPP's side is the sturdier of the two, without SCR's disappearing.** |
-| In progress | Nothing. Box (2) done (addendum 13). |
-| Blocking | Nothing blocked on compute or data. Boxes (1)–(2) done (addenda 12–13); boxes (3)–(5) open. |
+| Newest result | **E4 full `--resample-train` bootstrap (addendum 14): SCR's mean margin `vsae − top_usage@1474` widens from +0.082 [+0.024, +0.150] (conditional, addendum 13) to +0.088 [+0.008, +0.171] under the non-conditional bootstrap but does NOT cross zero — addendum 13's open caveat is resolved, the "not explained by size" verdict survives. SCR's N=2/N=5 feature selection is bit-identical between the two bootstraps; all the extra CI width is N≥10. The SCR/TPP disagreement (SCR +0.088, TPP −0.086, opposite signs, both CIs exclude 0) is robust to test-set noise AND to the feature-selection decision.** |
+| In progress | Nothing. Box (2) fully done (addenda 13–14). |
+| Blocking | Nothing blocked on compute or data. Boxes (1)–(2) done (addenda 12–14); boxes (3)–(5) open. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
 
 The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
 on every comparison. E1, E2 and E3 have all landed; E0 has never been reported.
-E4 has a first reading (addenda 10–13, SCR and TPP, one dataset/class-pair,
+E4 has a first reading (addenda 10–14, SCR and TPP, one dataset/class-pair,
 single seed each side, descriptive by design; the two metrics disagree, that
-disagreement is threshold-uniform, and it survives test-set bootstrap
-resampling — though SCR's side of it is much the thinner) — see "What is
-established" below.
+disagreement is threshold-uniform, and it survives both the conditional and the
+full `--resample-train` bootstrap — though SCR's side of it is much the thinner)
+— see "What is established" below.
 
 **How E1 landed.** The code diff between the two arms was enumerated by reading
 `top_k.py` and `vsae_topk.py` against each other, plus the two training scripts,
@@ -354,15 +359,22 @@ zero only at N=2 (+0.155 [+0.109, +0.214]); at N=5/10/20 it straddles zero. TPP'
 margin clears zero at N=2/5/10 and sits on the boundary at N=20 (−0.009
 [−0.017, −0.000]), where the vSAE lands *between* a random and a usage-ranked
 subset of the baseline. The bootstrap makes TPP's side the sturdier of the two
-without making SCR's vanish. Caveat: the conditional bootstrap fixes feature
-selection, so these CIs are lower bounds on the true uncertainty — a full
-`--resample-train` bootstrap (not run) would widen them and could push SCR's
-thin mean margin over zero. `e4_bootstrap.py`'s `--resample-train` path now has
-the memory handling to fit a 10GB card (test set CPU-resident, a resampled train
-copy staged and freed per draw, `--sae-batch-size` lever) but has **not been
-run end to end** — the one attempt was blocked by a concurrent ~3GB GPU job on
-the machine, not by the code. Needs a free GPU: smoke first to size `--boot` to
-the block, then `--metric scr --resample-train --n-grid 1474`.
+without making SCR's vanish.
+
+**And it is not an artifact of the feature-selection decision either (addendum
+14).** The full `--resample-train` SCR bootstrap — node effects re-derived from
+a bootstrap resample of the *train* set every draw, 200 draws, full grid, 7.2 h
+— widens SCR's mean margin CI from +0.082 [+0.024, +0.150] to **+0.088
+[+0.008, +0.171]** (~2.4× wider, lower bound +0.024 → +0.008) but **does not
+cross zero**. Addendum 13's open caveat is resolved: SCR's "not explained by
+size" verdict survives the strongest bootstrap available on this seed. All the
+extra width is at N ≥ 10 — SCR's N=2 and N=5 feature selection is *bit-identical*
+between the conditional and full bootstrap (resampling the train set doesn't
+change which top-2/top-5 features get picked), so the low-N end the verdict rests
+on is the part that is stable to resampling. The baseline `top_usage` curve's
+full-bootstrap CI includes zero at every grid point but N=5000 — addendum 12's
+"flat and noisy" with error bars. What still is *not* controlled: single seed
+each side, one dataset/pair, AuxK.
 
 **This is not a contradiction to resolve by picking a favorite metric — it is
 CLAUDE.md's thesis Failure 1, reproduced fresh.** The preprint's own Global and
@@ -498,7 +510,7 @@ this list is blocked on compute or data.
 
 ### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
-**STATUS: items (1)–(2) done (RESULTS addenda 12–13); (3)–(5) open.** Boxes (1)
+**STATUS: items (1)–(2) done (RESULTS addenda 12–14); (3)–(5) open.** Boxes (1)
 and (2) are checked below; pick up at box (3). Nothing here needs re-deriving —
 the reasoning is written out in Claims-worth-opening #6, this is just the
 checklist.
@@ -524,7 +536,7 @@ has been:
   +0.006 vs `random`). Closes 6a as an *explanation* for the disagreement and
   sharpens the case for (2) and (3).
 - [x] **(2) Bootstrap error bars from the cached activations**
-  (Claims-worth-opening #6b) — **done 2026-09-09, RESULTS addendum 13.**
+  (Claims-worth-opening #6b) — **done 2026-09-09/10, RESULTS addenda 13–14.**
   `falsification/e4_bootstrap.py` resamples the cached test set with replacement
   (200 draws) and re-scores through SAEBench's own internals
   (`get_all_node_effects_for_one_sae`, `perform_feature_ablations`,
@@ -541,9 +553,14 @@ has been:
   ~15× wider and per threshold clears zero only at N=2 (+0.155 [+0.109, +0.214];
   N=5/10/20 straddle it); TPP clears zero at N=2/5/10 and sits on the boundary
   at N=20 (−0.009 [−0.017, −0.000]). The bootstrap makes TPP's side the sturdier
-  of the two without making SCR's vanish. Caveat: the conditional bootstrap
-  fixes feature selection, so the CIs are lower bounds on the true uncertainty —
-  `--resample-train` (not run) would widen them.
+  of the two without making SCR's vanish.
+  **Full `--resample-train` bootstrap (2026-09-10, RESULTS addendum 14):** node
+  effects re-derived from a train-set resample every draw, 200 draws, full grid,
+  7.2 h, after adding 10GB-card memory handling to the `--resample-train` path.
+  SCR's mean margin widens to **+0.088 [+0.008, +0.171]** but does not cross
+  zero — addendum 13's caveat is resolved. SCR's N=2/N=5 selection is
+  bit-identical between the two bootstraps; all extra width is N≥10. Box (2)
+  fully done.
 - [ ] **(3) Read which features SCR's and TPP's own effect computation
   selects** (Claims-worth-opening #6c) — a mechanistic look at whether the
   same vSAE features get reused across TPP's five classes (overloading) while
@@ -559,14 +576,15 @@ has been:
   trained-small" as a live confound in the reference curve itself, at the cost
   of a real training run.
 
-Boxes (1)–(2) are done (addenda 12–13); boxes (3)–(5) are not scoped in code yet
+Boxes (1)–(2) are done (addenda 12–14); boxes (3)–(5) are not scoped in code yet
 — they are the plan, recorded before picking one, per this project's own working
 style. When starting a fresh session on this: read this checklist,
-Claims-worth-opening #6 in full, and RESULTS addenda 10–13, then pick up at box
+Claims-worth-opening #6 in full, and RESULTS addenda 10–14, then pick up at box
 (3). Box (2) confirmed the prediction from (1): TPP's N=20 margin is a
 knife-edge (−0.009 [−0.017, −0.000]), so the "explained by size" reading rests
-on N≤10; SCR's per-threshold margins straddle zero at N=5/10/20 and its
-mean-level verdict is carried by N=2 alone.
+on N≤10; SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps)
+and its mean-level verdict is carried by N=2 alone — where, addendum 14 shows,
+the feature selection is bit-identical under train resampling.
 
 ### 1. Desk work — no GPU, no new code
 
@@ -820,13 +838,16 @@ scorers to return/store the full per-threshold dict at every grid point, not
 just its mean, and rerun against the warm caches — a bookkeeping change, no new
 LLM/SAE forward passes needed logic-wise.
 
-**(b) — TESTED 2026-09-09, RESULTS addendum 13: partly, but the disagreement
-survives it.** A 200-draw conditional bootstrap of the cached test set puts a CI
-on every grid point and both vSAE scores. SCR's curve *is* the noisier of the
+**(b) — TESTED 2026-09-09/10, RESULTS addenda 13–14: partly, but the
+disagreement survives it.** A 200-draw conditional bootstrap of the cached test
+set (addendum 13), then a full `--resample-train` bootstrap that also resamples
+the train set and re-derives node effects every draw (addendum 14), each put a
+CI on every grid point and both vSAE scores. SCR's curve *is* the noisier of the
 two — its margin CI is ~15× wider than TPP's, and per threshold SCR's
 `vsae − top_usage@1474` margin straddles zero at N=5/10/20 (clears it only at
 N=2). But at the mean-over-thresholds level SCR's margin still excludes zero
-(+0.082 [+0.024, +0.150]), so SCR's "not explained by size" is not merely noise
+under both bootstraps (+0.082 [+0.024, +0.150] conditional; +0.088
+[+0.008, +0.171] full), so SCR's "not explained by size" is not merely noise
 around zero — it is a thin, low-ablation-budget effect against TPP's wide one.
 The original text is kept below as the record of why the check was needed.
 
@@ -1314,10 +1335,11 @@ is a plain subtraction. Observed consequence: the baseline `top_usage` SCR
 curve is flat and noisy (0.004–0.033 across N=100–7379) while the equivalent
 TPP curve is clean and near-monotonic (0.087–0.212) — plausibly a property of
 how the two metrics are constructed rather than of the two dictionaries being
-compared. **Verified partly (RESULTS addendum 13):** the bootstrap confirms SCR
-is the noisier metric here (margin CI ~15× wider than TPP's), but SCR's
-mean-level `vsae − top_usage@1474` margin still excludes zero, so the
-disagreement is not purely a metric-construction artifact.
+compared. **Verified partly (RESULTS addenda 13–14):** both the conditional and
+the full `--resample-train` bootstrap confirm SCR is the noisier metric here
+(margin CI ~15× wider than TPP's), but SCR's mean-level `vsae − top_usage@1474`
+margin still excludes zero under both (+0.082 → +0.088), so the disagreement is
+not purely a metric-construction artifact.
 
 ---
 
@@ -1327,7 +1349,7 @@ disagreement is not purely a metric-construction artifact.
 |---|---|
 | **this file** | current state, what is established, next steps, the pre-registration, open decisions |
 | `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
-| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does. 10: E4's SCR scorer — the vSAE's SCR score is not explained by dictionary size. 11: E4's TPP scorer — reverses addendum 10's verdict, a live case of the thesis's Failure 1. 12: the SCR/TPP disagreement is threshold-uniform, not an artifact of averaging across `n_values`. 13: E4 bootstrap error bars — the disagreement is not a test-set-noise artifact either (both margins clear zero, opposite signs), but SCR's side is ~15× wider and rests on the N=2 threshold alone |
+| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does. 10: E4's SCR scorer — the vSAE's SCR score is not explained by dictionary size. 11: E4's TPP scorer — reverses addendum 10's verdict, a live case of the thesis's Failure 1. 12: the SCR/TPP disagreement is threshold-uniform, not an artifact of averaging across `n_values`. 13: E4 bootstrap error bars — the disagreement is not a test-set-noise artifact either (both margins clear zero, opposite signs), but SCR's side is ~15× wider and rests on the N=2 threshold alone. 14: E4 full `--resample-train` bootstrap — SCR's mean margin widens to +0.088 [+0.008, +0.171] but does not cross zero; N=2/N=5 feature selection is bit-identical under train resampling |
 | `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
 | `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
 | `RUNBOOK.md` | commands, arm table, E4 design |
@@ -1336,7 +1358,7 @@ disagreement is not purely a metric-construction artifact.
 | `falsification/reeval_var_flag1.py` | official `evaluate()` re-run behind addendum 9; writes `evaluation_results_corrected.json` per checkpoint, which `compare_arms.py` (and `frontier.py`) now prefer automatically |
 | `falsification/e4_local_sae.py`, `falsification/run_e4_scr.py`, `falsification/run_e4_tpp.py` | E4's local (non-Hub) checkpoint loaders and the SCR/TPP masking-grid/scorer/verdict behind addenda 10-12; either runner's `--smoke` flag gives a fast pipeline check before a full run. Both now store `baseline_curve[i]["per_threshold"]` |
 | `falsification/e4_per_threshold_analysis.py` | re-derives the E4 size verdict once per ablation threshold from the stored per-`n_value` breakdown (addendum 12) |
-| `falsification/e4_bootstrap.py`, `falsification/e4_bootstrap_{scr,tpp}_results.json` | E4's test-set bootstrap error bars (addendum 13); conditional bootstrap over SAEBench's own scoring internals, `--smoke` for a fast check, `.partial` checkpoint every 10 draws with resume. `--resample-train` (the slower full bootstrap) has 10GB-card memory handling but is **not yet run end to end** — needs a free GPU |
+| `falsification/e4_bootstrap.py`, `falsification/e4_bootstrap_{scr,tpp}_results.json`, `falsification/e4_bootstrap_scr_resample_train_results.json` | E4's test-set bootstrap error bars: conditional (addendum 13, both metrics) and full `--resample-train` (addendum 14, SCR only — node effects re-derived per draw, 10GB-card memory handling, 7.2 h for 200 draws on the full grid). `--smoke` for a fast check; `.partial` checkpoint every 10 draws with exact resume |
 | `workshop/figs/frontier.pdf` | the frontier figure (addendum 6) |
 ## Verify the environment is sane
 
