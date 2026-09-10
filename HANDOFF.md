@@ -41,24 +41,51 @@ Two lines of work:
   Single seed each side, one dataset/class-pair — descriptive by design, not a
   permutation test.
 - **`PROJECT.md` Next steps #0 boxes (1) and (2) are done** (addenda 12–14).
-  Boxes (3)–(5) are open and not scoped in code — pick up there.
+- **A second paper is now planned** — see `PROJECT.md` **Next steps A**, which
+  takes priority over #0's remaining boxes. Two threads, nothing run yet.
 - Branch `claude/falsification-framework`, pushed to origin, merged to `master`.
 
-### Next task — E4 diagnostics, `PROJECT.md` Next steps #0 boxes (3)–(5)
+### Next task — `PROJECT.md` Next steps A, the two mechanism threads
 
-Boxes (1)–(2) are closed. The remaining three, cheapest first (read
-Claims-worth-opening #6 and RESULTS addenda 10–14 before picking one):
+**The paper this serves:** *"What does adding a KL term to a TopK SAE actually
+do?"* Three parts — (1) at fixed variance, nothing: it is an L2 penalty and null
+once implementation is matched (**established**, E1); (2) with sampling on it
+hurts, and the mechanism is TopK **selection churn** (**Claim #3 confirmed**, but
+without a dose-response curve — that is A2); (3) the literature's effect sizes
+are the size of **implementation variance** (**established** — E1's 5 factors,
+E3's ReLU d≈15–19, the decoder-gradient projection d=−14.3, the initial weight
+draw d=−4.7/−7.3, none of which appear in any equations). E4 becomes a section,
+not the thesis.
 
-- **(3)** read which features SCR's/TPP's own effect computation selects
-  (`get_effects_per_class_precomputed_acts`) — do the same vSAE features get
-  reused across TPP's five classes (overloading) while SCR's top-effect set is
-  disjoint (a dedicated axis)? A read of existing artifacts, no new run.
-- **(4)** the second SAEBench dataset (`canrager/amazon_reviews_mcauley_1and5`)
-  + the other three `bias_in_bios` class pairs — widens coverage, still
-  single-seed. Both scorers exist, caches warm for the current pair only.
-- **(5)** train a plain TopK baseline from scratch at `dict_size=1474` on
-  Pythia-70m layer 3 — removes "masked vs. trained-small" as a confound. A real
-  training run (LOCAL GPU), single-seed.
+- **A1 — which features does each metric select? (zero GPU, do first)**
+  Read what `get_effects_per_class_precomputed_acts` picks as top-effect for SCR
+  and for each of TPP's five classes; cross-reference each against its rank in
+  `all_histograms_*.npz`'s `feature_selection_counts`.
+  **Prediction: SCR's top-effect features rank LOW in usage, TPP's rank HIGH.**
+  That would explain addenda 13/14's puzzle — the two metrics agree on the vSAE
+  (≈0.10 both) and disagree only on where the *masked baseline* lands — and would
+  indict usage-frequency pruning, dead-feature counting and "more live features =
+  better" as selecting against the features doing the interesting work. It would
+  also explain addendum 6's frontier sign reversal.
+  **Falsifier: if both metrics' top-effect features sit at comparable usage
+  ranks, the explanation is dead.** Record that either way.
+
+- **A2 — the σ_init dose-response (~80 min training)**
+  13 seeds × ~6 `log_var_init` values on gelu-1l, `var_flag=1`, else matched to
+  `e2_sampling_only`. Per checkpoint measure FVE damage and selection Jaccard
+  (`falsification/read_selection_jaccard.py`).
+  **Prediction: a threshold, not smooth decay** — noise flips the TopK argmax
+  when σ exceeds the k/(k+1) pre-activation gap, so FVE and Jaccard should knee
+  *together*. **Measure the gap distribution on a baseline checkpoint first**
+  (free) so the knee is predicted, not fitted.
+  **Watch:** `log_var_init=−8.0` is already below the clamp floor — straddle the
+  clamp or points collapse onto each other. Liveness analysis is ~6.5
+  min/checkpoint (~8.5 h for 78), so subset it. Use `run_arm.py` with a per-seed
+  `--output-dir`.
+
+Deferred behind A: #0 boxes (4) second SAEBench dataset / class pairs, and (5)
+train a size-matched `dict_size=1474` Pythia baseline. Box (3) is promoted into
+A1.
 
 ### Done 2026-09-09/10 — box (2), the bootstrap error bars (addenda 13–14)
 
@@ -100,11 +127,15 @@ N≥10. `falsification/e4_bootstrap_scr_resample_train_results.json`.
 
 ## Next action
 
-`PROJECT.md` Next steps **#0**, boxes (3)–(5), cheapest first — boxes (1)–(2) are
-done (addenda 12–14). (3) read which features SCR's/TPP's own effect computation
-selects; (4) the second SAEBench dataset + other 3 class pairs; (5) train a
-size-matched baseline from scratch. None are scoped in code — read
-Claims-worth-opening #6 in full and RESULTS addenda 10–14 before picking one.
+`PROJECT.md` **Next steps A** — **A1 first** (zero GPU, has a stated falsifier),
+then **A2** (~80 min training). Both are scoped in full there; the summary is
+under "Next task" above. Read Claims-worth-opening **#3** (the selection-churn
+mechanism, confirmed for TopK — A2 is its noise axis) and **#6** before starting,
+plus RESULTS addenda 10–14 for E4's state.
+
+Neither thread is scoped *in code* yet — A1 needs a reader for
+`get_effects_per_class_precomputed_acts`'s output; A2 needs a `log_var_init`
+sweep added to `run_arm.py`'s `ARMS`.
 
 ## Environment
 

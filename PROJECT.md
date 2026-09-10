@@ -24,6 +24,16 @@ full bootstrap (resampling the train set doesn't change which top-2/top-5
 features get picked); all the extra CI width comes from N≥10. Box (2) fully
 done; boxes (3)–(5) untouched.
 
+Also this session: **planned the mechanism paper and its two remaining threads —
+`Next steps A`.** The framing is *"What does adding a KL term to a TopK SAE
+actually do?"*: fixed-variance KL is a null L2 penalty (established), sampling-on
+damage is TopK selection churn (Claim #3, confirmed but without a dose-response
+curve), and the literature's effect sizes are the size of implementation variance
+(established). **A1** = which features SCR/TPP actually select, with a usage-rank
+prediction and a stated falsifier, zero GPU. **A2** = the σ_init dose-response,
+~80 min of training, predicting a *threshold* at the k/(k+1) pre-activation gap.
+Nothing run yet — starting 2026-09-11.
+
 Prior session (2026-09-09): finished box (2)'s conditional bootstrap — **RESULTS
 addendum 13**. TPP ran to completion on the 5-point grid `500 1000 1474 2000
 3000` in 5.06 h after a ~15-line `.partial`/resume fix to `e4_bootstrap.py`.
@@ -137,8 +147,8 @@ numbers were unaffected.
 | Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
 | Newest result | **E4 full `--resample-train` bootstrap (addendum 14): SCR's mean margin `vsae − top_usage@1474` widens from +0.082 [+0.024, +0.150] (conditional, addendum 13) to +0.088 [+0.008, +0.171] under the non-conditional bootstrap but does NOT cross zero — addendum 13's open caveat is resolved, the "not explained by size" verdict survives. SCR's N=2/N=5 feature selection is bit-identical between the two bootstraps; all the extra CI width is N≥10. The SCR/TPP disagreement (SCR +0.088, TPP −0.086, opposite signs, both CIs exclude 0) is robust to test-set noise AND to the feature-selection decision.** |
-| In progress | Nothing. Box (2) fully done (addenda 13–14). |
-| Blocking | Nothing blocked on compute or data. Boxes (1)–(2) done (addenda 12–14); boxes (3)–(5) open. |
+| In progress | Nothing running. **Next up: Next steps A** — the two mechanism threads planned 2026-09-10. A1 (which features each metric selects; usage-rank prediction) is zero-GPU; A2 (σ_init dose-response, ~80 min training) turns Claim #3 from an assertion into a curve. |
+| Blocking | Nothing blocked on compute or data. Box (2) done (addenda 12–14); boxes (3)–(5) open, with (3) promoted into Next steps A1. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -508,6 +518,110 @@ recovered and both its SCR and TPP scorers are written and run, and they
 disagree (RESULTS addenda 10-11 — see "Closed" below for all three). Nothing on
 this list is blocked on compute or data.
 
+**Section A below is lettered, not numbered, on purpose: items #0–#2 keep their
+existing numbers so the cross-references in `RESULTS_2026-09-03.md` ("Next steps
+#0 box (2)", etc.) stay valid. A takes priority over all of them.**
+
+### A. The mechanism paper — two threads, start here (planned 2026-09-10)
+
+**The framing.** The material now supports a second paper alongside the methods
+one in Deliverables: *"What does adding a KL term to a TopK SAE actually do?"*
+Three parts, two already established:
+
+1. **At fixed variance, nothing.** It is an L2 penalty (E1, identity verified to
+   6 decimals), and once the 5 optimiser/init details are matched the arms are
+   null everywhere. **Established.**
+2. **With sampling on it hurts, and the mechanism is TopK *selection churn*, not
+   representation degradation.** Claim #3 is CONFIRMED for TopK; what is missing
+   is a dose-response curve rather than an assertion. **Thread A2 below.**
+3. **The apparent effects in the literature are the size of implementation
+   variance**, so the standard comparison protocol cannot distinguish (1) from
+   artifact — E1's 5 factors (d≈13–16), E3's lone `F.relu(mu)` (d≈15–19, 5.03σ),
+   the decoder-gradient projection (d=−14.3) and the initial weight draw
+   (d=−4.7/−7.3), none of which appear in any equations. **Established; Claim #4
+   supplies the one control arm that generalises it beyond this repo.**
+
+E4 becomes a section of this paper, not its thesis. The backing — 153
+checkpoints, 13 seeds/arm, 5σ — is unusually strong for a paper of this shape.
+
+The two threads to pull first, cheapest first:
+
+- [ ] **A1. Which features does each metric actually select? (zero GPU)** — this
+  is Next steps #0 box (3) / Claims-worth-opening #6c, sharpened into a
+  falsifiable prediction. Read the features `get_effects_per_class_precomputed_
+  acts` picks as top-effect for SCR and for each of TPP's five classes, and
+  cross-reference each against its rank in the committed
+  `all_histograms_*.npz`'s `feature_selection_counts`.
+
+  **Prediction: SCR's top-effect features sit LOW in the usage ranking; TPP's sit
+  HIGH.** Reasoning: `top_usage` masking keeps high-frequency general-purpose
+  features and discards rare narrow-firing ones. Disentangling a *correlated
+  pair* (professor-not-gender) plausibly needs a rare feature; separating five
+  classes needs broad ones. This is the mechanism that would explain addendum
+  13/14's central puzzle — SCR and TPP agree on the vSAE's absolute score (≈0.10
+  both) and disagree only on where the *masked baseline* lands (flat near zero
+  for SCR, ≈0.19 for TPP at n=1474).
+
+  **Why it is worth more than closing E4.** If it holds, usage-frequency
+  pruning, dead-feature counting, and "more live features = better" are all
+  selecting *against* the features doing the interesting work — a claim about
+  SAE practice, not about vSAEs. It would also explain the liveness/reconstruction
+  frontier's sign reversal (addendum 6).
+
+  **Falsifier, stated in advance:** if both metrics' top-effect features sit at
+  comparable usage ranks, the explanation is dead and E4's disagreement stays
+  unexplained. Record that outcome either way.
+
+- [ ] **A2. The σ_init dose-response — the noise axis of Claim #3 (~80 min
+  training)** — Claim #3 is confirmed for TopK but rests on two arms plus an
+  annealing run. Turn it into a curve.
+
+  **Design.** 13 seeds × ~6 values of `log_var_init` on gelu-1l, `var_flag=1`,
+  everything else matched to `e2_sampling_only`. Measure two things per
+  checkpoint: FVE damage vs. baseline, and selection Jaccard instability
+  (`falsification/read_selection_jaccard.py`, which already applies the addendum-8
+  bias correction).
+
+  **Prediction, and how to make it a real one.** TopK selection is an argmax over
+  pre-activations; noise of scale σ flips the selection whenever the gap between
+  the k-th and (k+1)-th pre-activation is below σ. So the damage should be a
+  **threshold phenomenon**, not smooth degradation, with the knee where σ ≈ the
+  typical k/k+1 gap — and the FVE and Jaccard curves should knee *together*.
+  **Measure the pre-activation gap distribution on a baseline checkpoint first**
+  (one checkpoint read, free): that predicts the knee location a priori instead
+  of fitting it post hoc.
+
+  **Why it matters beyond this codebase.** It is the same tension Gumbel-Softmax
+  and Concrete exist to resolve: continuous-relaxation stochastic latents do not
+  compose with hard combinatorial selection. That yields a constructive
+  recommendation rather than a negative result — *if you want stochastic sparse
+  codes, put the noise in the selection, not in the magnitudes.*
+
+  **Companion, already scoped:** Claim #3's other open half varies the
+  *discreteness* of the sparsity mechanism (JumpReLU's learned threshold vs.
+  BatchTopK vs. TopK). A2 is the same mechanism along the orthogonal axis. Run A2
+  first — it is far cheaper and does not touch `vsae_jump_relu.py`'s untested
+  `scale_biases` path.
+
+  **Costs and landmines.**
+  * gelu-1l trains at ~1 min/run (30 runs in 27 min, 2026-09-02), so 78 runs is
+    ~80 min. **But the liveness analysis is ~6.5 min/checkpoint** — 78
+    checkpoints is ~8.5 h. Run the full analysis on a subset, or only the metrics
+    the curve needs.
+  * `log_var_init = −8.0` already sits **below the clamp floor** (CLAUDE.md), so
+    it saturates. Choose the σ grid to *straddle* the clamp, not to pile up under
+    it, or several points will be the same model.
+  * Training normalises activations to unit mean squared norm, so `log_var_init`
+    and the pre-activation gaps are in the same (normalised) space — the
+    threshold prediction is well-posed without a `norm_factor` correction. Any
+    quantity read back in *raw* activation space still needs it re-estimated
+    (≈25.54 for gelu-1l layer 0).
+  * New runs are post-2026-09-04 so the `scale_biases` fix applies and their
+    `log_var` is saved correctly. Do **not** mix them with older `var_flag=1`
+    checkpoints without applying the addendum-8 correction by hand.
+  * Use `falsification/run_arm.py` and give every seed its own `--output-dir` —
+    `get_experiment_name()` omits the seed.
+
 ### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
 **STATUS: items (1)–(2) done (RESULTS addenda 12–14); (3)–(5) open.** Boxes (1)
@@ -566,6 +680,8 @@ has been:
   same vSAE features get reused across TPP's five classes (overloading) while
   SCR's selected features are disjoint from all of them (a dedicated axis). A
   read of existing artifacts, not a new run.
+  **→ Promoted and sharpened as Next steps A1** (usage-rank prediction, stated
+  falsifier). Do it there; this box closes when A1 does.
 - [ ] **(4) The second SAEBench dataset and the other three `bias_in_bios`
   class pairs** — cheap now that both scripts exist and the caches are warm,
   and the natural way to check whether the disagreement generalises beyond
@@ -764,6 +880,14 @@ this preprint. This is now the natural next step for turning this into a second
 paper's headline, but it is new training against a not-yet-fixed part of the
 codebase's bug exposure (`vsae_jump_relu.py`'s `scale_biases` was fixed
 pre-emptively this session but never tested against a real `var_flag=1` run).
+
+**Two axes, not one (added 2026-09-10).** The above varies *selection hardness*.
+The orthogonal and much cheaper axis is *noise scale*: a σ_init dose-response on
+TopK alone, predicting a **threshold** in σ at the typical k/(k+1) pre-activation
+gap, with the FVE and Jaccard curves kneeing together. That is **Next steps A2**
+(~80 min of gelu-1l training), and it should run first — it needs no new trainer
+and does not touch `vsae_jump_relu.py`. Together the two axes are the mechanism
+section of the second paper: noise scale × selection hardness.
 
 ### 4. "A one-line optimiser detail moves reconstruction more than the architecture
 under study" — ~30 min, converts a local finding into a general one
@@ -1233,14 +1357,21 @@ permitted only if reported as exploratory and excluded from the evidence product
 
 ## Deliverables
 
-1. **Paper.** Sequential falsification for interpretability claims, with the vSAE
-   study as the case study whose conclusion it reverses. Target: a venue caring
-   about measurement validity and falsifiability (the InterpScience CFP framing
-   still fits).
+1. **Paper (methods).** Sequential falsification for interpretability claims, with
+   the vSAE study as the case study whose conclusion it reverses. Target: a venue
+   caring about measurement validity and falsifiability (the InterpScience CFP
+   framing still fits).
 2. **`falsification/`** as a reusable package, with the Type-I calibration from E0
    as its empirical warrant.
 3. **Corrections** to the preprint's record: the degeneracy, the AuxK confound, the
    config mismatches, the self-contradiction between Global and Conclusion.
+4. **Paper (mechanism), planned 2026-09-10.** *"What does adding a KL term to a
+   TopK SAE actually do?"* — fixed-variance KL is a null L2 penalty (E1);
+   sampling-on damage is TopK selection churn with a σ threshold (E2 + Claim #3 +
+   Next steps A2); and the effect sizes reported in the literature are the size
+   of implementation variance (E1's 5 factors, E3's ReLU, Claim #4's control arm).
+   Constructive payload: *put the noise in the selection, not the magnitudes.*
+   Remaining experiments are scoped at **Next steps A**.
 
 ## Landmines specific to continuing this work
 
