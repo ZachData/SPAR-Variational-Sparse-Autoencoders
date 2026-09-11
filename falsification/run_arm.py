@@ -327,6 +327,47 @@ ARMS["e2_sigma_low_init_early"] = {
                   "checkpoint_steps": _EARLY_SCHEDULE},
 }
 
+# A2: the sigma_init dose-response (PROJECT.md Next steps A2). e2_sampling_only
+# (log_var_init=-2.0, the trainer default) and e2_sigma_low_init (log_var_init=
+# -8.0, which the reparameterize() clamp pins to an effective -6.0 from step 0)
+# are the two endpoints already run at 13 seeds; e2_sampling_only_early /
+# e2_sigma_low_init_early already carry the dense checkpoint schedule for them at
+# 5 seeds. These four new arms fill in the curve between and at the clamp,
+# straddling it exactly as PROJECT.md warns to (log_var_init=-6.0 and below all
+# saturate to the SAME sigma=exp(-3)=0.0498, so there is nothing to gain from
+# going more negative than -6.0 -- the existing -8.0 arm already occupies that
+# point). Every arm carries the dense schedule from the start (unlike
+# e2_sampling_only/e2_sigma_low_init, which needed a second _early run added
+# after the fact) so one training run per seed yields both the converged FVE and
+# the full Jaccard-instability curve.
+#
+# sigma at init, by log_var_init (sigma = exp(0.5 * log_var_init), all well
+# inside the reparameterize() clamp's [-6, 2] range so none of these saturate):
+#   -1.0 -> 0.6065   -2.0 -> 0.3679 (e2_sampling_only)   -3.0 -> 0.2231
+#   -4.0 -> 0.1353   -5.0 -> 0.0821   -6.0 -> 0.0498 (clamp floor, e2_sigma_low_init)
+#
+# `falsification/read_preact_gap.py` measured the k/(k+1) pre-activation gap this
+# noise competes against on a converged baseline checkpoint (RESULTS addendum
+# 16): median 0.0001, p99 0.0006, max 0.0015 -- two to three orders of magnitude
+# BELOW even the clamp-floor sigma. Naively that predicts near-total selection
+# scrambling at every point on this grid, including the floor, which is hard to
+# reconcile with e2_sigma_low_init's own FVE (0.834, only a 7.3% relative drop
+# from baseline's 0.900) unless the boundary-region churn addendum 8 already
+# measured (Jaccard 0.952 at convergence, ~4.8% of selected features still
+# swapping) is concentrated in low-magnitude, low-importance features that barely
+# move reconstruction regardless of which one of them is picked. This sweep is
+# the test of that refinement, not of the original sharp-knee story: expect FVE
+# damage to be much less dose-sensitive across this grid than Jaccard churn is,
+# rather than the two kneeing together at a shared threshold.
+for _lvi, _name in ((-1.0, "a2_sigma_init_m1"), (-3.0, "a2_sigma_init_m3"),
+                     (-4.0, "a2_sigma_init_m4"), (-5.0, "a2_sigma_init_m5")):
+    ARMS[_name] = {
+        "script": "train_vsae_topk.py",
+        "overrides": {**ARMS["e2_sampling_only"]["overrides"],
+                      "log_var_init": _lvi,
+                      "checkpoint_steps": _EARLY_SCHEDULE},
+    }
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.

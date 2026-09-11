@@ -12,7 +12,48 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-10. **This session:** ran the full (non-conditional)
+Last updated: 2026-09-11. **This session:** ran **A1**, the first of the two
+mechanism-paper threads planned last session —
+`falsification/read_e4_node_effects.py`, zero new GPU work beyond SAE inference
+on already-cached activations (~30s). **Result: the usage-rank prediction is
+FALSIFIED — RESULTS addendum 15.** The stated prediction (SCR's top-effect
+features sit low in the baseline's usage ranking, TPP's sit high, which would
+explain why the baseline's `top_usage` masking curve is flat for SCR but rising
+for TPP) does not hold: both metrics' top-N features sit in the same 0.55–0.73
+usage-percentile band on the baseline SAE at every N in {2,5,10,20}, the small
+gap between them flips sign between N≤5 and N≥10, and within a single metric
+individual classes scatter across almost the full usage-rank range (SCR's
+`professor / nurse` and `male / female` disagree with each other as much as
+either disagrees with any TPP class). Per the falsifier stated in advance, the
+explanation is dead. PROJECT.md Next steps #0 box (3) closes with this
+(promoted into A1, per the prior session's plan); the SCR/TPP disagreement
+itself (addenda 10–14) stands unexplained by this hypothesis.
+
+**Then ran A2, the σ_init dose-response, end to end.** Pre-flight
+(`falsification/read_preact_gap.py`, **RESULTS addendum 16**) measured the
+k/(k+1) pre-activation gap on a baseline checkpoint before choosing the sweep
+grid and found even the `reparameterize()` clamp floor's sigma sits ~80–550×
+above it — refining the original "FVE and Jaccard knee together at a
+threshold" prediction to "no knee is reachable; expect FVE to be less
+dose-sensitive than Jaccard." The sweep (4 new arms × 13 seeds,
+`falsification/run_a2_sweep.sh`, ~52 min, 0 failures) then ran to completion.
+**Result (RESULTS addendum 17): the first half of the refined prediction is
+right — the curve is smooth, not kneed — but the second half is wrong.** FVE
+tracks convergence-checkpoint selection Jaccard almost exactly across the
+entire 6-point, >12×-sigma-range grid: **Pearson r = +0.9993** (13 seeds per
+point). That is a sharper, more specific confirmation of Claim #3's mechanism
+(selection churn drives the FVE damage) than a threshold would have been — a
+single near-linear relationship holding continuously across six well-separated
+operating points, not just two. Re-deriving `e2_sigma_low_init`'s "84.1% of the
+gap closed" from this run's independent pipeline reproduces addendum 7's number
+exactly, validating the measurement. Even at the achievable floor (clamp-limited
+sigma=0.0498), a real residual FVE gap (0.066) and non-unit Jaccard (0.952)
+remain — the clamp mechanically prevents testing lower sigma, so Claim #3's
+other open half (varying the *discreteness* of the sparsity mechanism —
+JumpReLU vs. BatchTopK vs. TopK) is the next lever, not a finer sigma sweep
+against the same clamp. **Both threads of Next steps A are now closed.**
+
+Prior session (2026-09-10): ran the full (non-conditional)
 `--resample-train` SCR bootstrap — **RESULTS addendum 14** — the one thing
 addendum 13 flagged as unrun. 200 draws, full 9-point grid, 7.2 h, after adding
 10GB-card memory handling to `e4_bootstrap.py`'s `--resample-train` path.
@@ -22,9 +63,9 @@ addendum-13 caveat is resolved, the verdict survives. New sub-finding: SCR's
 N=2 and N=5 feature selection is *bit-identical* between the conditional and
 full bootstrap (resampling the train set doesn't change which top-2/top-5
 features get picked); all the extra CI width comes from N≥10. Box (2) fully
-done; boxes (3)–(5) untouched.
+done; boxes (3)–(5) untouched at that point.
 
-Also this session: **planned the mechanism paper and its two remaining threads —
+Also that session: **planned the mechanism paper and its two remaining threads —
 `Next steps A`.** The framing is *"What does adding a KL term to a TopK SAE
 actually do?"*: fixed-variance KL is a null L2 penalty (established), sampling-on
 damage is TopK selection churn (Claim #3, confirmed but without a dose-response
@@ -32,7 +73,6 @@ curve), and the literature's effect sizes are the size of implementation varianc
 (established). **A1** = which features SCR/TPP actually select, with a usage-rank
 prediction and a stated falsifier, zero GPU. **A2** = the σ_init dose-response,
 ~80 min of training, predicting a *threshold* at the k/(k+1) pre-activation gap.
-Nothing run yet — starting 2026-09-11.
 
 Prior session (2026-09-09): finished box (2)'s conditional bootstrap — **RESULTS
 addendum 13**. TPP ran to completion on the 5-point grid `500 1000 1474 2000
@@ -144,11 +184,11 @@ numbers were unaffected.
 |---|---|
 | Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
-| Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
+| Newest figure | `workshop/figs/a2_dose_response.pdf` — the σ_init dose-response, FVE and Jaccard vs. sigma plus their r=+0.9993 scatter (addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is the prior one. |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **E4 full `--resample-train` bootstrap (addendum 14): SCR's mean margin `vsae − top_usage@1474` widens from +0.082 [+0.024, +0.150] (conditional, addendum 13) to +0.088 [+0.008, +0.171] under the non-conditional bootstrap but does NOT cross zero — addendum 13's open caveat is resolved, the "not explained by size" verdict survives. SCR's N=2/N=5 feature selection is bit-identical between the two bootstraps; all the extra CI width is N≥10. The SCR/TPP disagreement (SCR +0.088, TPP −0.086, opposite signs, both CIs exclude 0) is robust to test-set noise AND to the feature-selection decision.** |
-| In progress | Nothing running. **Next up: Next steps A** — the two mechanism threads planned 2026-09-10. A1 (which features each metric selects; usage-rank prediction) is zero-GPU; A2 (σ_init dose-response, ~80 min training) turns Claim #3 from an assertion into a curve. |
-| Blocking | Nothing blocked on compute or data. Box (2) done (addenda 12–14); boxes (3)–(5) open, with (3) promoted into Next steps A1. |
+| Newest result | **A2's dose-response is in (addendum 17): no threshold, but FVE tracks TopK selection Jaccard almost exactly — r = +0.9993 across 6 points, 13 seeds each, spanning a >12× sigma range.** The curve is smooth (confirming the pre-flight's no-knee prediction) but FVE does NOT decouple from Jaccard as the pre-flight's other half predicted — the same near-linear relationship holds continuously across the whole grid, a sharper confirmation of Claim #3's selection-churn mechanism than a threshold would have been. Re-derives `e2_sigma_low_init`'s 84.1%-gap-closed number exactly from an independent pipeline. |
+| In progress | Nothing running. **Both threads of Next steps A are closed** (A1 addendum 15, A2 addendum 17). Next up is undecided — see Next steps below (E4 boxes 4–5, Claim #3's discreteness companion, or the mechanism-paper writeup itself). |
+| Blocking | Nothing blocked on compute or data. Box (2) done (addenda 12–14); box (3) done, negative (addendum 15); boxes (4)–(5) open. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -522,18 +562,19 @@ this list is blocked on compute or data.
 existing numbers so the cross-references in `RESULTS_2026-09-03.md` ("Next steps
 #0 box (2)", etc.) stay valid. A takes priority over all of them.**
 
-### A. The mechanism paper — two threads, start here (planned 2026-09-10)
+### A. The mechanism paper — both threads now closed (planned 2026-09-10, done 2026-09-11)
 
 **The framing.** The material now supports a second paper alongside the methods
 one in Deliverables: *"What does adding a KL term to a TopK SAE actually do?"*
-Three parts, two already established:
+Three parts, all now established:
 
 1. **At fixed variance, nothing.** It is an L2 penalty (E1, identity verified to
    6 decimals), and once the 5 optimiser/init details are matched the arms are
    null everywhere. **Established.**
 2. **With sampling on it hurts, and the mechanism is TopK *selection churn*, not
-   representation degradation.** Claim #3 is CONFIRMED for TopK; what is missing
-   is a dose-response curve rather than an assertion. **Thread A2 below.**
+   representation degradation.** Claim #3 is CONFIRMED for TopK; A2 (below) turned
+   it into a 6-point dose-response curve with r=+0.9993 between FVE and selection
+   Jaccard. **Established, RESULTS addendum 17.**
 3. **The apparent effects in the literature are the size of implementation
    variance**, so the standard comparison protocol cannot distinguish (1) from
    artifact — E1's 5 factors (d≈13–16), E3's lone `F.relu(mu)` (d≈15–19, 5.03σ),
@@ -544,37 +585,41 @@ Three parts, two already established:
 E4 becomes a section of this paper, not its thesis. The backing — 153
 checkpoints, 13 seeds/arm, 5σ — is unusually strong for a paper of this shape.
 
-The two threads to pull first, cheapest first:
+The two threads, both now done:
 
-- [ ] **A1. Which features does each metric actually select? (zero GPU)** — this
-  is Next steps #0 box (3) / Claims-worth-opening #6c, sharpened into a
-  falsifiable prediction. Read the features `get_effects_per_class_precomputed_
-  acts` picks as top-effect for SCR and for each of TPP's five classes, and
-  cross-reference each against its rank in the committed
-  `all_histograms_*.npz`'s `feature_selection_counts`.
+- [x] **A1. Which features does each metric actually select? (zero GPU)** —
+  **done 2026-09-11, FALSIFIED, RESULTS addendum 15.** This was Next steps #0
+  box (3) / Claims-worth-opening #6c, sharpened into a falsifiable prediction.
+  `falsification/read_e4_node_effects.py` read the features
+  `get_effects_per_class_precomputed_acts` picks as top-effect for SCR and for
+  each of TPP's five classes, and cross-referenced each against its rank in the
+  committed `all_histograms_*.npz`'s `feature_selection_counts`.
 
-  **Prediction: SCR's top-effect features sit LOW in the usage ranking; TPP's sit
-  HIGH.** Reasoning: `top_usage` masking keeps high-frequency general-purpose
-  features and discards rare narrow-firing ones. Disentangling a *correlated
-  pair* (professor-not-gender) plausibly needs a rare feature; separating five
-  classes needs broad ones. This is the mechanism that would explain addendum
-  13/14's central puzzle — SCR and TPP agree on the vSAE's absolute score (≈0.10
-  both) and disagree only on where the *masked baseline* lands (flat near zero
-  for SCR, ≈0.19 for TPP at n=1474).
+  **Prediction (falsified): SCR's top-effect features sit LOW in the usage
+  ranking; TPP's sit HIGH.** Reasoning had been: `top_usage` masking keeps
+  high-frequency general-purpose features and discards rare narrow-firing ones;
+  disentangling a *correlated pair* (professor-not-gender) plausibly needs a
+  rare feature, separating five classes needs broad ones.
 
-  **Why it is worth more than closing E4.** If it holds, usage-frequency
-  pruning, dead-feature counting, and "more live features = better" are all
-  selecting *against* the features doing the interesting work — a claim about
-  SAE practice, not about vSAEs. It would also explain the liveness/reconstruction
-  frontier's sign reversal (addendum 6).
+  **Result: both sit in the same 0.55–0.73 band on the baseline SAE at every N
+  in {2,5,10,20}, the small gap between them flips sign between N≤5 (SCR higher)
+  and N≥10 (TPP higher), and within-metric variance across classes swamps any
+  between-metric difference** — SCR's own `professor / nurse` and `male /
+  female` classes disagree with each other as much as either disagrees with any
+  TPP class. Per the falsifier stated in advance, **the explanation is dead**:
+  usage-frequency pruning is not selectively discarding SCR-critical features
+  while sparing TPP-critical ones. The SCR/TPP disagreement (addenda 10–14)
+  stands unexplained by this hypothesis; a live but untested possibility is a
+  *distributional* property of the surviving feature set (how well it spans a
+  contrast) rather than *which* individual features survive. See addendum 15
+  for the full per-class table and the vSAE-side reading (uninformative — 82%
+  of that dictionary is dead, so any live feature is trivially near the top of
+  its own usage ranking).
 
-  **Falsifier, stated in advance:** if both metrics' top-effect features sit at
-  comparable usage ranks, the explanation is dead and E4's disagreement stays
-  unexplained. Record that outcome either way.
-
-- [ ] **A2. The σ_init dose-response — the noise axis of Claim #3 (~80 min
-  training)** — Claim #3 is confirmed for TopK but rests on two arms plus an
-  annealing run. Turn it into a curve.
+- [x] **A2. The σ_init dose-response — the noise axis of Claim #3 (~80 min
+  training)** — **done 2026-09-11, RESULTS addendum 17.** Claim #3 was
+  confirmed for TopK but rested on two arms plus an annealing run; now a
+  6-point curve, 13 seeds each.
 
   **Design.** 13 seeds × ~6 values of `log_var_init` on gelu-1l, `var_flag=1`,
   everything else matched to `e2_sampling_only`. Measure two things per
@@ -591,43 +636,80 @@ The two threads to pull first, cheapest first:
   (one checkpoint read, free): that predicts the knee location a priori instead
   of fitting it post hoc.
 
+  **Pre-flight, RESULTS addendum 16 — the prediction needed refining before the
+  sweep landed.** `falsification/read_preact_gap.py` measured the k/(k+1) gap
+  on `experiments/baseline/seed1`: median 0.0001, p99 0.0006 (training space).
+  Even the clamp floor's sigma (0.0498) sits ~80–550× above this, so no
+  `log_var_init` on the planned grid keeps sigma below the boundary gap — a
+  shared knee is not reachable within this architecture's clamp range. Half
+  right: **RESULTS addendum 17** confirms the curve is smooth, not kneed. But
+  the *other* half of the refined prediction — that FVE would decouple from
+  Jaccard because boundary churn concentrates in low-importance features — is
+  **wrong**: FVE tracks Jaccard almost exactly (Pearson r = +0.9993) across all
+  6 points, 13 seeds each, spanning sigma 0.6065 down to 0.0498:
+
+  | `log_var_init` | sigma | FVE | Jaccard |
+  |---|---|---|---|
+  | −1.0 | 0.6065 | 0.3766 ± 0.0028 | 0.7657 ± 0.0022 |
+  | −2.0 (`e2_sampling_only`) | 0.3679 | 0.4841 ± 0.0022 | 0.8117 ± 0.0013 |
+  | −3.0 | 0.2231 | 0.6140 ± 0.0020 | 0.8700 ± 0.0008 |
+  | −4.0 | 0.1353 | 0.7427 ± 0.0015 | 0.9180 ± 0.0006 |
+  | −5.0 | 0.0821 | 0.8169 ± 0.0010 | 0.9453 ± 0.0002 |
+  | −8.0 (`e2_sigma_low_init`, clamped) | 0.0498 | 0.8338 ± 0.0007 | 0.9523 ± 0.0002 |
+
+  (baseline: FVE 0.900159.) This is a sharper confirmation of Claim #3's
+  mechanism than a threshold would have been: a single near-linear
+  FVE-vs-selection-stability relationship holds continuously across six
+  well-separated operating points, not just two arms plus an annealing run.
+  Re-deriving `e2_sigma_low_init`'s "84.1% of the gap closed" from this run's
+  independent pipeline reproduces addendum 7's number exactly. Even at the
+  achievable floor a real residual remains (FVE gap 0.066, Jaccard 0.952, not
+  1.0) — the clamp mechanically prevents testing lower sigma, so this residual
+  cannot be probed further along this axis. Figure at
+  `workshop/figs/a2_dose_response.pdf`. See addendum 17 for the full account
+  and caveats (the correlation is over 6 arm-level points, not a permutation
+  test — CLAUDE.md's unit-of-analysis rule, same status as `frontier.py`'s
+  cross-arm `rho`).
+
   **Why it matters beyond this codebase.** It is the same tension Gumbel-Softmax
   and Concrete exist to resolve: continuous-relaxation stochastic latents do not
   compose with hard combinatorial selection. That yields a constructive
   recommendation rather than a negative result — *if you want stochastic sparse
   codes, put the noise in the selection, not in the magnitudes.*
 
-  **Companion, already scoped:** Claim #3's other open half varies the
-  *discreteness* of the sparsity mechanism (JumpReLU's learned threshold vs.
-  BatchTopK vs. TopK). A2 is the same mechanism along the orthogonal axis. Run A2
-  first — it is far cheaper and does not touch `vsae_jump_relu.py`'s untested
-  `scale_biases` path.
+  **Companion, now the natural next lever:** Claim #3's other open half varies
+  the *discreteness* of the sparsity mechanism (JumpReLU's learned threshold
+  vs. BatchTopK vs. TopK). A2 is the same mechanism along the orthogonal axis
+  and is now done; this is the one addendum 17's residual (a real gap even at
+  the clamp floor) cannot be probed further without. It touches
+  `vsae_jump_relu.py`'s untested `scale_biases` path — check that path is
+  correct before trusting any `log_var` read off a JumpReLU checkpoint,
+  per CLAUDE.md.
 
-  **Costs and landmines.**
-  * gelu-1l trains at ~1 min/run (30 runs in 27 min, 2026-09-02), so 78 runs is
-    ~80 min. **But the liveness analysis is ~6.5 min/checkpoint** — 78
-    checkpoints is ~8.5 h. Run the full analysis on a subset, or only the metrics
-    the curve needs.
-  * `log_var_init = −8.0` already sits **below the clamp floor** (CLAUDE.md), so
-    it saturates. Choose the σ grid to *straddle* the clamp, not to pile up under
-    it, or several points will be the same model.
-  * Training normalises activations to unit mean squared norm, so `log_var_init`
-    and the pre-activation gaps are in the same (normalised) space — the
-    threshold prediction is well-posed without a `norm_factor` correction. Any
-    quantity read back in *raw* activation space still needs it re-estimated
-    (≈25.54 for gelu-1l layer 0).
-  * New runs are post-2026-09-04 so the `scale_biases` fix applies and their
-    `log_var` is saved correctly. Do **not** mix them with older `var_flag=1`
-    checkpoints without applying the addendum-8 correction by hand.
-  * Use `falsification/run_arm.py` and give every seed its own `--output-dir` —
-    `get_experiment_name()` omits the seed.
+  **Costs — actuals vs. the original estimate.** Estimated ~80 min training +
+  up to 8.5h of liveness analysis; actual was ~52 min for the 52 new runs (13
+  seeds × 4 arms) and **zero** liveness-analysis time — addendum 17 only needed
+  each run's own `RUN_COMPLETE.json` FVE and a convergence-checkpoint Jaccard
+  read (`read_a2_dose_response.py`), not the full histogram analyzer, so the
+  8.5h concern never materialised. Landmines that did matter, for the record:
+  * `log_var_init = −8.0` (`e2_sigma_low_init`) sits below the clamp floor and
+    saturates to the same effective sigma as −6.0 would — confirmed directly
+    (addendum 17's table reports the clamped, not raw, sigma for that row).
+  * The four new arms were trained today, post-`scale_biases`-fix, and read
+    with NO bias correction; the two reused pre-existing arms
+    (`e2_sampling_only`, `e2_sigma_low_init`) predate the fix and need it —
+    `read_a2_dose_response.py` applies it per-arm, not globally.
+  * `falsification/run_arm.py`'s per-arm, per-seed `save_dir` (not
+    `--output-dir`) is what prevents seed collisions; used via
+    `falsification/run_a2_sweep.sh`, which mirrors `run_overnight.sh`'s
+    skip-if-`RUN_COMPLETE.json`-exists pattern.
 
 ### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
-**STATUS: items (1)–(2) done (RESULTS addenda 12–14); (3)–(5) open.** Boxes (1)
-and (2) are checked below; pick up at box (3). Nothing here needs re-deriving —
-the reasoning is written out in Claims-worth-opening #6, this is just the
-checklist.
+**STATUS: items (1)–(3) done (RESULTS addenda 12–15); (4)–(5) open.** Boxes (1),
+(2) and (3) are checked below; pick up at box (4). Nothing here needs
+re-deriving — the reasoning is written out in Claims-worth-opening #6, this is
+just the checklist.
 
 Addenda 10-11 (2026-09-05/06) found SCR and TPP give opposite verdicts on the
 same two checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same
@@ -675,13 +757,13 @@ has been:
   zero — addendum 13's caveat is resolved. SCR's N=2/N=5 selection is
   bit-identical between the two bootstraps; all extra width is N≥10. Box (2)
   fully done.
-- [ ] **(3) Read which features SCR's and TPP's own effect computation
-  selects** (Claims-worth-opening #6c) — a mechanistic look at whether the
-  same vSAE features get reused across TPP's five classes (overloading) while
-  SCR's selected features are disjoint from all of them (a dedicated axis). A
-  read of existing artifacts, not a new run.
-  **→ Promoted and sharpened as Next steps A1** (usage-rank prediction, stated
-  falsifier). Do it there; this box closes when A1 does.
+- [x] **(3) Read which features SCR's and TPP's own effect computation
+  selects** (Claims-worth-opening #6c) — **done 2026-09-11 as Next steps A1,
+  FALSIFIED, RESULTS addendum 15.** The usage-rank prediction (SCR's top-effect
+  features rank low, TPP's rank high) does not hold — both sit in the same
+  0.55–0.73 band at every N, the sign flips between N≤5 and N≥10, and
+  within-metric across-class variance dwarfs the between-metric difference. See
+  Next steps A1 above for the full account.
 - [ ] **(4) The second SAEBench dataset and the other three `bias_in_bios`
   class pairs** — cheap now that both scripts exist and the caches are warm,
   and the natural way to check whether the disagreement generalises beyond
@@ -692,15 +774,17 @@ has been:
   trained-small" as a live confound in the reference curve itself, at the cost
   of a real training run.
 
-Boxes (1)–(2) are done (addenda 12–14); boxes (3)–(5) are not scoped in code yet
+Boxes (1)–(3) are done (addenda 12–15); boxes (4)–(5) are not scoped in code yet
 — they are the plan, recorded before picking one, per this project's own working
 style. When starting a fresh session on this: read this checklist,
-Claims-worth-opening #6 in full, and RESULTS addenda 10–14, then pick up at box
-(3). Box (2) confirmed the prediction from (1): TPP's N=20 margin is a
+Claims-worth-opening #6 in full, and RESULTS addenda 10–15, then pick up at box
+(4). Box (2) confirmed the prediction from (1): TPP's N=20 margin is a
 knife-edge (−0.009 [−0.017, −0.000]), so the "explained by size" reading rests
 on N≤10; SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps)
 and its mean-level verdict is carried by N=2 alone — where, addendum 14 shows,
-the feature selection is bit-identical under train resampling.
+the feature selection is bit-identical under train resampling. Box (3) then
+falsified the leading hypothesis for *why* SCR and TPP disagree (usage-rank
+sorting) — addendum 15 — so the disagreement itself is still open.
 
 ### 1. Desk work — no GPU, no new code
 
