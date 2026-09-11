@@ -48,6 +48,7 @@ class ExperimentConfig:
     auxk_alpha: float = 1.0  # Auxiliary loss coefficient
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     constrain_decoder: bool = False
+    log_var_init: float = -2.0  # VSAEBatchTopKConfig's own default, exposed here
     
     # Training configuration
     total_steps: int = 10000
@@ -211,6 +212,7 @@ class ExperimentRunner:
             k=k,
             var_flag=self.config.var_flag,
             constrain_decoder=self.config.constrain_decoder,
+            log_var_init=self.config.log_var_init,
             dtype=self.config.get_torch_dtype(),
             device=self.config.get_device()
         )

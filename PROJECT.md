@@ -53,6 +53,29 @@ other open half (varying the *discreteness* of the sparsity mechanism —
 JumpReLU vs. BatchTopK vs. TopK) is the next lever, not a finer sigma sweep
 against the same clamp. **Both threads of Next steps A are now closed.**
 
+**Then ran A3, Claim #3's discreteness companion: does A2's FVE-vs-Jaccard
+coupling depend on TopK's per-token selection, or hold for BatchTopK's global,
+more elastic budget too?** Two pre-existing bugs in `vsae_batch_topk.py` had
+to be handled first (both now in CLAUDE.md): `scale_biases` carried the exact
+`var_encoder.bias` corruption bug addendum 8 fixed in `vsae_topk.py` (fixed
+identically here) and `_apply_topk_sparsity`'s global budget silently breaks
+by a factor of `~ctx_len` inside `loss_recovered()`'s 3D hook (not fixed — out
+of scope; `frac_variance_explained` is unaffected and is what this uses).
+Seven new arms (deterministic baseline + A2's exact 6-point sigma grid) × 13
+seeds, 91/91 runs, 0 failures, ~78 min. **Result (RESULTS addendum 18): the
+coupling generalises.** BatchTopK's own r(FVE, Jaccard) = **+0.9979**, just as
+tight as TopK's +0.9993 — the "more elastic budget should be more robust"
+intuition is not just falsified but mildly reverses: at every matched sigma
+BatchTopK recovers a slightly *smaller* fraction of its own (higher) baseline
+than TopK does of its own (80.5% vs. 84.1% of the gap closed at the clamp
+floor). Claim #3's mechanism — selection churn costs reconstruction in direct
+proportion — looks like a property of hard top-k-style selection under noise
+in general, not a TopK-specific quirk. JumpReLU (no training script exists;
+CLAUDE.md flags the trainer as never exercised end to end) remains the
+sharper test of *discreteness itself* versus *hard top-k specifically*, and is
+not attempted this session — deliberately scoped out given the size of that
+lift versus BatchTopK's.
+
 Prior session (2026-09-10): ran the full (non-conditional)
 `--resample-train` SCR bootstrap — **RESULTS addendum 14** — the one thing
 addendum 13 flagged as unrun. 200 draws, full 9-point grid, 7.2 h, after adding
@@ -184,10 +207,10 @@ numbers were unaffected.
 |---|---|
 | Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
-| Newest figure | `workshop/figs/a2_dose_response.pdf` — the σ_init dose-response, FVE and Jaccard vs. sigma plus their r=+0.9993 scatter (addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is the prior one. |
+| Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **A2's dose-response is in (addendum 17): no threshold, but FVE tracks TopK selection Jaccard almost exactly — r = +0.9993 across 6 points, 13 seeds each, spanning a >12× sigma range.** The curve is smooth (confirming the pre-flight's no-knee prediction) but FVE does NOT decouple from Jaccard as the pre-flight's other half predicted — the same near-linear relationship holds continuously across the whole grid, a sharper confirmation of Claim #3's selection-churn mechanism than a threshold would have been. Re-derives `e2_sigma_low_init`'s 84.1%-gap-closed number exactly from an independent pipeline. |
-| In progress | Nothing running. **Both threads of Next steps A are closed** (A1 addendum 15, A2 addendum 17). Next up is undecided — see Next steps below (E4 boxes 4–5, Claim #3's discreteness companion, or the mechanism-paper writeup itself). |
+| Newest result | **A3 (addendum 18): the FVE-vs-selection-Jaccard coupling generalises from TopK to BatchTopK.** r = +0.9979 (BatchTopK) vs. +0.9993 (TopK, addendum 17) — both near-perfect. The "global/elastic selection budget should be more robust to noise" intuition is falsified and mildly reverses: BatchTopK closes a slightly *smaller* fraction of its own (higher) baseline than TopK closes of its own, at every matched sigma. Found and fixed a live `scale_biases` bug in `vsae_batch_topk.py` (same class as addendum 8's, CLAUDE.md) en route; found and documented (not fixed) a second bug that makes this trainer's `frac_recovered` unreliable. |
+| In progress | Nothing running. **Both mechanism-paper threads (A1, A2) plus their companion (A3) are done** (addenda 15, 17, 18). JumpReLU — the sharper discreteness test, no training script exists — is explicitly not attempted. Next up is undecided: see Next steps below (E4 boxes 4–5, writing a JumpReLU training script, or the mechanism-paper writeup itself). |
 | Blocking | Nothing blocked on compute or data. Box (2) done (addenda 12–14); box (3) done, negative (addendum 15); boxes (4)–(5) open. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
@@ -677,14 +700,21 @@ The two threads, both now done:
   recommendation rather than a negative result — *if you want stochastic sparse
   codes, put the noise in the selection, not in the magnitudes.*
 
-  **Companion, now the natural next lever:** Claim #3's other open half varies
-  the *discreteness* of the sparsity mechanism (JumpReLU's learned threshold
-  vs. BatchTopK vs. TopK). A2 is the same mechanism along the orthogonal axis
-  and is now done; this is the one addendum 17's residual (a real gap even at
-  the clamp floor) cannot be probed further without. It touches
-  `vsae_jump_relu.py`'s untested `scale_biases` path — check that path is
-  correct before trusting any `log_var` read off a JumpReLU checkpoint,
-  per CLAUDE.md.
+  **Companion — A3, BatchTopK half done (RESULTS addendum 18), JumpReLU half
+  not attempted.** Claim #3's other open half varies the *discreteness* of the
+  sparsity mechanism (JumpReLU's learned threshold vs. BatchTopK vs. TopK).
+  The BatchTopK side is done: the FVE-vs-Jaccard coupling generalises
+  (r=+0.9979 vs. TopK's +0.9993), and if anything BatchTopK's more elastic
+  global selection budget is *slightly more* exposed to noise at matched
+  sigma, not less (80.5% vs. 84.1% of the gap closed at the clamp floor).
+  **JumpReLU is the sharper remaining test of discreteness itself** (BatchTopK
+  is still hard top-k, just batch-scoped) but needs a training script written
+  from scratch — none exists in `training_scripts/` — and the trainer itself
+  is flagged in CLAUDE.md as never exercised end to end, so expect to find and
+  fix bugs in the trainer before the sigma question is even reachable, the way
+  A3 needed two BatchTopK fixes first. `vsae_jump_relu.py`'s `scale_biases` is
+  already correct (verified directly, unlike BatchTopK's, which was not) but
+  that says nothing about the rest of the forward/backward path.
 
   **Costs — actuals vs. the original estimate.** Estimated ~80 min training +
   up to 8.5h of liveness analysis; actual was ~52 min for the 52 new runs (13

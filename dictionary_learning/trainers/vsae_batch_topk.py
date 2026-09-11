@@ -205,6 +205,26 @@ class VSAEBatchTopK(Dictionary, nn.Module):
         """
         if self.architecture_mode == "vae_first" and self.preserve_gradient_flow:
             # OPTION 1: Apply TopK to raw samples (preserves gradients, allows negative values)
+            #
+            # KNOWN BUG (found 2026-09-11, not fixed -- out of scope for the
+            # falsification battery's A3 arms, which only read
+            # frac_variance_explained and their own Jaccard measurement, both
+            # unaffected -- see PROJECT.md / RESULTS addendum 18): `batch_size`
+            # here is `z.size(0)`, the size of z's FIRST dimension only. During
+            # training z is always pre-flattened to [n_tokens, d] by the
+            # activation buffer, so batch_size really is the token count and
+            # k_total = k * batch_size is the intended global per-token-average
+            # budget. But `dictionary_learning/evaluation.py`'s
+            # `loss_recovered_transformer_lens` calls this model's forward()
+            # directly inside a transformer_lens hook on UNFLATTENED
+            # [batch, seq_len, d] activations -- there `z.size(0)` is the
+            # SEQUENCE batch size, not the token count, so k_total is too small
+            # by a factor of ~seq_len (e.g. 256*2 instead of 256*2*128 for a
+            # ctx_len=128 hook). The reconstruction this produces is nowhere
+            # near training-time sparsity, which is why `frac_recovered` comes
+            # out catastrophically negative (worse than zero-ablation) even
+            # when `frac_variance_explained` -- computed on the buffer's own
+            # flattened 2D batches, not through this hook -- looks fine.
             batch_size = z.size(0)
             flattened = z.view(-1)
             
@@ -403,18 +423,31 @@ class VSAEBatchTopK(Dictionary, nn.Module):
                 }
     
     def scale_biases(self, scale: float) -> None:
-        """Scale bias parameters."""
+        """Scale bias parameters.
+
+        var_encoder.bias is deliberately NOT multiplied by `scale` here. It
+        parameterises log(sigma^2), not a quantity on the same additive axis as
+        x/mu, so multiplying it by norm_factor (the original behaviour) is not
+        the correct transformation and corrupts the learned-sigma reading of
+        any saved var_flag=1 checkpoint -- exactly the bug CLAUDE.md documents
+        for vsae_topk.py (RESULTS addendum 8), reproduced here because this
+        trainer duplicated the pre-fix scale_biases. Rescaling var_encoder.
+        WEIGHT by 1/scale instead preserves log_var's true trained value when
+        read on raw activations, mirroring vsae_topk.py's fix and
+        vsae_jump_relu.py's (which already carries it). See the long comment on
+        VSAETopK.scale_biases in vsae_topk.py for the full derivation.
+        """
         with torch.no_grad():
             self.encoder.bias.mul_(scale)
-            
+
             if self.use_april_update_mode:
                 if hasattr(self.decoder, 'bias') and self.decoder.bias is not None:
                     self.decoder.bias.mul_(scale)
             else:
                 self.bias.mul_(scale)
-            
+
             if self.var_flag == 1:
-                self.var_encoder.bias.mul_(scale)
+                self.var_encoder.weight.div_(scale)
     
     @classmethod
     def from_pretrained(cls, path: str, config: Optional[VSAEBatchTopKConfig] = None, **kwargs):

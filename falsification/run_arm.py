@@ -368,6 +368,69 @@ for _lvi, _name in ((-1.0, "a2_sigma_init_m1"), (-3.0, "a2_sigma_init_m3"),
                       "checkpoint_steps": _EARLY_SCHEDULE},
     }
 
+# A3: Claim #3's discreteness companion (PROJECT.md Next steps, "companion,
+# now the natural next lever"). A2 found FVE tracks TopK selection-Jaccard
+# almost exactly (r=+0.9993) across a sigma_init sweep -- the question this
+# arm family asks is whether that tight coupling is specific to PER-TOKEN
+# hard top-k selection, or holds just as tightly for BatchTopK's GLOBAL
+# top-(k*batch_size) selection over the whole flattened batch
+# (`vsae_batch_topk.py::_apply_topk_sparsity`, `architecture_mode="vae_first"`,
+# `apply_topk_to_samples=True` -- both defaults, matching vsae_topk.py's
+# noise-before-selection order). A batch-level budget is more elastic than a
+# strict per-token quota (one token's noise-bumped feature can be compensated
+# by another token's promoted one), so if selection "discreteness" per se is
+# what makes TopK fragile, BatchTopK's r(FVE, Jaccard) should be measurably
+# looser than TopK's, not equally tight.
+#
+# Two fixes were needed before this could run at all (both landmines, recorded
+# in CLAUDE.md): `vsae_batch_topk.py::scale_biases` carried the SAME
+# var_encoder.bias-multiplication bug RESULTS addendum 8 found and fixed in
+# vsae_topk.py -- fixed here identically (weight rescaled instead), so any
+# var_flag=1 checkpoint from this arm family is correct on raw activations.
+# `training_scripts/train_vsae_batchtopk.py`'s ExperimentConfig did not expose
+# `log_var_init` at all (always used VSAEBatchTopKConfig's hardcoded -2.0
+# default) -- added and threaded through `create_model_config`.
+#
+# reparameterize()'s clamp is IDENTICAL to vsae_topk.py's ([-6, 2]), so A2's
+# exact sigma grid is directly comparable point-for-point; `hook_name` is
+# overridden from this script's own default (`blocks.0.mlp.hook_post`) to
+# BASE's `blocks.0.hook_resid_post` so activation_dim/dict_size line up with
+# every other arm in the battery, and `k_ratio` (this trainer's name for
+# TopK's `k_fraction`) is matched to 0.125.
+#
+# A THIRD landmine, specific to how run_arm.py overrides interact with this
+# script (not present for train_vsae_topk.py only because its own
+# create_full_config() default already happens to be total_steps=10000):
+# ExperimentConfig.__post_init__ computes warmup_steps / sparsity_warmup_steps
+# / decay_start_step from `self.total_steps` AT CONSTRUCTION TIME, i.e. from
+# create_full_config()'s own default of 25000 -- then run_arm.py's setattr
+# loop overrides total_steps to BASE's 10000 without re-running __post_init__,
+# so those three fields would silently stay computed from 25000 (decay_start_step
+# baked in as 20000, past the entire 10000-step run) unless overridden
+# explicitly here too. Values below match what train_vsae_topk.py's own
+# __post_init__ produces at total_steps=10000 (confirmed via --dry-run on an
+# A2 arm), so A3 is schedule-matched to A2/E2, not merely architecture-matched.
+_A3_BATCHTOPK_BASE = {**BASE, "k_ratio": 0.125, "warmup_steps": 200,
+                       "sparsity_warmup_steps": 500, "decay_start_step": 8000}
+
+ARMS["a3_batchtopk_baseline"] = {
+    "script": "train_vsae_batchtopk.py",
+    "overrides": {**_A3_BATCHTOPK_BASE, "var_flag": 0, "kl_coeff": 0.0},
+}
+for _lvi, _name in (
+    (-1.0, "a3_batchtopk_sigma_init_m1"),
+    (-2.0, "a3_batchtopk_sampling_only"),   # matches e2_sampling_only's grid point
+    (-3.0, "a3_batchtopk_sigma_init_m3"),
+    (-4.0, "a3_batchtopk_sigma_init_m4"),
+    (-5.0, "a3_batchtopk_sigma_init_m5"),
+    (-8.0, "a3_batchtopk_sigma_low_init"),  # matches e2_sigma_low_init, clamped to -6.0 effective
+):
+    ARMS[_name] = {
+        "script": "train_vsae_batchtopk.py",
+        "overrides": {**_A3_BATCHTOPK_BASE, "var_flag": 1, "kl_coeff": 0.0,
+                      "log_var_init": _lvi, "checkpoint_steps": _EARLY_SCHEDULE},
+    }
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.

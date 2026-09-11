@@ -55,29 +55,45 @@ Two lines of work:
   (Pearson r = +0.9993) across the whole 6-point grid — a sharper confirmation
   of Claim #3's mechanism than a threshold would have been, not the predicted
   decoupling. **Both threads of `Next steps A` are now closed.**
+- **A3 (BatchTopK half of Claim #3's discreteness companion) is DONE (RESULTS
+  addendum 18).** Found and fixed a live `scale_biases` bug in
+  `vsae_batch_topk.py` (the same `var_encoder.bias` corruption addendum 8 fixed
+  in `vsae_topk.py`) and found-but-didn't-fix a second bug that makes this
+  trainer's `frac_recovered` unreliable (both now in CLAUDE.md). Seven new arms
+  (deterministic baseline + A2's exact sigma grid) × 13 seeds, 91/91 runs, 0
+  failures. **Result: the coupling generalises** — BatchTopK's r(FVE, Jaccard)
+  = +0.9979, essentially as tight as TopK's +0.9993 — and the "elastic global
+  budget should be more robust" intuition mildly *reverses* (BatchTopK closes
+  80.5% of its own gap at the clamp floor vs. TopK's 84.1%). **JumpReLU (the
+  sharper discreteness test) is NOT attempted — no training script exists for
+  it, unlike BatchTopK's.**
 - Branch `claude/falsification-framework`, pushed to origin, merged to `master`.
 
 ### Next task — nothing pre-selected; pick from the options below
 
-Both mechanism-paper threads (`PROJECT.md` **Next steps A**) are closed as of
-this session: A1 (RESULTS addendum 15, falsified) and A2 (RESULTS addendum 17,
-confirmed with a sharper result than predicted). **The paper's three parts are
-now all established** — (1) fixed-variance KL is a null L2 penalty (E1); (2)
-sampling-on damage tracks TopK selection churn almost linearly, no threshold
-(A2); (3) the literature's effect sizes are implementation-variance-sized (E1's
-5 factors, E3's ReLU, the decoder-gradient projection, the initial weight
-draw). Nothing is queued next — read `PROJECT.md`'s "Next steps" section fresh
-and pick from what remains:
+Both mechanism-paper threads (`PROJECT.md` **Next steps A**) plus the
+BatchTopK half of Claim #3's companion are closed as of this session: A1
+(RESULTS addendum 15, falsified), A2 (RESULTS addendum 17, confirmed sharper
+than predicted), A3/BatchTopK (RESULTS addendum 18, generalises). **The
+paper's three parts are now all established** — (1) fixed-variance KL is a
+null L2 penalty (E1); (2) sampling-on damage tracks selection churn almost
+linearly, no threshold, and this generalises across at least two selection
+mechanisms (A2, A3); (3) the literature's effect sizes are
+implementation-variance-sized (E1's 5 factors, E3's ReLU, the
+decoder-gradient projection, the initial weight draw). Nothing is queued next
+— read `PROJECT.md`'s "Next steps" section fresh and pick from what remains:
 
 - **E4 boxes (4)–(5)** — the second SAEBench dataset / other `bias_in_bios`
   class pairs (cheap, widens coverage), or training a size-matched baseline
   from scratch (expensive, removes the last confound in the reference curve).
-- **Claim #3's discreteness companion** — JumpReLU vs. BatchTopK vs. TopK,
-  the orthogonal axis to A2's noise sweep, now the natural next lever since
-  addendum 17 found a real residual at A2's clamp floor that can't be probed
-  further along the sigma axis. Touches `vsae_jump_relu.py`'s untested
-  `scale_biases` path — verify that path is correct before trusting any
-  `log_var` read off a JumpReLU checkpoint.
+- **JumpReLU, the sharper discreteness test** — BatchTopK is still hard top-k,
+  just batch-scoped, so it didn't test *discreteness itself* as sharply as a
+  smooth, learned-threshold mechanism would. No training script exists in
+  `training_scripts/` for it — writing one from scratch, and expecting to find
+  bugs in the never-before-exercised trainer before the sigma question is even
+  reachable (the way A3 needed two BatchTopK fixes first), is most of the
+  remaining cost. `vsae_jump_relu.py`'s `scale_biases` is already correct
+  (verified directly) but that says nothing about the rest of the path.
 - **Write up the mechanism paper itself** — the material is now complete per
   the framing in `PROJECT.md` Next steps A's intro.
 - **Claims-worth-opening #4/#5** — desk work, no GPU, still open.
@@ -139,6 +155,33 @@ reproduces addendum 7's number exactly. Even at the floor a real residual
 remains (FVE gap 0.066, Jaccard 0.952) that the clamp prevents probing further.
 Figure: `workshop/figs/a2_dose_response.pdf`.
 
+## Done 2026-09-11 — A3, the BatchTopK discreteness companion (addendum 18)
+
+Two pre-existing bugs in `vsae_batch_topk.py`, found while scoping this (both
+now in CLAUDE.md): `scale_biases` carried the exact `var_encoder.bias`
+corruption bug addendum 8 fixed in `vsae_topk.py` — fixed identically here.
+`_apply_topk_sparsity`'s global `k*batch_size` budget silently breaks by a
+factor of `~ctx_len` inside `loss_recovered()`'s 3D-activation hook (not
+fixed — out of scope; use `frac_variance_explained`, not `frac_recovered`, for
+this trainer). A third issue was purely cosmetic (a stale `d8192` in the
+checkpoint directory name; the model itself is correctly `d2048`, verified
+directly against `encoder.weight`'s shape).
+
+Seven new arms (`a3_batchtopk_baseline` + A2's exact 6-point `log_var_init`
+grid) × 13 seeds ran via `falsification/run_a3_sweep.sh` (91/91 runs, 0
+failures, ~78 min). `falsification/read_a3_dose_response.py` mirrors A2's
+reader but reads Jaccard from `VSAEBatchTopK.encode()`'s `selection_mask`
+boolean tensor directly (BatchTopK doesn't guarantee exactly k active features
+per token, so the TopK-specific `2k-intersection` union shortcut doesn't
+apply). **Result: the coupling generalises.** r(FVE, Jaccard) = +0.9979
+(BatchTopK) vs. +0.9993 (TopK) — both near-perfect. BatchTopK's own
+deterministic baseline is notably better than TopK's (0.9509 vs. 0.900159),
+but *relative* to each architecture's own baseline, BatchTopK is very slightly
+*more* exposed to sampling noise at every matched sigma, not less (closes
+80.5% of its own gap at the clamp floor vs. TopK's 84.1%) — the "elastic
+global budget = more robust" intuition doesn't just fail to hold, it mildly
+reverses. Figure: `workshop/figs/a3_batchtopk_dose_response.pdf`.
+
 ## What is established (one line each — detail in RESULTS + PROJECT.md)
 
 - **E1:** a fixed-variance vSAE *is* a TopK SAE with an L2 penalty (identity
@@ -154,6 +197,9 @@ Figure: `workshop/figs/a2_dose_response.pdf`.
 - **A2/Claim #3:** sampling-induced FVE damage tracks TopK selection-Jaccard
   instability almost exactly (r=+0.9993) across a 6-point, 13-seed-per-point
   sigma_init sweep — a smooth dose-response, not a threshold (addenda 16–17).
+- **A3/Claim #3 (BatchTopK):** the same coupling holds for BatchTopK's global
+  selection (r=+0.9979) — not TopK-specific — and BatchTopK is very slightly
+  *more*, not less, exposed to noise at matched sigma (addendum 18).
 - **E4:** SCR says the vSAE's advantage is *not* explained by dictionary size;
   TPP says it *is*. Same checkpoints, same grid. The disagreement is the finding
   (thesis Failure 1, reproduced fresh). It is threshold-uniform (addendum 12)
@@ -164,10 +210,11 @@ Figure: `workshop/figs/a2_dose_response.pdf`.
 ## Next action
 
 Both threads of `PROJECT.md` **Next steps A** are closed (A1 addendum 15, A2
-addenda 16–17) — nothing is pre-selected for the next session. See "Next
-task" above for the menu (E4 boxes 4–5, Claim #3's discreteness companion, or
-writing up the mechanism paper). Read `PROJECT.md`'s Next steps section fresh
-and pick.
+addenda 16–17), and so is the BatchTopK half of Claim #3's companion (A3,
+addendum 18) — nothing is pre-selected for the next session. See "Next task"
+above for the menu (E4 boxes 4–5, writing a JumpReLU training script for the
+sharper discreteness test, or writing up the mechanism paper). Read
+`PROJECT.md`'s Next steps section fresh and pick.
 
 ## Environment
 

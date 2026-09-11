@@ -111,6 +111,50 @@ is swallowed by an `except ... continue`, and the run reports success with the
 cross-entropy metrics written as NaN. Every committed checkpoint shows that
 signature. `falsification/run_arm.py` now evaluates at batch 2 x 48, which fixes it.
 
+**`vsae_batch_topk.py::scale_biases` carried the SAME `var_encoder.bias`
+corruption bug vsae_topk.py had — found and fixed 2026-09-11 (RESULTS addendum
+18).** It multiplied `var_encoder.bias` by `norm_factor` at save time, exactly
+the mistake addendum 8 describes for `vsae_topk.py`: wrong for a log-variance
+bias, and it drives any saved `var_flag=1` BatchTopK checkpoint's `log_var` to
+read as clamp-collapsed regardless of what was learned. Now fixed the same way
+(rescale `var_encoder.weight` instead, bias untouched) — every
+`a3_batchtopk_*` checkpoint (`falsification/run_arm.py`) was trained after the
+fix and needs no correction. `vsae_jump_relu.py` already carried the fix
+proactively (never exercised by an actual run before this).
+
+**`vsae_batch_topk.py::_apply_topk_sparsity`'s global budget breaks under
+`loss_recovered()`'s 3D activations — found 2026-09-11, NOT fixed (out of
+scope for A3; use FVE and Jaccard, not `frac_recovered`, for this trainer).**
+The global top-`(k * batch_size)` selection uses `z.size(0)` as `batch_size`.
+During training `z` is pre-flattened to `[n_tokens, d]`, so that's correct.
+But `dictionary_learning/evaluation.py`'s `loss_recovered_transformer_lens`
+calls this model directly inside a transformer_lens hook on UNFLATTENED
+`[batch, seq_len, d]` activations, where `z.size(0)` is the sequence-batch
+size, not the token count — undershooting the active-feature budget by
+`~ctx_len` (e.g. 256×2 instead of 256×2×128). The reconstruction this produces
+is nowhere near training-time sparsity, so `frac_recovered` comes out
+catastrophically negative (worse than zero-ablation) even when
+`frac_variance_explained` — computed on the buffer's own flattened 2D batches,
+a different code path — looks fine. Any `a3_batchtopk_*` (or other
+`VSAEBatchTopK`) checkpoint's `frac_recovered`/`loss_reconstructed` is
+unreliable; `frac_variance_explained` is not.
+
+**`training_scripts/train_vsae_batchtopk.py`'s `ExperimentConfig.__post_init__`
+computes `warmup_steps`/`sparsity_warmup_steps`/`decay_start_step` from
+`total_steps` AT CONSTRUCTION TIME — found 2026-09-11.** `create_full_config()`
+defaults `total_steps=25000`; `falsification/run_arm.py`'s override loop then
+sets `total_steps=10000` via `setattr` without re-running `__post_init__`, so
+those three derived fields silently stay computed from 25000 (e.g.
+`decay_start_step=20000`, past the entire 10000-step run) unless overridden
+explicitly alongside `total_steps`. `run_arm.py`'s `a3_batchtopk_*` arms pin
+all three to the values `train_vsae_topk.py`'s own `__post_init__` produces at
+`total_steps=10000` (200 / 500 / 8000). This is specific to
+`train_vsae_batchtopk.py` — `train_vsae_topk.py`'s own `create_full_config()`
+default already happens to be `total_steps=10000`, so the mismatch never
+triggers there, which is luck, not a property of `run_arm.py`'s override
+mechanism. Check any trainer's own `total_steps` default before trusting
+BASE's override of it.
+
 ## Environment
 
 - **Two environments, and it matters which you are in.** Run
