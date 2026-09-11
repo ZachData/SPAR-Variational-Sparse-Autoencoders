@@ -76,6 +76,28 @@ sharper test of *discreteness itself* versus *hard top-k specifically*, and is
 not attempted this session — deliberately scoped out given the size of that
 lift versus BatchTopK's.
 
+**Then closed E4 box (4): widened SCR/TPP coverage to 3 more `bias_in_bios`
+pairs and the second SAEBench dataset (`canrager/amazon_reviews_mcauley_
+1and5`).** `run_e4_scr.py`/`run_e4_tpp.py` generalised with `--dataset`/
+`--column1-vals` CLI args. Found and fixed a real methodological trap before
+trusting any of it: `run_eval_single_sae`'s cache loads by filename existence
+only, so `--smoke`-testing a new pair before its real run silently poisons the
+"full" run with a 20x-undersized cache (caught by comparing cache file sizes;
+contaminated cache and results deleted and redone) — now a standing landmine
+in CLAUDE.md ("never `--smoke` a pair/dataset you're about to run for real").
+**Result (RESULTS addendum 19): both verdicts replicate as the dominant
+pattern, with real added variance from the second dataset, not a reversal.**
+SCR "not explained by size" replicates 4/4 on the 3 new `bias_in_bios` pairs
+(mean margin +0.116) and 3/4 on amazon's own 4 pairs (mean +0.029, one
+reversal — Books/CDs_and_Vinyl — with a near-zero `random` bracket, so a weak
+exception rather than a clean flip); combined, 7 of 8 (pair, dataset) points
+say "not explained." TPP's "explained by size" verdict replicates on amazon
+via `top_usage` (−0.061) but its `random` bracket goes from decisive
+(−0.051 on `bias_in_bios`) to a coin flip (+0.0004) — the vSAE's own TPP score
+barely moves (0.1055 vs. 0.1031); what shifts is where the baseline's curve
+sits. Box (4) is done; box (5) (train a size-matched baseline from scratch)
+is the one item left in E4's checklist.
+
 Prior session (2026-09-10): ran the full (non-conditional)
 `--resample-train` SCR bootstrap — **RESULTS addendum 14** — the one thing
 addendum 13 flagged as unrun. 200 draws, full 9-point grid, 7.2 h, after adding
@@ -209,9 +231,9 @@ numbers were unaffected.
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **A3 (addendum 18): the FVE-vs-selection-Jaccard coupling generalises from TopK to BatchTopK.** r = +0.9979 (BatchTopK) vs. +0.9993 (TopK, addendum 17) — both near-perfect. The "global/elastic selection budget should be more robust to noise" intuition is falsified and mildly reverses: BatchTopK closes a slightly *smaller* fraction of its own (higher) baseline than TopK closes of its own, at every matched sigma. Found and fixed a live `scale_biases` bug in `vsae_batch_topk.py` (same class as addendum 8's, CLAUDE.md) en route; found and documented (not fixed) a second bug that makes this trainer's `frac_recovered` unreliable. |
-| In progress | Nothing running. **Both mechanism-paper threads (A1, A2) plus their companion (A3) are done** (addenda 15, 17, 18). JumpReLU — the sharper discreteness test, no training script exists — is explicitly not attempted. Next up is undecided: see Next steps below (E4 boxes 4–5, writing a JumpReLU training script, or the mechanism-paper writeup itself). |
-| Blocking | Nothing blocked on compute or data. Box (2) done (addenda 12–14); box (3) done, negative (addendum 15); boxes (4)–(5) open. |
+| Newest result | **E4 box (4) done (addendum 19): the SCR/TPP disagreement generalises across pairs and datasets, mostly.** SCR "not explained by size" replicates 4/4 on 3 new `bias_in_bios` pairs and 3/4 on all 4 amazon pairs (one weak exception); combined 7/8. TPP "explained by size" replicates on amazon via `top_usage` but its `random` bracket goes from decisive to a coin flip. Found and fixed a real cache-contamination trap (`--smoke` before a real run silently poisons it) en route — CLAUDE.md landmine. |
+| In progress | Nothing running. **A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) are all done this session.** Next up is undecided: see Next steps below (E4 box (5) — a size-matched baseline from scratch, JumpReLU's training script, or the mechanism-paper writeup). |
+| Blocking | Nothing blocked on compute or data. Boxes (1)–(4) done (addenda 12–15, 19); box (5) open. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -736,10 +758,10 @@ The two threads, both now done:
 
 ### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
-**STATUS: items (1)–(3) done (RESULTS addenda 12–15); (4)–(5) open.** Boxes (1),
-(2) and (3) are checked below; pick up at box (4). Nothing here needs
-re-deriving — the reasoning is written out in Claims-worth-opening #6, this is
-just the checklist.
+**STATUS: items (1)–(4) done (RESULTS addenda 12–15, 19); (5) open.** Boxes
+(1)–(4) are checked below; pick up at box (5). Nothing here needs re-deriving
+— the reasoning is written out in Claims-worth-opening #6, this is just the
+checklist.
 
 Addenda 10-11 (2026-09-05/06) found SCR and TPP give opposite verdicts on the
 same two checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same
@@ -794,21 +816,30 @@ has been:
   0.55–0.73 band at every N, the sign flips between N≤5 and N≥10, and
   within-metric across-class variance dwarfs the between-metric difference. See
   Next steps A1 above for the full account.
-- [ ] **(4) The second SAEBench dataset and the other three `bias_in_bios`
-  class pairs** — cheap now that both scripts exist and the caches are warm,
-  and the natural way to check whether the disagreement generalises beyond
-  this one dataset/pair. Still single-seed, still descriptive — this widens
-  *coverage*, not statistical power.
+- [x] **(4) The second SAEBench dataset and the other three `bias_in_bios`
+  class pairs** — **done 2026-09-11, RESULTS addendum 19.** `run_e4_scr.py`/
+  `run_e4_tpp.py` generalised with `--dataset`/`--column1-vals`. **Result:
+  both verdicts replicate as the dominant pattern, with real added variance,
+  not a reversal.** SCR "not explained by size": 4/4 on the 3 new
+  `bias_in_bios` pairs (mean margin +0.116), 3/4 on amazon's own 4 pairs (mean
+  +0.029, one weak exception — Books/CDs_and_Vinyl, near-zero `random`
+  bracket); 7/8 combined. TPP "explained by size" replicates on amazon via
+  `top_usage` (−0.061) but its `random` bracket goes from decisive (−0.051) to
+  a coin flip (+0.0004) — the vSAE's own TPP score barely moves, the
+  baseline's curve is what shifts. A real methodological trap was found and
+  fixed en route: `--smoke`-testing a new pair before its real run silently
+  poisons the "full" run's cache (SAEBench loads by filename existence only,
+  not by config match) — now a CLAUDE.md landmine.
 - [ ] **(5) Train a size-matched baseline from scratch**
   (Claims-worth-opening #6d, most expensive) — removes "masked vs.
   trained-small" as a live confound in the reference curve itself, at the cost
   of a real training run.
 
-Boxes (1)–(3) are done (addenda 12–15); boxes (4)–(5) are not scoped in code yet
-— they are the plan, recorded before picking one, per this project's own working
+Boxes (1)–(4) are done (addenda 12–15, 19); box (5) is not scoped in code yet
+— it is the plan, recorded before picking it up, per this project's own working
 style. When starting a fresh session on this: read this checklist,
-Claims-worth-opening #6 in full, and RESULTS addenda 10–15, then pick up at box
-(4). Box (2) confirmed the prediction from (1): TPP's N=20 margin is a
+Claims-worth-opening #6 in full, and RESULTS addenda 10–19, then pick up at box
+(5). Box (2) confirmed the prediction from (1): TPP's N=20 margin is a
 knife-edge (−0.009 [−0.017, −0.000]), so the "explained by size" reading rests
 on N≤10; SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps)
 and its mean-level verdict is carried by N=2 alone — where, addendum 14 shows,

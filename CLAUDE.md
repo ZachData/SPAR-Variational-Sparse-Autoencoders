@@ -155,6 +155,17 @@ triggers there, which is luck, not a property of `run_arm.py`'s override
 mechanism. Check any trainer's own `total_steps` default before trusting
 BASE's override of it.
 
+**`run_e4_scr.py` / `run_e4_tpp.py`'s activation cache is loaded if the file
+exists at all — it does not check the config that built it.** Found
+2026-09-11: running `--smoke` (test_set_size=50) on a new dataset/class pair
+and then the full run (test_set_size=1000) on the same one silently reuses the
+tiny smoke-sized cache for the "full" run, with no warning — visible only as
+suspiciously exact small-fraction accuracy values (e.g. 0.9583333730697632 =
+23/24) and an undersized `e4_scr_artifacts/*_activations.pt` (~200MB instead
+of ~4GB). Never `--smoke` a pair/dataset you're about to run for real; if you
+need a pipeline sanity check, use a scratch `--out` and delete the resulting
+`e4_scr_artifacts/<dataset>_<pair>_*` files before the real run.
+
 ## Environment
 
 - **Two environments, and it matters which you are in.** Run

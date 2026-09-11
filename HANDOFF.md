@@ -67,25 +67,37 @@ Two lines of work:
   80.5% of its own gap at the clamp floor vs. TopK's 84.1%). **JumpReLU (the
   sharper discreteness test) is NOT attempted — no training script exists for
   it, unlike BatchTopK's.**
+- **E4 box (4) is DONE (RESULTS addendum 19).** Widened SCR/TPP coverage to 3
+  more `bias_in_bios` pairs and the second SAEBench dataset
+  (`canrager/amazon_reviews_mcauley_1and5`). **Both verdicts replicate as the
+  dominant pattern**: SCR "not explained by size" 4/4 on new `bias_in_bios`
+  pairs, 3/4 on amazon (one weak exception); 7/8 combined. TPP "explained by
+  size" replicates on amazon via `top_usage` but its `random` bracket goes
+  from decisive to a coin flip. Found and fixed a real cache-contamination
+  trap en route (`--smoke`-testing a pair before its real run silently
+  poisons the "full" run's cache — now a CLAUDE.md landmine). **Only box (5)
+  (train a size-matched baseline from scratch) remains open in E4's
+  checklist.**
 - Branch `claude/falsification-framework`, pushed to origin, merged to `master`.
 
 ### Next task — nothing pre-selected; pick from the options below
 
-Both mechanism-paper threads (`PROJECT.md` **Next steps A**) plus the
-BatchTopK half of Claim #3's companion are closed as of this session: A1
-(RESULTS addendum 15, falsified), A2 (RESULTS addendum 17, confirmed sharper
-than predicted), A3/BatchTopK (RESULTS addendum 18, generalises). **The
-paper's three parts are now all established** — (1) fixed-variance KL is a
-null L2 penalty (E1); (2) sampling-on damage tracks selection churn almost
-linearly, no threshold, and this generalises across at least two selection
-mechanisms (A2, A3); (3) the literature's effect sizes are
-implementation-variance-sized (E1's 5 factors, E3's ReLU, the
-decoder-gradient projection, the initial weight draw). Nothing is queued next
-— read `PROJECT.md`'s "Next steps" section fresh and pick from what remains:
+Both mechanism-paper threads (`PROJECT.md` **Next steps A**), the BatchTopK
+half of Claim #3's companion (A3), and E4 box (4) are all closed as of this
+session: A1 (RESULTS addendum 15, falsified), A2 (RESULTS addendum 17,
+confirmed sharper than predicted), A3/BatchTopK (RESULTS addendum 18,
+generalises), E4 box (4) (RESULTS addendum 19, replicates). **The paper's
+three parts are now all established** — (1) fixed-variance KL is a null L2
+penalty (E1); (2) sampling-on damage tracks selection churn almost linearly,
+no threshold, and this generalises across at least two selection mechanisms
+(A2, A3); (3) the literature's effect sizes are implementation-variance-sized
+(E1's 5 factors, E3's ReLU, the decoder-gradient projection, the initial
+weight draw). Nothing is queued next — read `PROJECT.md`'s "Next steps"
+section fresh and pick from what remains:
 
-- **E4 boxes (4)–(5)** — the second SAEBench dataset / other `bias_in_bios`
-  class pairs (cheap, widens coverage), or training a size-matched baseline
-  from scratch (expensive, removes the last confound in the reference curve).
+- **E4 box (5)** — train a size-matched baseline from scratch (expensive,
+  removes the last confound in the reference curve — "masked vs.
+  trained-small"). The only item left in E4's checklist.
 - **JumpReLU, the sharper discreteness test** — BatchTopK is still hard top-k,
   just batch-scoped, so it didn't test *discreteness itself* as sharply as a
   smooth, learned-threshold mechanism would. No training script exists in
@@ -182,6 +194,32 @@ but *relative* to each architecture's own baseline, BatchTopK is very slightly
 global budget = more robust" intuition doesn't just fail to hold, it mildly
 reverses. Figure: `workshop/figs/a3_batchtopk_dose_response.pdf`.
 
+## Done 2026-09-11 — E4 box (4), coverage widened (addendum 19)
+
+`run_e4_scr.py`/`run_e4_tpp.py` generalised with `--dataset`/`--column1-vals`
+CLI args (default preserves the original invocation exactly). Found and fixed
+a real trap first: `run_eval_single_sae`'s cache loads by filename existence
+only, not by config, so `--smoke`-testing a new pair before its real run
+silently poisons the "full" run with a ~20x-undersized cache (caught by
+comparing cache file sizes against the known-good default; contaminated cache
+and results deleted and redone) — now a CLAUDE.md landmine ("never `--smoke`
+a pair/dataset you're about to run for real"). Five of the ten SAEBench eval
+runs below were also killed mid-scoring by the harness's low-memory guard
+(after the activation cache was already built) and needed one retry each —
+an operational hazard, not a methodology bug; no results were affected.
+
+**Result: both verdicts replicate as the dominant pattern.** SCR "not
+explained by size": 4/4 on the 3 new `bias_in_bios` pairs (architect/
+journalist +0.169, attorney/teacher +0.129, surgeon/psychologist +0.084;
+mean +0.116, tight spread) and 3/4 on all 4 amazon pairs (mean +0.029, one
+exception — Books/CDs_and_Vinyl at −0.100, though its `random` bracket is
+near-zero, a weak rather than clean reversal). Combined: 7 of 8 (pair,
+dataset) points say "not explained." TPP "explained by size" replicates on
+amazon via `top_usage` (−0.061, vSAE score 0.1031 vs. `bias_in_bios`'s 0.1055
+— barely moved) but its `random` bracket flips from decisive (−0.051) to a
+coin flip (+0.0004) — what shifted is the baseline's own curve, not the vSAE.
+Closes `PROJECT.md` Next steps #0 box (4); box (5) is the one item left open.
+
 ## What is established (one line each — detail in RESULTS + PROJECT.md)
 
 - **E1:** a fixed-variance vSAE *is* a TopK SAE with an L2 penalty (identity
@@ -205,16 +243,19 @@ reverses. Figure: `workshop/figs/a3_batchtopk_dose_response.pdf`.
   (thesis Failure 1, reproduced fresh). It is threshold-uniform (addendum 12)
   and survives both the conditional (addendum 13) and the full `--resample-train`
   (addendum 14) bootstrap in both directions — but SCR's margin CI is ~15×
-  wider than TPP's and rests on the N=2 threshold alone.
+  wider than TPP's and rests on the N=2 threshold alone. Both verdicts
+  replicate as the dominant pattern across 3 more `bias_in_bios` pairs and a
+  second dataset (7/8 SCR points "not explained," TPP's `top_usage` verdict
+  holding on both datasets) — addendum 19.
 
 ## Next action
 
 Both threads of `PROJECT.md` **Next steps A** are closed (A1 addendum 15, A2
-addenda 16–17), and so is the BatchTopK half of Claim #3's companion (A3,
-addendum 18) — nothing is pre-selected for the next session. See "Next task"
-above for the menu (E4 boxes 4–5, writing a JumpReLU training script for the
-sharper discreteness test, or writing up the mechanism paper). Read
-`PROJECT.md`'s Next steps section fresh and pick.
+addenda 16–17), the BatchTopK half of Claim #3's companion (A3, addendum 18),
+and E4 box (4) (addendum 19) — nothing is pre-selected for the next session.
+See "Next task" above for the menu (E4 box (5), writing a JumpReLU training
+script for the sharper discreteness test, or writing up the mechanism paper).
+Read `PROJECT.md`'s Next steps section fresh and pick.
 
 ## Environment
 

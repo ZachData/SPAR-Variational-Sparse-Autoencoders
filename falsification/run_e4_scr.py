@@ -18,6 +18,38 @@ the pair `get_scr_plotting_dict`'s hardcoded "male_professor / female_nurse"
 metric name was written for) to keep the grid affordable; `--smoke` shrinks
 train/test set size and probe epochs further to validate the pipeline end to
 end before spending the full run's time.
+
+`--dataset`/`--column1-vals` (PROJECT.md Next steps #0 box (4)) widen coverage
+to SAEBench's own other predefined pairs (`eval_config.py`'s
+`column1_vals_lookup` default: 3 more pairs on `bias_in_bios_class_set1`, plus
+`canrager/amazon_reviews_mcauley_1and5`'s own 4). SAEBench's internal
+`balanced_data` bookkeeping keys inside `get_spurious_corr_data`/
+`get_scr_plotting_dict` are HARDCODED to "male / female" / "professor / nurse"
+/ "male_professor / female_nurse" regardless of which pair is actually
+selected -- that is purely an internal naming quirk in SAEBench's own code
+(verified by reading `dataset_creation.py`: the underlying DATA is correctly
+selected by the real `column1_vals`, only the dict keys keep the original
+names), not a correctness bug, and this script's own `RUN_NAME` /
+`score_from_results` are keyed on the real dataset/column1_vals via
+`run_eval_single_sae`'s own `run_name = f"{dataset_name}_scr_{column1_vals[0]}_
+{column1_vals[1]}"`, so it is unaffected either way.
+
+**LANDMINE, found the hard way 2026-09-11: never run `--smoke` on a new
+dataset/pair before its full run.** `run_eval_single_sae`'s activation/probe
+cache in `artifacts_folder` is keyed only by dataset+column1_vals filename and
+loaded if the file exists AT ALL -- it does not check whether that file was
+built with the requested `train_set_size`/`test_set_size`. Running `--smoke`
+(test_set_size=50) first on a pair, then the full run (test_set_size=1000)
+second, silently reuses the tiny smoke-sized cache for the "full" run with no
+warning or error: the accuracy values it reports are computed on ~24 examples,
+not the intended ~500 (visible only as suspiciously exact small-fraction
+accuracy values like 0.9583333730697632 = 23/24, and a ~20x-undersized cache
+file on disk -- the professor/nurse default is unaffected only because its
+cache predates this script's `--smoke` flag ever running against it). If you
+need to sanity-check a new pair/dataset before spending the full run's time,
+either point `--out` at a scratch location and delete the resulting
+`e4_scr_artifacts/<dataset>_<pair>_*` files before the real run, or just skip
+`--smoke` once the code path itself is already validated (as it is here).
 """
 
 from __future__ import annotations
@@ -49,9 +81,8 @@ from sae_bench.evals.scr_and_tpp.eval_config import ScrAndTppEvalConfig  # noqa:
 from transformer_lens import HookedTransformer  # noqa: E402
 
 MODEL_NAME = "pythia-70m-deduped"
-DATASET_NAME = "LabHC/bias_in_bios_class_set1"
-COLUMN1_VALS = ("professor", "nurse")
-RUN_NAME = f"{DATASET_NAME}_scr_{COLUMN1_VALS[0]}_{COLUMN1_VALS[1]}"
+DEFAULT_DATASET_NAME = "LabHC/bias_in_bios_class_set1"
+DEFAULT_COLUMN1_VALS = ("professor", "nurse")
 
 BASELINE_DIR = (
     REPO
@@ -75,15 +106,21 @@ VSAE_NPZ = (
 )
 
 
-def score_from_results(results: dict) -> dict[str, float]:
+def score_from_results(results: dict, run_name: str) -> dict[str, float]:
     """The per-threshold `scr_metric_threshold_N` values `get_scr_plotting_dict` writes."""
-    run_results = results[f"{RUN_NAME}_results"]
+    run_results = results[f"{run_name}_results"]
     return {k: v for k, v in run_results.items() if k.startswith("scr_metric_threshold_")}
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--smoke", action="store_true", help="tiny config, to validate the pipeline")
+    p.add_argument("--dataset", default=DEFAULT_DATASET_NAME,
+                    help="SAEBench dataset name (default: %(default)s)")
+    p.add_argument("--column1-vals", nargs=2, default=list(DEFAULT_COLUMN1_VALS),
+                    metavar=("POS", "NEG"),
+                    help="SCR class pair, e.g. --column1-vals architect journalist "
+                         "(default: %(default)s)")
     p.add_argument(
         "--n-grid",
         type=int,
@@ -91,7 +128,9 @@ def main():
         default=None,
         help="dictionary sizes to score the baseline at (default: a grid around the vSAE's live count)",
     )
-    p.add_argument("--out", default=str(REPO / "falsification/e4_scr_results.json"))
+    p.add_argument("--out", default=None,
+                    help="default: falsification/e4_scr_results_<dataset>_<pos>_<neg>.json, "
+                         "or e4_scr_results.json for the original professor/nurse default")
     p.add_argument(
         "--random-draws",
         type=int,
@@ -100,6 +139,16 @@ def main():
     )
     args = p.parse_args()
 
+    dataset_name = args.dataset
+    column1_vals = tuple(args.column1_vals)
+    run_name = f"{dataset_name}_scr_{column1_vals[0]}_{column1_vals[1]}"
+    is_default = dataset_name == DEFAULT_DATASET_NAME and column1_vals == DEFAULT_COLUMN1_VALS
+    out_path = args.out or (
+        str(REPO / "falsification/e4_scr_results.json") if is_default
+        else str(REPO / "falsification" /
+                  f"e4_scr_results_{dataset_name.replace('/', '_')}_{column1_vals[0]}_{column1_vals[1]}.json")
+    )
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float32
 
@@ -107,8 +156,8 @@ def main():
         config = ScrAndTppEvalConfig(
             model_name=MODEL_NAME,
             perform_scr=True,
-            dataset_names=[DATASET_NAME],
-            column1_vals_lookup={DATASET_NAME: [COLUMN1_VALS]},
+            dataset_names=[dataset_name],
+            column1_vals_lookup={dataset_name: [column1_vals]},
             n_values=[2, 5],
             train_set_size=200,
             test_set_size=50,
@@ -121,15 +170,16 @@ def main():
         config = ScrAndTppEvalConfig(
             model_name=MODEL_NAME,
             perform_scr=True,
-            dataset_names=[DATASET_NAME],
-            column1_vals_lookup={DATASET_NAME: [COLUMN1_VALS]},
+            dataset_names=[dataset_name],
+            column1_vals_lookup={dataset_name: [column1_vals]},
             n_values=[2, 5, 10, 20],
             llm_batch_size=512,
             llm_dtype="float32",
         )
         n_grid = args.n_grid or [100, 250, 500, 1000, 1474, 2000, 3000, 5000, 7379]
 
-    print(f"device={device} smoke={args.smoke} n_grid={n_grid}")
+    print(f"device={device} smoke={args.smoke} dataset={dataset_name} "
+          f"column1_vals={column1_vals} n_grid={n_grid} out={out_path}")
 
     baseline = load_local_topk_sae(BASELINE_DIR, MODEL_NAME, device, dtype)
     vsae = load_local_vsae_topk_sae(VSAE_DIR, MODEL_NAME, device, dtype)
@@ -163,7 +213,7 @@ def main():
         results, _ = scr_and_tpp.run_eval_single_sae(
             config, baseline, model, device, artifacts_folder, save_activations=True
         )
-        scores = score_from_results(results)
+        scores = score_from_results(results, run_name)
         per_call_thresholds.append(scores)
         score = float(np.mean(list(scores.values())))
         print(f"  scorer call {n_calls}: n={len(keep_indices)} score={score:.4f} ({scores})")
@@ -192,7 +242,7 @@ def main():
     vsae_results, _ = scr_and_tpp.run_eval_single_sae(
         config, vsae, model, device, artifacts_folder, save_activations=True
     )
-    vsae_scores = score_from_results(vsae_results)
+    vsae_scores = score_from_results(vsae_results, run_name)
     vsae_score = float(np.mean(list(vsae_scores.values())))
     print(f"  vSAE score={vsae_score:.4f} ({vsae_scores})")
 
@@ -203,8 +253,8 @@ def main():
     print("random (bracket only):", str(v_rand))
 
     out = {
-        "dataset": DATASET_NAME,
-        "column1_vals": list(COLUMN1_VALS),
+        "dataset": dataset_name,
+        "column1_vals": list(column1_vals),
         "n_values": config.n_values,
         "smoke": args.smoke,
         "baseline_curve": [
@@ -237,9 +287,9 @@ def main():
             },
         },
     }
-    with open(args.out, "w") as f:
+    with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nwrote {args.out}")
+    print(f"\nwrote {out_path}")
 
 
 if __name__ == "__main__":

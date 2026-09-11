@@ -14,6 +14,17 @@ folder from the SCR run's cache.
 unintended drop on other classes) -- the TPP analogue of SCR's
 `scr_metric_threshold_N`. `observed_score` is the mean of that metric across
 `config.n_values`, the same aggregation choice `run_e4_scr.py` makes.
+
+`--dataset` (PROJECT.md Next steps #0 box (4)) widens coverage to
+`canrager/amazon_reviews_mcauley_1and5`, whose own 5-class TPP set is already
+defined in `dataset_info.chosen_classes_per_dataset`.
+
+**LANDMINE (see `run_e4_scr.py`'s docstring for the full account, found
+2026-09-11): never run `--smoke` on a new dataset before its full run.** The
+activation/probe cache is loaded if the file exists at all, regardless of
+whether it was built with `--smoke`'s tiny `test_set_size`, so a `--smoke` run
+followed by a full run on the SAME dataset silently reuses the undersized
+cache for the "full" run with no warning.
 """
 
 from __future__ import annotations
@@ -45,8 +56,7 @@ from sae_bench.evals.scr_and_tpp.eval_config import ScrAndTppEvalConfig  # noqa:
 from transformer_lens import HookedTransformer  # noqa: E402
 
 MODEL_NAME = "pythia-70m-deduped"
-DATASET_NAME = "LabHC/bias_in_bios_class_set1"
-RUN_NAME = f"{DATASET_NAME}_tpp"
+DEFAULT_DATASET_NAME = "LabHC/bias_in_bios_class_set1"
 
 BASELINE_DIR = (
     REPO
@@ -70,14 +80,16 @@ VSAE_NPZ = (
 )
 
 
-def score_from_results(results: dict) -> dict[str, float]:
-    run_results = results[f"{RUN_NAME}_results"]
+def score_from_results(results: dict, run_name: str) -> dict[str, float]:
+    run_results = results[f"{run_name}_results"]
     return {k: v for k, v in run_results.items() if k.endswith("_total_metric")}
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--smoke", action="store_true", help="tiny config, to validate the pipeline")
+    p.add_argument("--dataset", default=DEFAULT_DATASET_NAME,
+                    help="SAEBench dataset name (default: %(default)s)")
     p.add_argument(
         "--n-grid",
         type=int,
@@ -85,7 +97,9 @@ def main():
         default=None,
         help="dictionary sizes to score the baseline at (default: a grid around the vSAE's live count)",
     )
-    p.add_argument("--out", default=str(REPO / "falsification/e4_tpp_results.json"))
+    p.add_argument("--out", default=None,
+                    help="default: falsification/e4_tpp_results.json for the bias_in_bios_class_set1 "
+                         "default, else falsification/e4_tpp_results_<dataset>.json")
     p.add_argument(
         "--random-draws",
         type=int,
@@ -94,6 +108,13 @@ def main():
     )
     args = p.parse_args()
 
+    dataset_name = args.dataset
+    run_name = f"{dataset_name}_tpp"
+    out_path = args.out or (
+        str(REPO / "falsification/e4_tpp_results.json") if dataset_name == DEFAULT_DATASET_NAME
+        else str(REPO / "falsification" / f"e4_tpp_results_{dataset_name.replace('/', '_')}.json")
+    )
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float32
 
@@ -101,7 +122,7 @@ def main():
         config = ScrAndTppEvalConfig(
             model_name=MODEL_NAME,
             perform_scr=False,
-            dataset_names=[DATASET_NAME],
+            dataset_names=[dataset_name],
             n_values=[2, 5],
             train_set_size=200,
             test_set_size=50,
@@ -115,7 +136,7 @@ def main():
         config = ScrAndTppEvalConfig(
             model_name=MODEL_NAME,
             perform_scr=False,
-            dataset_names=[DATASET_NAME],
+            dataset_names=[dataset_name],
             n_values=[2, 5, 10, 20],
             llm_batch_size=512,
             llm_dtype="float32",
@@ -123,7 +144,8 @@ def main():
         n_grid = args.n_grid or [100, 250, 500, 1000, 1474, 2000, 3000, 5000, 7379]
         random_draws = args.random_draws
 
-    print(f"device={device} smoke={args.smoke} n_grid={n_grid} random_draws={random_draws}")
+    print(f"device={device} smoke={args.smoke} dataset={dataset_name} "
+          f"n_grid={n_grid} random_draws={random_draws} out={out_path}")
 
     baseline = load_local_topk_sae(BASELINE_DIR, MODEL_NAME, device, dtype)
     vsae = load_local_vsae_topk_sae(VSAE_DIR, MODEL_NAME, device, dtype)
@@ -154,7 +176,7 @@ def main():
         results, _ = scr_and_tpp.run_eval_single_sae(
             config, baseline, model, device, artifacts_folder, save_activations=True
         )
-        scores = score_from_results(results)
+        scores = score_from_results(results, run_name)
         per_call_thresholds.append(scores)
         score = float(np.mean(list(scores.values())))
         print(f"  scorer call {n_calls}: n={len(keep_indices)} score={score:.4f}")
@@ -183,7 +205,7 @@ def main():
     vsae_results, _ = scr_and_tpp.run_eval_single_sae(
         config, vsae, model, device, artifacts_folder, save_activations=True
     )
-    vsae_scores = score_from_results(vsae_results)
+    vsae_scores = score_from_results(vsae_results, run_name)
     vsae_score = float(np.mean(list(vsae_scores.values())))
     print(f"  vSAE score={vsae_score:.4f} ({vsae_scores})")
 
@@ -194,7 +216,7 @@ def main():
     print("random (bracket only):", str(v_rand))
 
     out = {
-        "dataset": DATASET_NAME,
+        "dataset": dataset_name,
         "metric": "tpp",
         "n_values": config.n_values,
         "smoke": args.smoke,
@@ -228,9 +250,9 @@ def main():
             },
         },
     }
-    with open(args.out, "w") as f:
+    with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nwrote {args.out}")
+    print(f"\nwrote {out_path}")
 
 
 if __name__ == "__main__":
