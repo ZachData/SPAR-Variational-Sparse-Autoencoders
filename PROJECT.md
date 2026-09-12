@@ -12,7 +12,81 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-11. **This session:** ran **A1**, the first of the two
+Last updated: 2026-09-12. **This session so far: A4, the JumpReLU discreteness
+companion — the sharpest remaining test of Claim #3** (a per-feature learned
+threshold, no k at all, vs. A2/A3's hard top-k in two scopes). No training
+script existed for `VSAEJumpReLU` before this session (CLAUDE.md flagged the
+trainer as never exercised end to end), and building one surfaced three real
+bugs in `dictionary_learning/trainers/vsae_jump_relu.py`, all now fixed and in
+CLAUDE.md, before any arm ran:
+
+1. **`threshold` received zero gradient.** `jump_relu()` used a plain
+   `(x > threshold).float()` comparison instead of the straight-through
+   estimator this repo's own non-variational `jumprelu.py` already defines for
+   exactly this reason — every prior run of this trainer would have been a
+   frozen-threshold ReLU-SAE. Fixed by routing through `JumpReLUFunction`.
+2. **No L0-target sparsity loss**, so even a working gradient had nothing
+   pushing `threshold` toward a target sparsity. Added, mirroring the
+   non-variational `JumpReluTrainer`'s `sparsity_penalty *
+   ((l0/target_l0)-1)^2` via the matching `StepFunction` STE. Unlike TopK/
+   BatchTopK's architectural hard-k, this is a SOFT target — achieved l0 can
+   undershoot it under heavy noise (observed directly).
+3. **The gate ran BEFORE sampling, not after — the one that would have
+   silently changed what the experiment tests, not just whether it trains.**
+   `vsae_topk.py`'s own docstring states its order as `encoder → μ,σ² →
+   reparameterize → z → Top-K(|z|)` — noise strictly before selection, which
+   is why noise can flip which features get selected at all. The original
+   `vsae_jump_relu.py` gated first and sampled after, so noise could only
+   perturb the VALUE of already-selected features and could never produce
+   selection churn — structurally incapable of testing the same thing A2/A3
+   tested. Fixed by moving the gate after the noise (new `VSAEJumpReLU.select()`
+   applied to the noisy `z`, not to `mu`); verified directly that repeated
+   forward passes on one token now show real churn (mean Jaccard 0.35 at
+   `log_var_init=1.0`, was 1.0 — no churn possible — before the fix). This was
+   a genuine design fork (keep the model as a different, valid architecture
+   that tests a different question, or restructure to match A2/A3's intent) —
+   raised to the user, who chose to restructure.
+
+`training_scripts/train_vsae_jumprelu.py` (new) mirrors `train_vsae_topk.py`'s
+structure; `target_l0_fraction=0.125` matches TopK's `k_fraction`/BatchTopK's
+`k_ratio`. Smoke-tested end to end on GPU at every stage (gradient checks,
+`scale_biases`/`normalize_decoder` correctness — the latter had ALSO been
+silently corrupting output on every non-unit-norm decoder before a threshold-
+rescaling fix, caught by its own internal assertion which `from_pretrained`'s
+try/except had been swallowing — full training runs at both `var_flag=0` and
+`var_flag=1`). A real 10000-step baseline run (`a4_jumprelu_baseline`, throwaway
+seed 999, deleted after) reached FVE 0.921, cossim 0.977, L0 270 (target 256) —
+healthy, comparable to `baseline`'s own 0.900. All 115 falsification tests still
+green throughout.
+
+Arms wired into `run_arm.py` (`a4_jumprelu_baseline` + the same 6-point
+`log_var_init` sigma grid as A2/A3), full 7-arm × 13-seed sweep (91 runs, 0
+failures, ~102 min) run via new `falsification/run_a4_sweep.sh`, then read with
+`falsification/read_a4_dose_response.py`. **Result (RESULTS addendum 20): the
+naive number looks like a looser replication (r=+0.9334 vs. TopK's +0.9993,
+BatchTopK's +0.9979) but is confounded, and controlling for the confound makes
+the coupling mostly disappear.** A2/A3 hold sparsity exactly fixed at every
+grid point by construction (hard top-k always yields exactly k); JumpReLU's
+L0-target is soft, and achieved L0 swings 36.8→290.8 (an 8× range,
+non-monotonic in sigma) across the same grid — `r(FVE, L0) = +0.9494`, as
+tight as `r(FVE, Jaccard)`, so the naive coupling cannot be attributed to
+selection churn specifically. Restricting to the 4 points where L0 sits near
+the 256 target (the closest approximation to A2/A3's fixed-sparsity design
+this soft target allows), the coupling **weakens sharply to r=+0.6297 (n=4)**,
+non-monotonically, and is no longer explained by L0 either (r=−0.5467, wrong
+sign). **Verdict: A4 neither cleanly replicates nor cleanly refutes A2/A3 — it
+shows the comparison wasn't well-posed for a soft-threshold mechanism**, and
+surfaces a different, arguably more basic finding instead: a gradient-learned
+threshold is not noise-robust the way a hard top-k constraint is — its
+*achieved sparsity level*, not just its selection stability, collapses under
+sampling noise, a failure mode TopK/BatchTopK cannot exhibit by construction.
+A fourth, unrelated bug was also found and fixed en route: `normalize_decoder()`
+didn't rescale `threshold` alongside the encoder, silently corrupting
+evaluated output on every non-unit-norm decoder (caught by the method's own
+assertion, which `from_pretrained`'s try/except had been swallowing). All four
+`vsae_jump_relu.py` fixes are in CLAUDE.md.
+
+Previous session (2026-09-11): ran **A1**, the first of the two
 mechanism-paper threads planned last session —
 `falsification/read_e4_node_effects.py`, zero new GPU work beyond SAE inference
 on already-cached activations (~30s). **Result: the usage-rank prediction is
@@ -231,9 +305,9 @@ numbers were unaffected.
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **E4 box (4) done (addendum 19): the SCR/TPP disagreement generalises across pairs and datasets, mostly.** SCR "not explained by size" replicates 4/4 on 3 new `bias_in_bios` pairs and 3/4 on all 4 amazon pairs (one weak exception); combined 7/8. TPP "explained by size" replicates on amazon via `top_usage` but its `random` bracket goes from decisive to a coin flip. Found and fixed a real cache-contamination trap (`--smoke` before a real run silently poisons it) en route — CLAUDE.md landmine. |
-| In progress | Nothing running. **A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) are all done this session.** Next up is undecided: see Next steps below (E4 box (5) — a size-matched baseline from scratch, JumpReLU's training script, or the mechanism-paper writeup). |
-| Blocking | Nothing blocked on compute or data. Boxes (1)–(4) done (addenda 12–15, 19); box (5) open. |
+| Newest result | **A4 done (addendum 20): the naive JumpReLU coupling number (r=+0.9334) is confounded by an 8x swing in achieved sparsity that A2/A3's hard-k arms never had; controlling for it weakens the coupling to r=+0.6297 (n=4).** Neither a clean replication nor a clean refutation of A2/A3's tight FVE-Jaccard coupling — the real finding is that JumpReLU's soft, gradient-learned threshold isn't noise-robust the way hard top-k is: achieved sparsity itself collapses under noise (L0 36.8-290.8 across the grid), a failure mode TopK/BatchTopK cannot exhibit by construction. Four real `vsae_jump_relu.py` bugs found and fixed first (dead threshold gradient, missing L0-target loss, gate-before-noise ordering, `normalize_decoder` not rescaling threshold) — nothing on disk before this session used the trainer at all. |
+| In progress | Nothing running. A4 (addendum 20) is done this session, alongside A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) from the prior one. Next up is undecided: E4 box (5) (size-matched baseline), the mechanism-paper writeup (now including A4's more nuanced JumpReLU finding), or Claims-worth-opening #4/#5. |
+| Blocking | Nothing blocked on compute or data. E4 boxes (1)-(4) done (addenda 12-15, 19); box (5) open. Next steps A (mechanism paper) and its A4 companion are all closed. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -722,21 +796,29 @@ The two threads, both now done:
   recommendation rather than a negative result — *if you want stochastic sparse
   codes, put the noise in the selection, not in the magnitudes.*
 
-  **Companion — A3, BatchTopK half done (RESULTS addendum 18), JumpReLU half
-  not attempted.** Claim #3's other open half varies the *discreteness* of the
-  sparsity mechanism (JumpReLU's learned threshold vs. BatchTopK vs. TopK).
-  The BatchTopK side is done: the FVE-vs-Jaccard coupling generalises
-  (r=+0.9979 vs. TopK's +0.9993), and if anything BatchTopK's more elastic
-  global selection budget is *slightly more* exposed to noise at matched
-  sigma, not less (80.5% vs. 84.1% of the gap closed at the clamp floor).
-  **JumpReLU is the sharper remaining test of discreteness itself** (BatchTopK
-  is still hard top-k, just batch-scoped) but needs a training script written
-  from scratch — none exists in `training_scripts/` — and the trainer itself
-  is flagged in CLAUDE.md as never exercised end to end, so expect to find and
-  fix bugs in the trainer before the sigma question is even reachable, the way
-  A3 needed two BatchTopK fixes first. `vsae_jump_relu.py`'s `scale_biases` is
-  already correct (verified directly, unlike BatchTopK's, which was not) but
-  that says nothing about the rest of the forward/backward path.
+  **Companion — DONE for all three architectures (A3 BatchTopK: RESULTS
+  addendum 18; A4 JumpReLU: RESULTS addendum 20).** Claim #3's other open half
+  varies the *discreteness* of the sparsity mechanism (BatchTopK vs. TopK vs.
+  JumpReLU's learned threshold). The BatchTopK side: the FVE-vs-Jaccard
+  coupling generalises (r=+0.9979 vs. TopK's +0.9993), and if anything
+  BatchTopK's more elastic global selection budget is *slightly more* exposed
+  to noise at matched sigma, not less (80.5% vs. 84.1% of the gap closed at
+  the clamp floor). **JumpReLU needed a training script written from
+  scratch** (none existed; the trainer was flagged in CLAUDE.md as never
+  exercised end to end) and surfaced four real bugs before any arm could run,
+  including one (the gate running before sampling) that would have made
+  selection churn structurally impossible — all fixed, all in CLAUDE.md. The
+  result is not a clean third data point for the same comparison: JumpReLU's
+  soft, gradient-learned threshold does not hold sparsity fixed under noise
+  the way TopK/BatchTopK's hard-k does (achieved L0 swings 36.8→290.8 across
+  the sigma grid), which confounds the naive FVE-vs-Jaccard reading (r=+0.9334
+  looks like a looser replication, but r(FVE, L0)=+0.9494 is just as tight,
+  and restricting to L0-matched points weakens the coupling to r=+0.6297,
+  n=4). **The finding this licenses is different from the one asked for**:
+  a soft threshold's *sparsity level itself* is not noise-robust, a failure
+  mode the two hard-k architectures cannot exhibit by construction — arguably
+  more basic than, and not directly comparable to, "does selection churn cost
+  reconstruction at fixed sparsity."
 
   **Costs — actuals vs. the original estimate.** Estimated ~80 min training +
   up to 8.5h of liveness analysis; actual was ~52 min for the 52 new runs (13

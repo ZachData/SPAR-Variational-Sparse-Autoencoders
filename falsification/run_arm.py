@@ -431,6 +431,63 @@ for _lvi, _name in (
                       "log_var_init": _lvi, "checkpoint_steps": _EARLY_SCHEDULE},
     }
 
+# A4: Claim #3's SHARPEST discreteness test -- a learned per-feature threshold
+# (JumpReLU) rather than any form of top-k. A2/A3 found the FVE-vs-selection-
+# Jaccard coupling holds equally tightly for per-token (TopK, r=+0.9993) and
+# global (BatchTopK, r=+0.9979) hard top-k; both are still "pick exactly k"
+# selection, just scoped differently. JumpReLU has no k at all -- each
+# feature's gate is its own independent threshold comparison -- so it is the
+# test of whether the coupling is about hard hard-k selection specifically, or
+# discreteness (a non-smooth, noise-sensitive gate) in general.
+#
+# No training script existed for this trainer before this session (CLAUDE.md
+# flagged it as "never exercised end to end"). Three real bugs turned up and
+# are now fixed in dictionary_learning/trainers/vsae_jump_relu.py (all in
+# CLAUDE.md): `threshold` received zero gradient (no STE), there was no
+# L0-target sparsity term to give the (now-working) gradient anywhere to go,
+# and -- the one that would have silently changed what this experiment tests,
+# not just whether it trains -- the gate used to be applied BEFORE sampling,
+# so noise could never change the selected set at all. Fixed to gate AFTER
+# sampling, mirroring vsae_topk.py's encoder -> reparameterize -> Top-K order;
+# verified directly that repeated forward passes on one token now show real
+# selection churn (mean Jaccard 0.35 at log_var_init=1.0, was 1.0 before the
+# fix).
+#
+# target_l0_fraction=0.125 matches TopK's k_fraction / BatchTopK's k_ratio.
+# Unlike those, target_l0 is a SOFT target (gradient descent on a squared
+# relative-error loss, not an architectural constraint) -- achieved l0 can and
+# does undershoot target under heavy sampling noise (observed: l0 fell from
+# ~270 to ~71 at log_var_init=-2.0 in a 2000-step smoke test). Check achieved
+# l0 in each run's results before trusting a sparsity-matched comparison
+# against A2/A3's hard-k arms.
+#
+# auxk_alpha is dropped from BASE (this trainer has no AuxK dead-feature
+# mechanism -- ExperimentConfig has no such field, unlike the TopK/BatchTopK
+# scripts). Everything else in BASE carries over unchanged, and the same
+# create_full_config() total_steps=10000 default as train_vsae_topk.py's own
+# avoids the __post_init__-timing landmine A3 had to work around explicitly
+# for train_vsae_batchtopk.py.
+_A4_JUMPRELU_BASE = {k: v for k, v in BASE.items() if k != "auxk_alpha"}
+_A4_JUMPRELU_BASE = {**_A4_JUMPRELU_BASE, "target_l0_fraction": 0.125}
+
+ARMS["a4_jumprelu_baseline"] = {
+    "script": "train_vsae_jumprelu.py",
+    "overrides": {**_A4_JUMPRELU_BASE, "var_flag": 0, "kl_coeff": 0.0},
+}
+for _lvi, _name in (
+    (-1.0, "a4_jumprelu_sigma_init_m1"),
+    (-2.0, "a4_jumprelu_sampling_only"),   # matches e2_sampling_only's grid point
+    (-3.0, "a4_jumprelu_sigma_init_m3"),
+    (-4.0, "a4_jumprelu_sigma_init_m4"),
+    (-5.0, "a4_jumprelu_sigma_init_m5"),
+    (-8.0, "a4_jumprelu_sigma_low_init"),  # matches e2_sigma_low_init, clamped to -6.0 effective
+):
+    ARMS[_name] = {
+        "script": "train_vsae_jumprelu.py",
+        "overrides": {**_A4_JUMPRELU_BASE, "var_flag": 1, "kl_coeff": 0.0,
+                      "log_var_init": _lvi, "checkpoint_steps": _EARLY_SCHEDULE},
+    }
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.

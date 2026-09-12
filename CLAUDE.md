@@ -166,6 +166,51 @@ of ~4GB). Never `--smoke` a pair/dataset you're about to run for real; if you
 need a pipeline sanity check, use a scratch `--out` and delete the resulting
 `e4_scr_artifacts/<dataset>_<pair>_*` files before the real run.
 
+**`vsae_jump_relu.py` had three compounding bugs — found and fixed 2026-09-12,
+before any A4 (JumpReLU discreteness) arm ran, so nothing on disk is
+affected.** No training script had ever exercised this trainer end to end;
+`training_scripts/train_vsae_jumprelu.py` (new) is the first.
+
+1. **`threshold` received zero gradient.** `VSAEJumpReLU.jump_relu()` computed
+   `F.relu(x) * (x > threshold).float()`: numerically identical to a real
+   JumpReLU forward pass (threshold is clamped positive, so `x > threshold`
+   already implies `x > 0`), but `>` is non-differentiable, so the boolean mask
+   carries no gradient back to `threshold` — despite being an `nn.Parameter`
+   registered with the optimizer, it could never move from its init value.
+   Fixed by routing through `JumpReLUFunction`, the straight-through estimator
+   this repo's own non-variational `jumprelu.py` already defines for exactly
+   this reason (import it from there rather than duplicating it).
+2. **No L0-target sparsity term.** Even with a working gradient, nothing was
+   pushing `threshold` toward any particular sparsity level.
+   `VSAEJumpReLUTrainer.loss()` now has one, mirroring `JumpReluTrainer`'s
+   `sparsity_penalty * ((l0/target_l0) - 1)^2` via the matching `StepFunction`
+   STE. Unlike TopK/BatchTopK's architectural hard-k, `target_l0` is a SOFT
+   target reached by gradient descent — check achieved `l0` against
+   `target_l0` in a run's results before trusting any sparsity-matched
+   comparison against the hard-k arms, and note noise can push the achieved
+   L0 well below target when sigma is large relative to the margin the
+   threshold has adapted to (observed directly: l0 dropped from ~270 to ~71
+   at `log_var_init=-2.0` after only 2000 steps in a smoke test).
+3. **The gate was applied BEFORE sampling, not after — this one changes what
+   the model tests, not just whether it trains.** `encode()` used to compute
+   `mu = jump_relu(pre_jump, threshold)` (a deterministic gate) and only then
+   `reparameterize(mu, log_var)` added noise. That makes noise perturb the
+   VALUE of already-selected features but structurally unable to change the
+   selected SET — it can never produce the selection churn that is the entire
+   point of comparing this trainer against A2/A3 (TopK, BatchTopK), where
+   `vsae_topk.py`'s own docstring states the order as `encoder → μ,σ² →
+   reparameterize → z → Top-K(|z|)`, noise strictly before selection. Fixed by
+   moving the gate after the noise: `encode()` now returns the raw, ungated
+   pre-activation as `mu`; a new `VSAEJumpReLU.select(z)` applies the gate, and
+   the trainer calls it on the noisy `z = reparameterize(mu, log_var)`, not on
+   `mu` directly. Verified directly: repeated forward passes on the same token
+   at `log_var_init=1.0` now show mean Jaccard 0.35 between the selected sets
+   (was 1.0 — no churn possible — before the fix). A side effect, not a new
+   bug: KL is now computed on the dense, ungated `mu` over the full
+   dictionary, matching `vsae_topk.py`'s convention (KL on the pre-selection
+   mean) rather than the previous behavior of computing it on an
+   already-mostly-zero gated code.
+
 ## Environment
 
 - **Two environments, and it matters which you are in.** Run
