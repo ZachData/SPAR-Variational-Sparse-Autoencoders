@@ -327,6 +327,167 @@ ARMS["e2_sigma_low_init_early"] = {
                   "checkpoint_steps": _EARLY_SCHEDULE},
 }
 
+# A2: the sigma_init dose-response (PROJECT.md Next steps A2). e2_sampling_only
+# (log_var_init=-2.0, the trainer default) and e2_sigma_low_init (log_var_init=
+# -8.0, which the reparameterize() clamp pins to an effective -6.0 from step 0)
+# are the two endpoints already run at 13 seeds; e2_sampling_only_early /
+# e2_sigma_low_init_early already carry the dense checkpoint schedule for them at
+# 5 seeds. These four new arms fill in the curve between and at the clamp,
+# straddling it exactly as PROJECT.md warns to (log_var_init=-6.0 and below all
+# saturate to the SAME sigma=exp(-3)=0.0498, so there is nothing to gain from
+# going more negative than -6.0 -- the existing -8.0 arm already occupies that
+# point). Every arm carries the dense schedule from the start (unlike
+# e2_sampling_only/e2_sigma_low_init, which needed a second _early run added
+# after the fact) so one training run per seed yields both the converged FVE and
+# the full Jaccard-instability curve.
+#
+# sigma at init, by log_var_init (sigma = exp(0.5 * log_var_init), all well
+# inside the reparameterize() clamp's [-6, 2] range so none of these saturate):
+#   -1.0 -> 0.6065   -2.0 -> 0.3679 (e2_sampling_only)   -3.0 -> 0.2231
+#   -4.0 -> 0.1353   -5.0 -> 0.0821   -6.0 -> 0.0498 (clamp floor, e2_sigma_low_init)
+#
+# `falsification/read_preact_gap.py` measured the k/(k+1) pre-activation gap this
+# noise competes against on a converged baseline checkpoint (RESULTS addendum
+# 16): median 0.0001, p99 0.0006, max 0.0015 -- two to three orders of magnitude
+# BELOW even the clamp-floor sigma. Naively that predicts near-total selection
+# scrambling at every point on this grid, including the floor, which is hard to
+# reconcile with e2_sigma_low_init's own FVE (0.834, only a 7.3% relative drop
+# from baseline's 0.900) unless the boundary-region churn addendum 8 already
+# measured (Jaccard 0.952 at convergence, ~4.8% of selected features still
+# swapping) is concentrated in low-magnitude, low-importance features that barely
+# move reconstruction regardless of which one of them is picked. This sweep is
+# the test of that refinement, not of the original sharp-knee story: expect FVE
+# damage to be much less dose-sensitive across this grid than Jaccard churn is,
+# rather than the two kneeing together at a shared threshold.
+for _lvi, _name in ((-1.0, "a2_sigma_init_m1"), (-3.0, "a2_sigma_init_m3"),
+                     (-4.0, "a2_sigma_init_m4"), (-5.0, "a2_sigma_init_m5")):
+    ARMS[_name] = {
+        "script": "train_vsae_topk.py",
+        "overrides": {**ARMS["e2_sampling_only"]["overrides"],
+                      "log_var_init": _lvi,
+                      "checkpoint_steps": _EARLY_SCHEDULE},
+    }
+
+# A3: Claim #3's discreteness companion (PROJECT.md Next steps, "companion,
+# now the natural next lever"). A2 found FVE tracks TopK selection-Jaccard
+# almost exactly (r=+0.9993) across a sigma_init sweep -- the question this
+# arm family asks is whether that tight coupling is specific to PER-TOKEN
+# hard top-k selection, or holds just as tightly for BatchTopK's GLOBAL
+# top-(k*batch_size) selection over the whole flattened batch
+# (`vsae_batch_topk.py::_apply_topk_sparsity`, `architecture_mode="vae_first"`,
+# `apply_topk_to_samples=True` -- both defaults, matching vsae_topk.py's
+# noise-before-selection order). A batch-level budget is more elastic than a
+# strict per-token quota (one token's noise-bumped feature can be compensated
+# by another token's promoted one), so if selection "discreteness" per se is
+# what makes TopK fragile, BatchTopK's r(FVE, Jaccard) should be measurably
+# looser than TopK's, not equally tight.
+#
+# Two fixes were needed before this could run at all (both landmines, recorded
+# in CLAUDE.md): `vsae_batch_topk.py::scale_biases` carried the SAME
+# var_encoder.bias-multiplication bug RESULTS addendum 8 found and fixed in
+# vsae_topk.py -- fixed here identically (weight rescaled instead), so any
+# var_flag=1 checkpoint from this arm family is correct on raw activations.
+# `training_scripts/train_vsae_batchtopk.py`'s ExperimentConfig did not expose
+# `log_var_init` at all (always used VSAEBatchTopKConfig's hardcoded -2.0
+# default) -- added and threaded through `create_model_config`.
+#
+# reparameterize()'s clamp is IDENTICAL to vsae_topk.py's ([-6, 2]), so A2's
+# exact sigma grid is directly comparable point-for-point; `hook_name` is
+# overridden from this script's own default (`blocks.0.mlp.hook_post`) to
+# BASE's `blocks.0.hook_resid_post` so activation_dim/dict_size line up with
+# every other arm in the battery, and `k_ratio` (this trainer's name for
+# TopK's `k_fraction`) is matched to 0.125.
+#
+# A THIRD landmine, specific to how run_arm.py overrides interact with this
+# script (not present for train_vsae_topk.py only because its own
+# create_full_config() default already happens to be total_steps=10000):
+# ExperimentConfig.__post_init__ computes warmup_steps / sparsity_warmup_steps
+# / decay_start_step from `self.total_steps` AT CONSTRUCTION TIME, i.e. from
+# create_full_config()'s own default of 25000 -- then run_arm.py's setattr
+# loop overrides total_steps to BASE's 10000 without re-running __post_init__,
+# so those three fields would silently stay computed from 25000 (decay_start_step
+# baked in as 20000, past the entire 10000-step run) unless overridden
+# explicitly here too. Values below match what train_vsae_topk.py's own
+# __post_init__ produces at total_steps=10000 (confirmed via --dry-run on an
+# A2 arm), so A3 is schedule-matched to A2/E2, not merely architecture-matched.
+_A3_BATCHTOPK_BASE = {**BASE, "k_ratio": 0.125, "warmup_steps": 200,
+                       "sparsity_warmup_steps": 500, "decay_start_step": 8000}
+
+ARMS["a3_batchtopk_baseline"] = {
+    "script": "train_vsae_batchtopk.py",
+    "overrides": {**_A3_BATCHTOPK_BASE, "var_flag": 0, "kl_coeff": 0.0},
+}
+for _lvi, _name in (
+    (-1.0, "a3_batchtopk_sigma_init_m1"),
+    (-2.0, "a3_batchtopk_sampling_only"),   # matches e2_sampling_only's grid point
+    (-3.0, "a3_batchtopk_sigma_init_m3"),
+    (-4.0, "a3_batchtopk_sigma_init_m4"),
+    (-5.0, "a3_batchtopk_sigma_init_m5"),
+    (-8.0, "a3_batchtopk_sigma_low_init"),  # matches e2_sigma_low_init, clamped to -6.0 effective
+):
+    ARMS[_name] = {
+        "script": "train_vsae_batchtopk.py",
+        "overrides": {**_A3_BATCHTOPK_BASE, "var_flag": 1, "kl_coeff": 0.0,
+                      "log_var_init": _lvi, "checkpoint_steps": _EARLY_SCHEDULE},
+    }
+
+# A4: Claim #3's SHARPEST discreteness test -- a learned per-feature threshold
+# (JumpReLU) rather than any form of top-k. A2/A3 found the FVE-vs-selection-
+# Jaccard coupling holds equally tightly for per-token (TopK, r=+0.9993) and
+# global (BatchTopK, r=+0.9979) hard top-k; both are still "pick exactly k"
+# selection, just scoped differently. JumpReLU has no k at all -- each
+# feature's gate is its own independent threshold comparison -- so it is the
+# test of whether the coupling is about hard hard-k selection specifically, or
+# discreteness (a non-smooth, noise-sensitive gate) in general.
+#
+# No training script existed for this trainer before this session (CLAUDE.md
+# flagged it as "never exercised end to end"). Three real bugs turned up and
+# are now fixed in dictionary_learning/trainers/vsae_jump_relu.py (all in
+# CLAUDE.md): `threshold` received zero gradient (no STE), there was no
+# L0-target sparsity term to give the (now-working) gradient anywhere to go,
+# and -- the one that would have silently changed what this experiment tests,
+# not just whether it trains -- the gate used to be applied BEFORE sampling,
+# so noise could never change the selected set at all. Fixed to gate AFTER
+# sampling, mirroring vsae_topk.py's encoder -> reparameterize -> Top-K order;
+# verified directly that repeated forward passes on one token now show real
+# selection churn (mean Jaccard 0.35 at log_var_init=1.0, was 1.0 before the
+# fix).
+#
+# target_l0_fraction=0.125 matches TopK's k_fraction / BatchTopK's k_ratio.
+# Unlike those, target_l0 is a SOFT target (gradient descent on a squared
+# relative-error loss, not an architectural constraint) -- achieved l0 can and
+# does undershoot target under heavy sampling noise (observed: l0 fell from
+# ~270 to ~71 at log_var_init=-2.0 in a 2000-step smoke test). Check achieved
+# l0 in each run's results before trusting a sparsity-matched comparison
+# against A2/A3's hard-k arms.
+#
+# auxk_alpha is dropped from BASE (this trainer has no AuxK dead-feature
+# mechanism -- ExperimentConfig has no such field, unlike the TopK/BatchTopK
+# scripts). Everything else in BASE carries over unchanged, and the same
+# create_full_config() total_steps=10000 default as train_vsae_topk.py's own
+# avoids the __post_init__-timing landmine A3 had to work around explicitly
+# for train_vsae_batchtopk.py.
+_A4_JUMPRELU_BASE = {k: v for k, v in BASE.items() if k != "auxk_alpha"}
+_A4_JUMPRELU_BASE = {**_A4_JUMPRELU_BASE, "target_l0_fraction": 0.125}
+
+ARMS["a4_jumprelu_baseline"] = {
+    "script": "train_vsae_jumprelu.py",
+    "overrides": {**_A4_JUMPRELU_BASE, "var_flag": 0, "kl_coeff": 0.0},
+}
+for _lvi, _name in (
+    (-1.0, "a4_jumprelu_sigma_init_m1"),
+    (-2.0, "a4_jumprelu_sampling_only"),   # matches e2_sampling_only's grid point
+    (-3.0, "a4_jumprelu_sigma_init_m3"),
+    (-4.0, "a4_jumprelu_sigma_init_m4"),
+    (-5.0, "a4_jumprelu_sigma_init_m5"),
+    (-8.0, "a4_jumprelu_sigma_low_init"),  # matches e2_sigma_low_init, clamped to -6.0 effective
+):
+    ARMS[_name] = {
+        "script": "train_vsae_jumprelu.py",
+        "overrides": {**_A4_JUMPRELU_BASE, "var_flag": 1, "kl_coeff": 0.0,
+                      "log_var_init": _lvi, "checkpoint_steps": _EARLY_SCHEDULE},
+    }
+
 
 def config_fields_static(script: str) -> set[str]:
     """Field names of a training script's ExperimentConfig, WITHOUT importing it.

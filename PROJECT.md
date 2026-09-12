@@ -1,16 +1,220 @@
 # PROJECT.md — Falsification-based validation of sparse autoencoder claims
 
 **This is the living document.** It carries current state, what is established,
-what to do next, and the pre-registration the battery runs under. It absorbed
-`HANDOFF.md` on 2026-09-03; there is no separate handoff file. `CLAUDE.md` has the
-repo's standing landmines about the vSAE code — read that too, and read it before
-touching anything in `dictionary_learning/`.
+what to do next, and the pre-registration the battery runs under. It absorbed the
+old `HANDOFF.md` on 2026-09-03; a new, deliberately short `HANDOFF.md` was
+re-added on 2026-09-08 as a cold-start table of contents that points here — this
+file stays authoritative when the two drift. `CLAUDE.md` has the repo's standing
+landmines about the vSAE code — read that too, and read it before touching
+anything in `dictionary_learning/`.
 
 Reading order for a cold start: **Status** → **Where things stand** → **What is
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-05. Two things landed this session, in order:
+Last updated: 2026-09-12. **This session so far: A4, the JumpReLU discreteness
+companion — the sharpest remaining test of Claim #3** (a per-feature learned
+threshold, no k at all, vs. A2/A3's hard top-k in two scopes). No training
+script existed for `VSAEJumpReLU` before this session (CLAUDE.md flagged the
+trainer as never exercised end to end), and building one surfaced three real
+bugs in `dictionary_learning/trainers/vsae_jump_relu.py`, all now fixed and in
+CLAUDE.md, before any arm ran:
+
+1. **`threshold` received zero gradient.** `jump_relu()` used a plain
+   `(x > threshold).float()` comparison instead of the straight-through
+   estimator this repo's own non-variational `jumprelu.py` already defines for
+   exactly this reason — every prior run of this trainer would have been a
+   frozen-threshold ReLU-SAE. Fixed by routing through `JumpReLUFunction`.
+2. **No L0-target sparsity loss**, so even a working gradient had nothing
+   pushing `threshold` toward a target sparsity. Added, mirroring the
+   non-variational `JumpReluTrainer`'s `sparsity_penalty *
+   ((l0/target_l0)-1)^2` via the matching `StepFunction` STE. Unlike TopK/
+   BatchTopK's architectural hard-k, this is a SOFT target — achieved l0 can
+   undershoot it under heavy noise (observed directly).
+3. **The gate ran BEFORE sampling, not after — the one that would have
+   silently changed what the experiment tests, not just whether it trains.**
+   `vsae_topk.py`'s own docstring states its order as `encoder → μ,σ² →
+   reparameterize → z → Top-K(|z|)` — noise strictly before selection, which
+   is why noise can flip which features get selected at all. The original
+   `vsae_jump_relu.py` gated first and sampled after, so noise could only
+   perturb the VALUE of already-selected features and could never produce
+   selection churn — structurally incapable of testing the same thing A2/A3
+   tested. Fixed by moving the gate after the noise (new `VSAEJumpReLU.select()`
+   applied to the noisy `z`, not to `mu`); verified directly that repeated
+   forward passes on one token now show real churn (mean Jaccard 0.35 at
+   `log_var_init=1.0`, was 1.0 — no churn possible — before the fix). This was
+   a genuine design fork (keep the model as a different, valid architecture
+   that tests a different question, or restructure to match A2/A3's intent) —
+   raised to the user, who chose to restructure.
+
+`training_scripts/train_vsae_jumprelu.py` (new) mirrors `train_vsae_topk.py`'s
+structure; `target_l0_fraction=0.125` matches TopK's `k_fraction`/BatchTopK's
+`k_ratio`. Smoke-tested end to end on GPU at every stage (gradient checks,
+`scale_biases`/`normalize_decoder` correctness — the latter had ALSO been
+silently corrupting output on every non-unit-norm decoder before a threshold-
+rescaling fix, caught by its own internal assertion which `from_pretrained`'s
+try/except had been swallowing — full training runs at both `var_flag=0` and
+`var_flag=1`). A real 10000-step baseline run (`a4_jumprelu_baseline`, throwaway
+seed 999, deleted after) reached FVE 0.921, cossim 0.977, L0 270 (target 256) —
+healthy, comparable to `baseline`'s own 0.900. All 115 falsification tests still
+green throughout.
+
+Arms wired into `run_arm.py` (`a4_jumprelu_baseline` + the same 6-point
+`log_var_init` sigma grid as A2/A3), full 7-arm × 13-seed sweep (91 runs, 0
+failures, ~102 min) run via new `falsification/run_a4_sweep.sh`, then read with
+`falsification/read_a4_dose_response.py`. **Result (RESULTS addendum 20): the
+naive number looks like a looser replication (r=+0.9334 vs. TopK's +0.9993,
+BatchTopK's +0.9979) but is confounded, and controlling for the confound makes
+the coupling mostly disappear.** A2/A3 hold sparsity exactly fixed at every
+grid point by construction (hard top-k always yields exactly k); JumpReLU's
+L0-target is soft, and achieved L0 swings 36.8→290.8 (an 8× range,
+non-monotonic in sigma) across the same grid — `r(FVE, L0) = +0.9494`, as
+tight as `r(FVE, Jaccard)`, so the naive coupling cannot be attributed to
+selection churn specifically. Restricting to the 4 points where L0 sits near
+the 256 target (the closest approximation to A2/A3's fixed-sparsity design
+this soft target allows), the coupling **weakens sharply to r=+0.6297 (n=4)**,
+non-monotonically, and is no longer explained by L0 either (r=−0.5467, wrong
+sign). **Verdict: A4 neither cleanly replicates nor cleanly refutes A2/A3 — it
+shows the comparison wasn't well-posed for a soft-threshold mechanism**, and
+surfaces a different, arguably more basic finding instead: a gradient-learned
+threshold is not noise-robust the way a hard top-k constraint is — its
+*achieved sparsity level*, not just its selection stability, collapses under
+sampling noise, a failure mode TopK/BatchTopK cannot exhibit by construction.
+A fourth, unrelated bug was also found and fixed en route: `normalize_decoder()`
+didn't rescale `threshold` alongside the encoder, silently corrupting
+evaluated output on every non-unit-norm decoder (caught by the method's own
+assertion, which `from_pretrained`'s try/except had been swallowing). All four
+`vsae_jump_relu.py` fixes are in CLAUDE.md.
+
+Previous session (2026-09-11): ran **A1**, the first of the two
+mechanism-paper threads planned last session —
+`falsification/read_e4_node_effects.py`, zero new GPU work beyond SAE inference
+on already-cached activations (~30s). **Result: the usage-rank prediction is
+FALSIFIED — RESULTS addendum 15.** The stated prediction (SCR's top-effect
+features sit low in the baseline's usage ranking, TPP's sit high, which would
+explain why the baseline's `top_usage` masking curve is flat for SCR but rising
+for TPP) does not hold: both metrics' top-N features sit in the same 0.55–0.73
+usage-percentile band on the baseline SAE at every N in {2,5,10,20}, the small
+gap between them flips sign between N≤5 and N≥10, and within a single metric
+individual classes scatter across almost the full usage-rank range (SCR's
+`professor / nurse` and `male / female` disagree with each other as much as
+either disagrees with any TPP class). Per the falsifier stated in advance, the
+explanation is dead. PROJECT.md Next steps #0 box (3) closes with this
+(promoted into A1, per the prior session's plan); the SCR/TPP disagreement
+itself (addenda 10–14) stands unexplained by this hypothesis.
+
+**Then ran A2, the σ_init dose-response, end to end.** Pre-flight
+(`falsification/read_preact_gap.py`, **RESULTS addendum 16**) measured the
+k/(k+1) pre-activation gap on a baseline checkpoint before choosing the sweep
+grid and found even the `reparameterize()` clamp floor's sigma sits ~80–550×
+above it — refining the original "FVE and Jaccard knee together at a
+threshold" prediction to "no knee is reachable; expect FVE to be less
+dose-sensitive than Jaccard." The sweep (4 new arms × 13 seeds,
+`falsification/run_a2_sweep.sh`, ~52 min, 0 failures) then ran to completion.
+**Result (RESULTS addendum 17): the first half of the refined prediction is
+right — the curve is smooth, not kneed — but the second half is wrong.** FVE
+tracks convergence-checkpoint selection Jaccard almost exactly across the
+entire 6-point, >12×-sigma-range grid: **Pearson r = +0.9993** (13 seeds per
+point). That is a sharper, more specific confirmation of Claim #3's mechanism
+(selection churn drives the FVE damage) than a threshold would have been — a
+single near-linear relationship holding continuously across six well-separated
+operating points, not just two. Re-deriving `e2_sigma_low_init`'s "84.1% of the
+gap closed" from this run's independent pipeline reproduces addendum 7's number
+exactly, validating the measurement. Even at the achievable floor (clamp-limited
+sigma=0.0498), a real residual FVE gap (0.066) and non-unit Jaccard (0.952)
+remain — the clamp mechanically prevents testing lower sigma, so Claim #3's
+other open half (varying the *discreteness* of the sparsity mechanism —
+JumpReLU vs. BatchTopK vs. TopK) is the next lever, not a finer sigma sweep
+against the same clamp. **Both threads of Next steps A are now closed.**
+
+**Then ran A3, Claim #3's discreteness companion: does A2's FVE-vs-Jaccard
+coupling depend on TopK's per-token selection, or hold for BatchTopK's global,
+more elastic budget too?** Two pre-existing bugs in `vsae_batch_topk.py` had
+to be handled first (both now in CLAUDE.md): `scale_biases` carried the exact
+`var_encoder.bias` corruption bug addendum 8 fixed in `vsae_topk.py` (fixed
+identically here) and `_apply_topk_sparsity`'s global budget silently breaks
+by a factor of `~ctx_len` inside `loss_recovered()`'s 3D hook (not fixed — out
+of scope; `frac_variance_explained` is unaffected and is what this uses).
+Seven new arms (deterministic baseline + A2's exact 6-point sigma grid) × 13
+seeds, 91/91 runs, 0 failures, ~78 min. **Result (RESULTS addendum 18): the
+coupling generalises.** BatchTopK's own r(FVE, Jaccard) = **+0.9979**, just as
+tight as TopK's +0.9993 — the "more elastic budget should be more robust"
+intuition is not just falsified but mildly reverses: at every matched sigma
+BatchTopK recovers a slightly *smaller* fraction of its own (higher) baseline
+than TopK does of its own (80.5% vs. 84.1% of the gap closed at the clamp
+floor). Claim #3's mechanism — selection churn costs reconstruction in direct
+proportion — looks like a property of hard top-k-style selection under noise
+in general, not a TopK-specific quirk. JumpReLU (no training script exists;
+CLAUDE.md flags the trainer as never exercised end to end) remains the
+sharper test of *discreteness itself* versus *hard top-k specifically*, and is
+not attempted this session — deliberately scoped out given the size of that
+lift versus BatchTopK's.
+
+**Then closed E4 box (4): widened SCR/TPP coverage to 3 more `bias_in_bios`
+pairs and the second SAEBench dataset (`canrager/amazon_reviews_mcauley_
+1and5`).** `run_e4_scr.py`/`run_e4_tpp.py` generalised with `--dataset`/
+`--column1-vals` CLI args. Found and fixed a real methodological trap before
+trusting any of it: `run_eval_single_sae`'s cache loads by filename existence
+only, so `--smoke`-testing a new pair before its real run silently poisons the
+"full" run with a 20x-undersized cache (caught by comparing cache file sizes;
+contaminated cache and results deleted and redone) — now a standing landmine
+in CLAUDE.md ("never `--smoke` a pair/dataset you're about to run for real").
+**Result (RESULTS addendum 19): both verdicts replicate as the dominant
+pattern, with real added variance from the second dataset, not a reversal.**
+SCR "not explained by size" replicates 4/4 on the 3 new `bias_in_bios` pairs
+(mean margin +0.116) and 3/4 on amazon's own 4 pairs (mean +0.029, one
+reversal — Books/CDs_and_Vinyl — with a near-zero `random` bracket, so a weak
+exception rather than a clean flip); combined, 7 of 8 (pair, dataset) points
+say "not explained." TPP's "explained by size" verdict replicates on amazon
+via `top_usage` (−0.061) but its `random` bracket goes from decisive
+(−0.051 on `bias_in_bios`) to a coin flip (+0.0004) — the vSAE's own TPP score
+barely moves (0.1055 vs. 0.1031); what shifts is where the baseline's curve
+sits. Box (4) is done; box (5) (train a size-matched baseline from scratch)
+is the one item left in E4's checklist.
+
+Prior session (2026-09-10): ran the full (non-conditional)
+`--resample-train` SCR bootstrap — **RESULTS addendum 14** — the one thing
+addendum 13 flagged as unrun. 200 draws, full 9-point grid, 7.2 h, after adding
+10GB-card memory handling to `e4_bootstrap.py`'s `--resample-train` path.
+**Result: SCR's mean margin `vsae − top_usage@1474` widens from +0.082
+[+0.024, +0.150] to +0.088 [+0.008, +0.171] but does NOT cross zero** — the
+addendum-13 caveat is resolved, the verdict survives. New sub-finding: SCR's
+N=2 and N=5 feature selection is *bit-identical* between the conditional and
+full bootstrap (resampling the train set doesn't change which top-2/top-5
+features get picked); all the extra CI width comes from N≥10. Box (2) fully
+done; boxes (3)–(5) untouched at that point.
+
+Also that session: **planned the mechanism paper and its two remaining threads —
+`Next steps A`.** The framing is *"What does adding a KL term to a TopK SAE
+actually do?"*: fixed-variance KL is a null L2 penalty (established), sampling-on
+damage is TopK selection churn (Claim #3, confirmed but without a dose-response
+curve), and the literature's effect sizes are the size of implementation variance
+(established). **A1** = which features SCR/TPP actually select, with a usage-rank
+prediction and a stated falsifier, zero GPU. **A2** = the σ_init dose-response,
+~80 min of training, predicting a *threshold* at the k/(k+1) pre-activation gap.
+
+Prior session (2026-09-09): finished box (2)'s conditional bootstrap — **RESULTS
+addendum 13**. TPP ran to completion on the 5-point grid `500 1000 1474 2000
+3000` in 5.06 h after a ~15-line `.partial`/resume fix to `e4_bootstrap.py`.
+Both metrics' paired margins are resolved away from zero under test-set
+resampling in opposite directions — SCR **+0.082 [+0.024, +0.150]**, TPP
+**−0.086 [−0.090, −0.081]** — so the SCR/TPP disagreement is not a test-set-noise
+artifact. SCR's side is much thinner and rests on the N=2 ablation threshold
+alone (N=5/10/20 straddle zero); TPP's clears zero at N=2/5/10. The SCR half's
+conditional run had completed 2026-09-08 (`e4_bootstrap_scr_results.json`, full
+9-point grid, ~5.7 h); the TPP half was killed twice by session/machine limits
+before the fix.
+
+Prior session (2026-09-07): Next steps #0 box (1) — the E4 per-threshold logging
+gap (Claims-worth-opening #6a) — closed. `run_e4_scr.py`/`run_e4_tpp.py` now
+store the full per-`n_value` breakdown at every baseline grid point; both rerun
+against the warm caches and reproduced addenda 10–11's mean verdicts exactly, and
+`falsification/e4_per_threshold_analysis.py` shows the SCR/TPP disagreement is
+**not an averaging artifact** — SCR is "not explained by size" at all four
+ablation thresholds, TPP is "explained by size" at all four (decisively only at
+N≤10; a tie at N=20). RESULTS addendum 12.
+
+The four things that landed across the prior two sessions, in order:
 
 1. **Next steps #0 from the prior session is closed.**
    `falsification/reeval_var_flag1.py` re-ran the official `evaluate()` pipeline
@@ -41,12 +245,46 @@ Last updated: 2026-09-05. Two things landed this session, in order:
    landmine 3's confound confirmed in the checkpoint itself). The per-feature
    usage array E4's size-response curve needs was already sitting in the
    committed `all_histograms_*.npz`. **No retraining decision was needed after
-   all** — the only remaining gap is writing the SAEBench-side scorer (Next steps
-   #0; not yet scoped).
+   all** — the only remaining gap was writing the SAEBench-side scorer, closed
+   next (below).
+3. **E4's SAEBench SCR scorer is written and run against the recovered
+   checkpoints — the vSAE's SCR advantage is not explained by dictionary size.**
+   `falsification/e4_local_sae.py` (local, non-Hub checkpoint loaders) and
+   `falsification/run_e4_scr.py` (the masking grid, scorer, and verdict) close
+   Next steps #0. Masking the baseline TopK SAE down to a grid of N features by
+   usage and scoring SCR at each point produces a curve that stays flat and near
+   zero from N=100 to N=7379 (max 0.033); the vSAE's own score at its natural,
+   unmasked 1474-feature live count is 0.102 — above every single point on that
+   curve and above every one of 90 random-subset draws bracketing it from below.
+   Getting the vendored SAEBench copy to import at all needed three environment
+   fixes (a `sae_lens` API path that moved between the pinned version and the
+   installed one, a `beartype` upgrade for Python 3.14 compatibility, and one
+   missing package) — none touch evaluation logic; the falsification test suite
+   and `preflight.py` are still green. Single seed, single dataset, single class
+   pair — descriptive, not a permutation test, exactly as E4's design
+   anticipated; see RESULTS addendum 10 for the full table and caveats,
+   including what this does *not* rule out (CLAUDE.md landmine 3's AuxK
+   confound).
+4. **E4's TPP scorer reverses the SCR verdict — SCR and TPP disagree on
+   whether size explains the vSAE's advantage.** `falsification/run_e4_tpp.py`
+   mirrors the SCR runner for TPP; the vSAE's own TPP score (0.106) sits
+   *below* the baseline's same-size `top_usage` curve (0.190 at n=1474) and
+   below the `random` reference too (RESULTS addendum 11) — the opposite of
+   addendum 10. This is CLAUDE.md's thesis Failure 1 (no principled way to
+   combine metrics that disagree) reproduced fresh, on the same two
+   checkpoints, same day. **Time ran out before any follow-up could be
+   executed**, so the session instead worked out *why* the two metrics might
+   disagree — four hypotheses (a logging gap that collapsed a per-threshold
+   shape into one scalar; SCR's ratio-based score vs. TPP's difference-based
+   one; specialisation-vs-coverage; a masked-vs-trained-small confound in the
+   reference curve) — and recorded them as Claims-worth-opening #6 and a
+   5-item TODO checklist at Next steps #0, in priority order, cheapest first.
+   **Nothing in that checklist has been started** — it is queued for the next
+   session with GPU time.
 
 Branch `claude/falsification-framework`, GPU idle, pushed to origin and merged to
-`master`. 11 arms in the confirmatory battery (153 checkpoints) plus the 2 newly
-recovered single-seed Pythia checkpoints for E4.
+`master`. 11 arms in the confirmatory battery (153 checkpoints) plus the 2
+single-seed Pythia checkpoints for E4.
 
 Prior session (2026-09-04, second session), for context: (1) the sigma-annealing
 arm (`e2_sigma_low_init`, addendum 7) closed 84% of E2's FVE gap to baseline; (2)
@@ -65,18 +303,22 @@ numbers were unaffected.
 |---|---|
 | Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
-| Newest figure | `workshop/figs/frontier.pdf` — the liveness/reconstruction frontier over 8 working arms (unaffected by addendum 9 — see below) |
+| Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **The official `evaluate()` re-run (addendum 9) shows the `scale_biases` bug moved reported FVE by ≈0.005, not the ≈0.12 an uncommitted proxy had estimated; E2's 94.7%/5.3% split is essentially unchanged (93.6%/6.4%)** |
-| Blocking | Nothing blocked on compute or data. E4's checkpoints were recovered from an external drive (2026-09-05); the SAEBench scorer is the one remaining piece — see Next steps #0 |
+| Newest result | **A4 done (addendum 20): the naive JumpReLU coupling number (r=+0.9334) is confounded by an 8x swing in achieved sparsity that A2/A3's hard-k arms never had; controlling for it weakens the coupling to r=+0.6297 (n=4).** Neither a clean replication nor a clean refutation of A2/A3's tight FVE-Jaccard coupling — the real finding is that JumpReLU's soft, gradient-learned threshold isn't noise-robust the way hard top-k is: achieved sparsity itself collapses under noise (L0 36.8-290.8 across the grid), a failure mode TopK/BatchTopK cannot exhibit by construction. Four real `vsae_jump_relu.py` bugs found and fixed first (dead threshold gradient, missing L0-target loss, gate-before-noise ordering, `normalize_decoder` not rescaling threshold) — nothing on disk before this session used the trainer at all. |
+| In progress | Nothing running. A4 (addendum 20) is done this session, alongside A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) from the prior one. Next up is undecided: E4 box (5) (size-matched baseline), the mechanism-paper writeup (now including A4's more nuanced JumpReLU finding), or Claims-worth-opening #4/#5. |
+| Blocking | Nothing blocked on compute or data. E4 boxes (1)-(4) done (addenda 12-15, 19); box (5) open. Next steps A (mechanism paper) and its A4 companion are all closed. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
 
 The confirmatory battery is **complete at 13 seeds per arm** and reaches **5 sigma**
-on every comparison. E1, E2 and E3 have all landed; E0 and E4 have never been
-reported (E4's checkpoints are now recovered — see Next steps #0 — but the
-SAEBench scorer is still unwritten).
+on every comparison. E1, E2 and E3 have all landed; E0 has never been reported.
+E4 has a first reading (addenda 10–14, SCR and TPP, one dataset/class-pair,
+single seed each side, descriptive by design; the two metrics disagree, that
+disagreement is threshold-uniform, and it survives both the conditional and the
+full `--resample-train` bootstrap — though SCR's side of it is much the thinner)
+— see "What is established" below.
 
 **How E1 landed.** The code diff between the two arms was enumerated by reading
 `top_k.py` and `vsae_topk.py` against each other, plus the two training scripts,
@@ -248,6 +490,82 @@ as arms. no-ReLU vs ReLU: **d = +19.3 (0.1x) and +15.3 (0.5x)**, both thresholds
 agreeing, 5.03σ. Had either trainer simply been patched, every E3 number would have
 silently inherited a d ≈ 20 effect attributed to the KL mask.
 
+### E4 — SCR and TPP disagree, and that disagreement IS the finding
+
+RESULTS addenda 10 (SCR) and 11 (TPP), 2026-09-05/06. Masking the recovered
+Pythia baseline (`experiments/e4_pythia_baseline/seed42/`) down to a grid of N
+features by usage and scoring each metric at every point, then scoring the
+recovered vSAE (`experiments/e4_pythia_vsae/seed42/`) once, unmasked, at its own
+natural 1474-feature live count:
+
+| metric | baseline curve shape | vSAE score | vs. `top_usage` reference at n=1474 | verdict |
+|---|---|---|---|---|
+| SCR (professor/nurse) | flat, noisy, 0.004–0.033 | 0.1017 | 0.0201 (margin **+0.082**) | **not** explained by size |
+| TPP (5 classes) | clean, near-monotonic, 0.087–0.212 | 0.1055 | 0.1905 (margin **−0.085**) | explained by size |
+
+Both hold under the `random`-subset bracket too (SCR margin +0.133, TPP margin
+−0.051) — this is not an artifact of which reference was chosen.
+
+**And it is not an artifact of averaging across ablation thresholds either
+(addendum 12).** Rerun with the per-`n_value` breakdown stored at every grid
+point, the verdict is re-derived once per threshold: SCR is "not explained by
+size" at all of N=2/5/10/20 (`top_usage` margins +0.047 to +0.153), TPP is
+"explained by size" at all four — though TPP is decisive only at N≤10 (margins
+−0.07 to −0.13) and a near-tie at N=20 (−0.006 vs `top_usage`, +0.006 vs
+`random`). Each metric's verdict is its own at every point on SAEBench's
+within-eval ablation sweep, so the disagreement is a property of the two
+metrics, not of collapsing them to a mean.
+
+**And it is not a test-set-noise artifact — but the two sides are not equally
+sturdy (addendum 13).** `falsification/e4_bootstrap.py` resamples the cached
+test set with replacement (200 draws, node effects held fixed from the full
+train set — a conditional bootstrap) and re-scores through SAEBench's own
+internals. Both mean-over-threshold margins `vsae − top_usage@1474` clear zero:
+SCR **+0.082 [+0.024, +0.150]** (frac > 0 = 0.995), TPP **−0.086
+[−0.090, −0.081]** (frac > 0 = 0.000). So the disagreement survives resampling.
+But SCR's CI is ~15× wider than TPP's, and per threshold SCR's margin clears
+zero only at N=2 (+0.155 [+0.109, +0.214]); at N=5/10/20 it straddles zero. TPP's
+margin clears zero at N=2/5/10 and sits on the boundary at N=20 (−0.009
+[−0.017, −0.000]), where the vSAE lands *between* a random and a usage-ranked
+subset of the baseline. The bootstrap makes TPP's side the sturdier of the two
+without making SCR's vanish.
+
+**And it is not an artifact of the feature-selection decision either (addendum
+14).** The full `--resample-train` SCR bootstrap — node effects re-derived from
+a bootstrap resample of the *train* set every draw, 200 draws, full grid, 7.2 h
+— widens SCR's mean margin CI from +0.082 [+0.024, +0.150] to **+0.088
+[+0.008, +0.171]** (~2.4× wider, lower bound +0.024 → +0.008) but **does not
+cross zero**. Addendum 13's open caveat is resolved: SCR's "not explained by
+size" verdict survives the strongest bootstrap available on this seed. All the
+extra width is at N ≥ 10 — SCR's N=2 and N=5 feature selection is *bit-identical*
+between the conditional and full bootstrap (resampling the train set doesn't
+change which top-2/top-5 features get picked), so the low-N end the verdict rests
+on is the part that is stable to resampling. The baseline `top_usage` curve's
+full-bootstrap CI includes zero at every grid point but N=5000 — addendum 12's
+"flat and noisy" with error bars. What still is *not* controlled: single seed
+each side, one dataset/pair, AuxK.
+
+**This is not a contradiction to resolve by picking a favorite metric — it is
+CLAUDE.md's thesis Failure 1, reproduced fresh.** The preprint's own Global and
+Conclusion sections reached opposite verdicts on the same hypothesis "because
+there was no rule for combining heterogeneous evidence." SCR and TPP disagreeing
+here, on the same two checkpoints, same dataset, same masking grid, same day, is
+that exact situation. Reporting only SCR ("the vSAE beats the size-matched
+baseline") or only TPP ("the vSAE is explained by size") would each be a true
+statement about one metric and a misleading one about the vSAE's features in
+general.
+
+**This is a first reading, not the full E4 design.** Single seed each side
+(matches the preprint's own limitation — descriptive, not a permutation test,
+exactly as PROJECT.md's E4 design anticipated when it specified this budget).
+One dataset for both metrics; the second SAEBench dataset
+(`canrager/amazon_reviews_mcauley_1and5`) and the other three bias_in_bios class
+pairs are not yet run. And neither result says anything about CLAUDE.md
+landmine 3: the baseline still has `auxk_alpha=0.03125` against the vSAE's 0,
+and ruling out dictionary size as the explanation (or not) does not rule AuxK in
+or out — the two confounds are independent and this design controls only the
+first.
+
 ### The method earned its keep twice
 
 Both times, the **two-threshold** liveness pre-registration (F8b: robust only if both
@@ -354,68 +672,262 @@ learned sigma" above and RESULTS addendum 8.
 
 ## Next steps, in priority order
 
-The official re-evaluation is done (RESULTS addendum 9 — see "Closed" below).
-E4's missing-weights blocker is resolved (found on an external drive, 2026-09-05);
-nothing on this list is blocked on compute or data right now.
+The official re-evaluation is done (RESULTS addendum 9). E4's checkpoints were
+recovered and both its SCR and TPP scorers are written and run, and they
+disagree (RESULTS addenda 10-11 — see "Closed" below for all three). Nothing on
+this list is blocked on compute or data.
 
-### 0. E4 — write the SAEBench SCR/TPP scorer against the recovered checkpoints
+**Section A below is lettered, not numbered, on purpose: items #0–#2 keep their
+existing numbers so the cross-references in `RESULTS_2026-09-03.md` ("Next steps
+#0 box (2)", etc.) stay valid. A takes priority over all of them.**
 
-Checked 2026-09-04 (second session). `falsification/size_control.py` is fully
-implemented and tested; the missing piece was believed to be only the
-`scorer(keep_indices)` closure. It is not reachable yet: **the original
-preprint's Pythia checkpoints (`TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`,
-the baseline with the actual 7379/8192 vs. 1474/8192 size confound E4 exists to
-control for) have no `ae.pt` anywhere on this machine.**
-`comprehensive_histogram_analysis/` holds only their derived analysis outputs
-(summary JSONs, histograms, `.npz` files) — the trained weights themselves were
-apparently never saved to this checkpoint of the repo, on this machine, or in git
-(`archive/` is gitignored and empty of them too). `size_response_curve` needs the
-actual dictionary to mask and re-score at each grid point, so no scorer can be
-written against them.
+### A. The mechanism paper — both threads now closed (planned 2026-09-10, done 2026-09-11)
 
-**This is not the same gap as "E4 within the falsification battery."** The
-gelu-1l arms trained for E0–E3 (`baseline`, `e1_penalty`, `e2_confirm`, etc.) all
-share `dict_size=2048` and none show the preprint's size disparity — even
-`e2_sampling_only` is 98%+ alive and `e2_sigma_low_init` is 100% alive (RESULTS
-addendum 7) — so running `size_control.py` against them would not be testing the
-thing E4 was designed to test; there is no size confound in this battery to
-control for.
+**The framing.** The material now supports a second paper alongside the methods
+one in Deliverables: *"What does adding a KL term to a TopK SAE actually do?"*
+Three parts, all now established:
 
-**FOUND, 2026-09-05 — retraining is not needed.** The original `ae.pt` weights
-exist on an external drive (`/run/media/system/HDD_1TB/.../Desktop/Top/spar2/
-experiments/`), a prior/parallel session's copy of this project not previously
-searched. Both checkpoints — `TopK_SAE_pythia70m_d8192_k256_auxk0.03125_lr_auto`
-(baseline) and `VSAETopK_pythia70m_d8192_k256_lr0.0008_kl1.0_aux0_fixed_var`
-(the preprint's actual vSAE, `var_flag=0` — CLAUDE.md landmine 1) — load and run
-cleanly under the current codebase (verified directly: `from_pretrained`, a
-forward pass, correct `dict_size`/`k`/`var_flag`). `config.json` recovers the
-full original hyperparameters: seed 42 (single seed, no replication — matches the
-preprint's own limitation), `total_steps=10001`, `lr` auto-scaled for the larger
-dictionary (`0.000282842712474619`) on the baseline vs. fixed `8e-4` on the vSAE,
-`kl_coeff=1.0`, `auxk_alpha` **0.03125 vs. 0** — CLAUDE.md landmine 3's AuxK
-confound, confirmed present in the actual checkpoints rather than inferred from
-directory names. Checksummed-copied into `experiments/e4_pythia_baseline/seed42/`
-and `experiments/e4_pythia_vsae/seed42/` (each `md5sum`-verified against the
-source). The full per-feature usage array E4's `top_usage` curve needs
-(`feature_selection_counts`, length 8192, 7379 nonzero — exactly matching
-`features_used`) is already sitting in the committed
-`all_histograms_*.npz` for the baseline; nothing further needs computing there.
+1. **At fixed variance, nothing.** It is an L2 penalty (E1, identity verified to
+   6 decimals), and once the 5 optimiser/init details are matched the arms are
+   null everywhere. **Established.**
+2. **With sampling on it hurts, and the mechanism is TopK *selection churn*, not
+   representation degradation.** Claim #3 is CONFIRMED for TopK; A2 (below) turned
+   it into a 6-point dose-response curve with r=+0.9993 between FVE and selection
+   Jaccard. **Established, RESULTS addendum 17.**
+3. **The apparent effects in the literature are the size of implementation
+   variance**, so the standard comparison protocol cannot distinguish (1) from
+   artifact — E1's 5 factors (d≈13–16), E3's lone `F.relu(mu)` (d≈15–19, 5.03σ),
+   the decoder-gradient projection (d=−14.3) and the initial weight draw
+   (d=−4.7/−7.3), none of which appear in any equations. **Established; Claim #4
+   supplies the one control arm that generalises it beyond this repo.**
 
-**What is actually still missing is only the SAEBench-side `scorer` closure** —
-`falsification/size_control.py`'s framework (`select_features`,
-`size_response_curve`, `verdict`) is implemented and tested against synthetic
-scorers; it needs a real function that takes a `keep_indices` array, masks the
-baseline `AutoEncoderTopK`'s encoder/decoder accordingly, and returns an SCR (or
-TPP) score via the vendored `SAEBench-main/sae_bench/evals/scr_and_tpp/main.py`
-against Pythia-70m-deduped. That integration — reading `main.py`'s actual API and
-adapting it to score a masked, in-memory dictionary rather than one loaded from a
-hub — has not been scoped yet and is the next concrete piece of work.
+E4 becomes a section of this paper, not its thesis. The backing — 153
+checkpoints, 13 seeds/arm, 5σ — is unusually strong for a paper of this shape.
 
-Since both checkpoints are single-seed (matching the preprint exactly), the
-result this produces is necessarily **descriptive** — one baseline curve, one
-vSAE point on it — not a confirmatory permutation test; that is consistent with
-how E4 was designed (the curve comes from masking one dictionary at different
-sizes, not from retraining), but it should be stated as such when reported.
+The two threads, both now done:
+
+- [x] **A1. Which features does each metric actually select? (zero GPU)** —
+  **done 2026-09-11, FALSIFIED, RESULTS addendum 15.** This was Next steps #0
+  box (3) / Claims-worth-opening #6c, sharpened into a falsifiable prediction.
+  `falsification/read_e4_node_effects.py` read the features
+  `get_effects_per_class_precomputed_acts` picks as top-effect for SCR and for
+  each of TPP's five classes, and cross-referenced each against its rank in the
+  committed `all_histograms_*.npz`'s `feature_selection_counts`.
+
+  **Prediction (falsified): SCR's top-effect features sit LOW in the usage
+  ranking; TPP's sit HIGH.** Reasoning had been: `top_usage` masking keeps
+  high-frequency general-purpose features and discards rare narrow-firing ones;
+  disentangling a *correlated pair* (professor-not-gender) plausibly needs a
+  rare feature, separating five classes needs broad ones.
+
+  **Result: both sit in the same 0.55–0.73 band on the baseline SAE at every N
+  in {2,5,10,20}, the small gap between them flips sign between N≤5 (SCR higher)
+  and N≥10 (TPP higher), and within-metric variance across classes swamps any
+  between-metric difference** — SCR's own `professor / nurse` and `male /
+  female` classes disagree with each other as much as either disagrees with any
+  TPP class. Per the falsifier stated in advance, **the explanation is dead**:
+  usage-frequency pruning is not selectively discarding SCR-critical features
+  while sparing TPP-critical ones. The SCR/TPP disagreement (addenda 10–14)
+  stands unexplained by this hypothesis; a live but untested possibility is a
+  *distributional* property of the surviving feature set (how well it spans a
+  contrast) rather than *which* individual features survive. See addendum 15
+  for the full per-class table and the vSAE-side reading (uninformative — 82%
+  of that dictionary is dead, so any live feature is trivially near the top of
+  its own usage ranking).
+
+- [x] **A2. The σ_init dose-response — the noise axis of Claim #3 (~80 min
+  training)** — **done 2026-09-11, RESULTS addendum 17.** Claim #3 was
+  confirmed for TopK but rested on two arms plus an annealing run; now a
+  6-point curve, 13 seeds each.
+
+  **Design.** 13 seeds × ~6 values of `log_var_init` on gelu-1l, `var_flag=1`,
+  everything else matched to `e2_sampling_only`. Measure two things per
+  checkpoint: FVE damage vs. baseline, and selection Jaccard instability
+  (`falsification/read_selection_jaccard.py`, which already applies the addendum-8
+  bias correction).
+
+  **Prediction, and how to make it a real one.** TopK selection is an argmax over
+  pre-activations; noise of scale σ flips the selection whenever the gap between
+  the k-th and (k+1)-th pre-activation is below σ. So the damage should be a
+  **threshold phenomenon**, not smooth degradation, with the knee where σ ≈ the
+  typical k/k+1 gap — and the FVE and Jaccard curves should knee *together*.
+  **Measure the pre-activation gap distribution on a baseline checkpoint first**
+  (one checkpoint read, free): that predicts the knee location a priori instead
+  of fitting it post hoc.
+
+  **Pre-flight, RESULTS addendum 16 — the prediction needed refining before the
+  sweep landed.** `falsification/read_preact_gap.py` measured the k/(k+1) gap
+  on `experiments/baseline/seed1`: median 0.0001, p99 0.0006 (training space).
+  Even the clamp floor's sigma (0.0498) sits ~80–550× above this, so no
+  `log_var_init` on the planned grid keeps sigma below the boundary gap — a
+  shared knee is not reachable within this architecture's clamp range. Half
+  right: **RESULTS addendum 17** confirms the curve is smooth, not kneed. But
+  the *other* half of the refined prediction — that FVE would decouple from
+  Jaccard because boundary churn concentrates in low-importance features — is
+  **wrong**: FVE tracks Jaccard almost exactly (Pearson r = +0.9993) across all
+  6 points, 13 seeds each, spanning sigma 0.6065 down to 0.0498:
+
+  | `log_var_init` | sigma | FVE | Jaccard |
+  |---|---|---|---|
+  | −1.0 | 0.6065 | 0.3766 ± 0.0028 | 0.7657 ± 0.0022 |
+  | −2.0 (`e2_sampling_only`) | 0.3679 | 0.4841 ± 0.0022 | 0.8117 ± 0.0013 |
+  | −3.0 | 0.2231 | 0.6140 ± 0.0020 | 0.8700 ± 0.0008 |
+  | −4.0 | 0.1353 | 0.7427 ± 0.0015 | 0.9180 ± 0.0006 |
+  | −5.0 | 0.0821 | 0.8169 ± 0.0010 | 0.9453 ± 0.0002 |
+  | −8.0 (`e2_sigma_low_init`, clamped) | 0.0498 | 0.8338 ± 0.0007 | 0.9523 ± 0.0002 |
+
+  (baseline: FVE 0.900159.) This is a sharper confirmation of Claim #3's
+  mechanism than a threshold would have been: a single near-linear
+  FVE-vs-selection-stability relationship holds continuously across six
+  well-separated operating points, not just two arms plus an annealing run.
+  Re-deriving `e2_sigma_low_init`'s "84.1% of the gap closed" from this run's
+  independent pipeline reproduces addendum 7's number exactly. Even at the
+  achievable floor a real residual remains (FVE gap 0.066, Jaccard 0.952, not
+  1.0) — the clamp mechanically prevents testing lower sigma, so this residual
+  cannot be probed further along this axis. Figure at
+  `workshop/figs/a2_dose_response.pdf`. See addendum 17 for the full account
+  and caveats (the correlation is over 6 arm-level points, not a permutation
+  test — CLAUDE.md's unit-of-analysis rule, same status as `frontier.py`'s
+  cross-arm `rho`).
+
+  **Why it matters beyond this codebase.** It is the same tension Gumbel-Softmax
+  and Concrete exist to resolve: continuous-relaxation stochastic latents do not
+  compose with hard combinatorial selection. That yields a constructive
+  recommendation rather than a negative result — *if you want stochastic sparse
+  codes, put the noise in the selection, not in the magnitudes.*
+
+  **Companion — DONE for all three architectures (A3 BatchTopK: RESULTS
+  addendum 18; A4 JumpReLU: RESULTS addendum 20).** Claim #3's other open half
+  varies the *discreteness* of the sparsity mechanism (BatchTopK vs. TopK vs.
+  JumpReLU's learned threshold). The BatchTopK side: the FVE-vs-Jaccard
+  coupling generalises (r=+0.9979 vs. TopK's +0.9993), and if anything
+  BatchTopK's more elastic global selection budget is *slightly more* exposed
+  to noise at matched sigma, not less (80.5% vs. 84.1% of the gap closed at
+  the clamp floor). **JumpReLU needed a training script written from
+  scratch** (none existed; the trainer was flagged in CLAUDE.md as never
+  exercised end to end) and surfaced four real bugs before any arm could run,
+  including one (the gate running before sampling) that would have made
+  selection churn structurally impossible — all fixed, all in CLAUDE.md. The
+  result is not a clean third data point for the same comparison: JumpReLU's
+  soft, gradient-learned threshold does not hold sparsity fixed under noise
+  the way TopK/BatchTopK's hard-k does (achieved L0 swings 36.8→290.8 across
+  the sigma grid), which confounds the naive FVE-vs-Jaccard reading (r=+0.9334
+  looks like a looser replication, but r(FVE, L0)=+0.9494 is just as tight,
+  and restricting to L0-matched points weakens the coupling to r=+0.6297,
+  n=4). **The finding this licenses is different from the one asked for**:
+  a soft threshold's *sparsity level itself* is not noise-robust, a failure
+  mode the two hard-k architectures cannot exhibit by construction — arguably
+  more basic than, and not directly comparable to, "does selection churn cost
+  reconstruction at fixed sparsity."
+
+  **Costs — actuals vs. the original estimate.** Estimated ~80 min training +
+  up to 8.5h of liveness analysis; actual was ~52 min for the 52 new runs (13
+  seeds × 4 arms) and **zero** liveness-analysis time — addendum 17 only needed
+  each run's own `RUN_COMPLETE.json` FVE and a convergence-checkpoint Jaccard
+  read (`read_a2_dose_response.py`), not the full histogram analyzer, so the
+  8.5h concern never materialised. Landmines that did matter, for the record:
+  * `log_var_init = −8.0` (`e2_sigma_low_init`) sits below the clamp floor and
+    saturates to the same effective sigma as −6.0 would — confirmed directly
+    (addendum 17's table reports the clamped, not raw, sigma for that row).
+  * The four new arms were trained today, post-`scale_biases`-fix, and read
+    with NO bias correction; the two reused pre-existing arms
+    (`e2_sampling_only`, `e2_sigma_low_init`) predate the fix and need it —
+    `read_a2_dose_response.py` applies it per-arm, not globally.
+  * `falsification/run_arm.py`'s per-arm, per-seed `save_dir` (not
+    `--output-dir`) is what prevents seed collisions; used via
+    `falsification/run_a2_sweep.sh`, which mirrors `run_overnight.sh`'s
+    skip-if-`RUN_COMPLETE.json`-exists pattern.
+
+### 0. E4 — understand the SCR/TPP disagreement before widening coverage
+
+**STATUS: items (1)–(4) done (RESULTS addenda 12–15, 19); (5) open.** Boxes
+(1)–(4) are checked below; pick up at box (5). Nothing here needs re-deriving
+— the reasoning is written out in Claims-worth-opening #6, this is just the
+checklist.
+
+Addenda 10-11 (2026-09-05/06) found SCR and TPP give opposite verdicts on the
+same two checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same
+masking grid. Claims-worth-opening #6 works through *why* they might disagree
+and lays out four diagnostics, cheapest first. Run in this order — each
+checkbox is one of that entry's lettered options — and check items off as they
+land, recording the result in a new RESULTS addendum the way every prior step
+has been:
+
+- [x] **(1) Fix the logging gap, then rerun** (Claims-worth-opening #6a) —
+  **done 2026-09-07, RESULTS addendum 12.** Both runners now store the full
+  per-threshold dict at every baseline grid point
+  (`baseline_curve[i]["per_threshold"]`); both rerun against the warm caches and
+  reproduced addenda 10–11's mean verdicts exactly.
+  `falsification/e4_per_threshold_analysis.py` redoes the verdict once per
+  threshold. **Result: the disagreement is not an averaging artifact.** SCR is
+  "NOT explained by size" at all of N=2/5/10/20 (`top_usage` margins +0.047 to
+  +0.153); TPP is "explained by size" at all four, though only decisively at
+  N≤10 (margins −0.07 to −0.13) — at N=20 it is a tie (−0.006 vs `top_usage`,
+  +0.006 vs `random`). Closes 6a as an *explanation* for the disagreement and
+  sharpens the case for (2) and (3).
+- [x] **(2) Bootstrap error bars from the cached activations**
+  (Claims-worth-opening #6b) — **done 2026-09-09/10, RESULTS addenda 13–14.**
+  `falsification/e4_bootstrap.py` resamples the cached test set with replacement
+  (200 draws) and re-scores through SAEBench's own internals
+  (`get_all_node_effects_for_one_sae`, `perform_feature_ablations`,
+  `get_scr_plotting_dict` / `create_tpp_plotting_dict`); conditional bootstrap
+  (node effects fixed from the full train set) unless `--resample-train`. SCR ran
+  on the full 9-point grid (5.7 h); TPP on the 5-point grid
+  `500 1000 1474 2000 3000` (5.06 h) after a ~15-line fix that dumps a `.partial`
+  checkpoint every 10 draws and resumes from it (both 2026-09-08 TPP attempts
+  had been lost to interruption).
+  **Result — the SCR/TPP disagreement is not a test-set-noise artifact, but the
+  two sides are not equally sturdy.** Both mean-over-threshold margins
+  `vsae − top_usage@1474` clear zero: SCR **+0.082 [+0.024, +0.150]** (frac > 0
+  = 0.995), TPP **−0.086 [−0.090, −0.081]** (frac > 0 = 0.000). But SCR's CI is
+  ~15× wider and per threshold clears zero only at N=2 (+0.155 [+0.109, +0.214];
+  N=5/10/20 straddle it); TPP clears zero at N=2/5/10 and sits on the boundary
+  at N=20 (−0.009 [−0.017, −0.000]). The bootstrap makes TPP's side the sturdier
+  of the two without making SCR's vanish.
+  **Full `--resample-train` bootstrap (2026-09-10, RESULTS addendum 14):** node
+  effects re-derived from a train-set resample every draw, 200 draws, full grid,
+  7.2 h, after adding 10GB-card memory handling to the `--resample-train` path.
+  SCR's mean margin widens to **+0.088 [+0.008, +0.171]** but does not cross
+  zero — addendum 13's caveat is resolved. SCR's N=2/N=5 selection is
+  bit-identical between the two bootstraps; all extra width is N≥10. Box (2)
+  fully done.
+- [x] **(3) Read which features SCR's and TPP's own effect computation
+  selects** (Claims-worth-opening #6c) — **done 2026-09-11 as Next steps A1,
+  FALSIFIED, RESULTS addendum 15.** The usage-rank prediction (SCR's top-effect
+  features rank low, TPP's rank high) does not hold — both sit in the same
+  0.55–0.73 band at every N, the sign flips between N≤5 and N≥10, and
+  within-metric across-class variance dwarfs the between-metric difference. See
+  Next steps A1 above for the full account.
+- [x] **(4) The second SAEBench dataset and the other three `bias_in_bios`
+  class pairs** — **done 2026-09-11, RESULTS addendum 19.** `run_e4_scr.py`/
+  `run_e4_tpp.py` generalised with `--dataset`/`--column1-vals`. **Result:
+  both verdicts replicate as the dominant pattern, with real added variance,
+  not a reversal.** SCR "not explained by size": 4/4 on the 3 new
+  `bias_in_bios` pairs (mean margin +0.116), 3/4 on amazon's own 4 pairs (mean
+  +0.029, one weak exception — Books/CDs_and_Vinyl, near-zero `random`
+  bracket); 7/8 combined. TPP "explained by size" replicates on amazon via
+  `top_usage` (−0.061) but its `random` bracket goes from decisive (−0.051) to
+  a coin flip (+0.0004) — the vSAE's own TPP score barely moves, the
+  baseline's curve is what shifts. A real methodological trap was found and
+  fixed en route: `--smoke`-testing a new pair before its real run silently
+  poisons the "full" run's cache (SAEBench loads by filename existence only,
+  not by config match) — now a CLAUDE.md landmine.
+- [ ] **(5) Train a size-matched baseline from scratch**
+  (Claims-worth-opening #6d, most expensive) — removes "masked vs.
+  trained-small" as a live confound in the reference curve itself, at the cost
+  of a real training run.
+
+Boxes (1)–(4) are done (addenda 12–15, 19); box (5) is not scoped in code yet
+— it is the plan, recorded before picking it up, per this project's own working
+style. When starting a fresh session on this: read this checklist,
+Claims-worth-opening #6 in full, and RESULTS addenda 10–19, then pick up at box
+(5). Box (2) confirmed the prediction from (1): TPP's N=20 margin is a
+knife-edge (−0.009 [−0.017, −0.000]), so the "explained by size" reading rests
+on N≤10; SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps)
+and its mean-level verdict is carried by N=2 alone — where, addendum 14 shows,
+the feature selection is bit-identical under train resampling. Box (3) then
+falsified the leading hypothesis for *why* SCR and TPP disagree (usage-rank
+sorting) — addendum 15 — so the disagreement itself is still open.
 
 ### 1. Desk work — no GPU, no new code
 
@@ -431,6 +943,28 @@ Doing it anyway would close the question formally, but it is a **new
 pre-registration**, not a continuation of this one.
 
 ---
+
+## Closed — E4's checkpoint recovery and SCR/TPP scorers (2026-09-05/06)
+
+Full detail in RESULTS addenda 10 (SCR) and 11 (TPP), and in **What is
+established** above (E4's section). Kept here as the historical record since a
+fresh reader may otherwise look for this under "next steps."
+
+The original preprint's Pythia checkpoints had no `ae.pt` on this machine;
+`comprehensive_histogram_analysis/` held only their derived analysis outputs.
+A search of other drives found a prior/parallel copy of this project on
+`HDD_1TB` holding both checkpoints intact; checksummed-copied into
+`experiments/e4_pythia_baseline/seed42/` and `experiments/e4_pythia_vsae/seed42/`.
+`config.json` confirmed CLAUDE.md landmine 3's AuxK confound directly in the
+recovered checkpoints (`auxk_alpha` 0.03125 vs. 0) rather than by inference from
+directory names. With the weights in hand, `falsification/e4_local_sae.py`,
+`falsification/run_e4_scr.py` and `falsification/run_e4_tpp.py` closed the
+remaining gap — real SCR and TPP scorers wired to `falsification/size_control.
+py`'s tested-but-scorer-less framework — and produced two readings that
+disagree: SCR says the vSAE's advantage is not explained by dictionary size,
+TPP says it is. See "What is established" (E4) and RESULTS addenda 10-11 for
+the numbers and every caveat (single seed, bias_in_bios only so far, AuxK not
+controlled).
 
 ## Closed — the official re-evaluation of E2's FVE (2026-09-05)
 
@@ -574,6 +1108,14 @@ paper's headline, but it is new training against a not-yet-fixed part of the
 codebase's bug exposure (`vsae_jump_relu.py`'s `scale_biases` was fixed
 pre-emptively this session but never tested against a real `var_flag=1` run).
 
+**Two axes, not one (added 2026-09-10).** The above varies *selection hardness*.
+The orthogonal and much cheaper axis is *noise scale*: a σ_init dose-response on
+TopK alone, predicting a **threshold** in σ at the typical k/(k+1) pre-activation
+gap, with the FVE and Jaccard curves kneeing together. That is **Next steps A2**
+(~80 min of gelu-1l training), and it should run first — it needs no new trainer
+and does not touch `vsae_jump_relu.py`. Together the two axes are the mechanism
+section of the second paper: noise scale × selection hardness.
+
 ### 4. "A one-line optimiser detail moves reconstruction more than the architecture
 under study" — ~30 min, converts a local finding into a general one
 
@@ -611,6 +1153,109 @@ This is the empirical hook the methods paper currently lacks: it turns "you shou
 pre-register and use permutation tests" from advice into a measured gap. Handle it
 carefully — the point is that the field's *design conventions* cap what its results
 can say, not that particular authors erred.
+
+### 6. Why do SCR and TPP disagree on E4? — four diagnostics, cheapest first
+
+RESULTS addenda 10-11 found SCR and TPP give opposite verdicts on the same two
+checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same masking grid:
+SCR says the vSAE's advantage is not explained by dictionary size, TPP says it
+is. That disagreement is the addenda's finding on its own terms — it is
+CLAUDE.md's thesis Failure 1, reproduced fresh — but it also raises a question
+worth its own investigation: is it a real property of the two architectures'
+features, or an artifact of how the two metrics happen to be measured here?
+Four hypotheses, roughly cheapest-to-test first, none mutually exclusive:
+
+**(a) — TESTED 2026-09-07, RESULTS addendum 12: it is not hiding one.** Both
+runners now store the per-`n_value` breakdown; rerun against the warm caches,
+each metric's verdict is threshold-uniform (SCR "not explained by size" at all
+four thresholds, TPP "explained by size" at all four, decisive only at N≤10).
+The disagreement survives the per-threshold cut. The original text is kept below
+as the record of why the check was needed.
+
+**(a) The mean-of-thresholds aggregate may be hiding a shape change, the way
+liveness's single-threshold summary did twice before (F8b).** Neither
+`run_e4_scr.py` nor `run_e4_tpp.py` currently saves the baseline curve's
+per-`n_value` breakdown — only the mean across `n_values=[2,5,10,20]` is stored
+in `e4_{scr,tpp}_results.json` (`baseline_curve[i]["scores"]` is one aggregate
+float per draw). The vSAE's own per-threshold scores *are* saved, and by
+inspection SCR's "not explained by size" verdict holds at every individual
+threshold for the vSAE against the n=1474 baseline point (0.157/0.089/0.093/
+0.068 vs. 0.004/0.034/0.047/−0.004) — but the baseline curve itself was never
+saved at that granularity, so whether TPP's "explained by size" verdict is
+threshold-uniform or driven by one or two large thresholds (its own
+per-threshold vSAE scores range from 0.008 at N=2 to 0.252 at N=20, a much
+wider spread than SCR's) is currently unknown. **Cheapest fix**: extend both
+scorers to return/store the full per-threshold dict at every grid point, not
+just its mean, and rerun against the warm caches — a bookkeeping change, no new
+LLM/SAE forward passes needed logic-wise.
+
+**(b) — TESTED 2026-09-09/10, RESULTS addenda 13–14: partly, but the
+disagreement survives it.** A 200-draw conditional bootstrap of the cached test
+set (addendum 13), then a full `--resample-train` bootstrap that also resamples
+the train set and re-derives node effects every draw (addendum 14), each put a
+CI on every grid point and both vSAE scores. SCR's curve *is* the noisier of the
+two — its margin CI is ~15× wider than TPP's, and per threshold SCR's
+`vsae − top_usage@1474` margin straddles zero at N=5/10/20 (clears it only at
+N=2). But at the mean-over-thresholds level SCR's margin still excludes zero
+under both bootstraps (+0.082 [+0.024, +0.150] conditional; +0.088
+[+0.008, +0.171] full), so SCR's "not explained by size" is not merely noise
+around zero — it is a thin, low-ablation-budget effect against TPP's wide one.
+The original text is kept below as the record of why the check was needed.
+
+**(b) SCR's score is a ratio, TPP's is a difference — that alone could explain
+why one curve is noisy/flat and the other clean/monotonic.**
+`get_scr_plotting_dict` divides by `(clean_acc − original_acc)`, a denominator
+that is small and noisy whenever the spurious correlation itself is weak on a
+given draw, and can swing the score sharply on measurement noise alone;
+`create_tpp_plotting_dict`'s `total_metric` is a plain accuracy-drop
+difference, no division. If this is the whole story, the SCR/TPP disagreement
+says less about the vSAE's features than about which of the two published
+metrics is measured more reliably at this model scale — worth knowing
+regardless of what it implies about the vSAE. **Testable cheaply**:
+bootstrap-resample the cached test-set activations
+(`falsification/e4_scr_artifacts/`, `e4_tpp_artifacts/` are already on disk) to
+put an error bar on every grid point and the vSAE's own score, for both
+metrics, without any new LLM or SAE forward passes — just resampled indices
+into what is already cached. If SCR's "flat" curve turns out to be
+statistically indistinguishable from noise around zero, that changes how much
+weight addendum 10's verdict should carry relative to addendum 11's.
+
+**(c) Specialisation vs. coverage.** SCR here asks for one clean axis
+(professor/nurse, net of gender); TPP asks for five simultaneously-separable
+classes from the same feature budget. A dictionary with far fewer live
+features (the vSAE, 1474) might still find one dedicated feature for a single
+salient axis while being forced to overload features across five classes it
+was never specifically pushed toward — SCR would look great, TPP would look
+worse, on the same underlying representation, for a real mechanistic reason
+rather than a metric artifact. **Testable**: read which specific features SCR's
+and TPP's own effect computation (`get_effects_per_class_precomputed_acts`)
+selects as top-effect for each class, at the vSAE's natural size, and check
+overlap — do the same handful of vSAE features get selected as top-effect for
+*multiple* TPP classes (evidence for overloading) while SCR's top-effect set is
+disjoint from all of them (evidence for a dedicated axis)? A read of existing
+per-run artifacts, not a new training run.
+
+**(d) The baseline's masked-from-8192 curve may not be a fair reference for a
+dictionary that was never trained at that size.** Every point on the
+baseline's `size_control.py` curve is the *same* 8192-wide dictionary with
+entries zeroed out post hoc; the vSAE's 1474 features were learned together,
+with the rest of its capacity never used for anything else. A dictionary
+trained from scratch at `dict_size=1474` might organise its limited capacity
+differently — more efficiently, or less — than a masked subset of a bigger
+one, and `size_control.py`'s own
+`test_random_subset_null_would_falsely_confirm_the_hypothesis` already proves
+this kind of reference-choice sensitivity matters a great deal for this
+design. **Most expensive of the four**: train a plain TopK baseline at
+`dict_size=1474` on Pythia-70m layer 3 (same config otherwise) and score it
+directly, no masking. A real training run, not just a rerun of the existing
+scorers — single-seed the same way E4's other checkpoints are, so still
+descriptive rather than confirmatory, but it removes "masked vs. trained-small"
+as a live confound in the comparison itself, which (a)-(c) do not.
+
+None of these would overturn RESULTS addenda 10-11's central finding — SCR and
+TPP disagree on this dataset today — they would narrow down *why*, which is
+exactly the kind of gap Failure 1 exists to force into the open rather than
+paper over. See Next steps #0 for the priority order this implies.
 
 ---
 
@@ -893,11 +1538,13 @@ that `vsae_topk.py` applies, so either patch one to match the other or report th
 comparison as confounded.
 
 ### E4 — Size-matched SCR/TPP control. No training. Implemented in `falsification/size_control.py`.
-> **Outcome: not started, but no longer blocked.** `size_control.py` is fully
-> implemented and tested; the original Pythia checkpoint weights, once believed
-> lost, were found on an external drive and copied in 2026-09-05
-> (`experiments/e4_pythia_baseline/`, `experiments/e4_pythia_vsae/`, seed 42).
-> The only remaining piece is the SAEBench-side scorer. See Next steps #0.
+> **Outcome: both metrics landed, and they disagree.** `falsification/
+> run_e4_scr.py` and `run_e4_tpp.py` wire `size_control.py` to real SAEBench
+> scorers against the recovered checkpoints (`experiments/e4_pythia_baseline/`,
+> `experiments/e4_pythia_vsae/`, seed 42), on `LabHC/bias_in_bios_class_set1`:
+> SCR says the vSAE's advantage is not explained by dictionary size, TPP says
+> it is (RESULTS addenda 10-11). The second SAEBench dataset and the other
+> three class pairs are the remaining extension — see Next steps #0.
 
 Measure SCR/TPP as a **function of dictionary size** for the baseline SAE, then
 ask where the vSAE's score falls on that curve.
@@ -937,14 +1584,21 @@ permitted only if reported as exploratory and excluded from the evidence product
 
 ## Deliverables
 
-1. **Paper.** Sequential falsification for interpretability claims, with the vSAE
-   study as the case study whose conclusion it reverses. Target: a venue caring
-   about measurement validity and falsifiability (the InterpScience CFP framing
-   still fits).
+1. **Paper (methods).** Sequential falsification for interpretability claims, with
+   the vSAE study as the case study whose conclusion it reverses. Target: a venue
+   caring about measurement validity and falsifiability (the InterpScience CFP
+   framing still fits).
 2. **`falsification/`** as a reusable package, with the Type-I calibration from E0
    as its empirical warrant.
 3. **Corrections** to the preprint's record: the degeneracy, the AuxK confound, the
    config mismatches, the self-contradiction between Global and Conclusion.
+4. **Paper (mechanism), planned 2026-09-10.** *"What does adding a KL term to a
+   TopK SAE actually do?"* — fixed-variance KL is a null L2 penalty (E1);
+   sampling-on damage is TopK selection churn with a σ threshold (E2 + Claim #3 +
+   Next steps A2); and the effect sizes reported in the literature are the size
+   of implementation variance (E1's 5 factors, E3's ReLU, Claim #4's control arm).
+   Constructive payload: *put the noise in the selection, not the magnitudes.*
+   Remaining experiments are scoped at **Next steps A**.
 
 ## Landmines specific to continuing this work
 
@@ -1020,6 +1674,30 @@ samples (was 6 min before `update_histograms` was vectorised — 59 of 60 output
 verified bit-identical after that change). A full 13-seed arm is ≈ 13 min train +
 ≈ 15 min analyse.
 
+**~~`run_e4_scr.py` and `run_e4_tpp.py` discard the per-threshold breakdown at
+every baseline grid point.~~ FIXED 2026-09-07 (RESULTS addendum 12).** Both
+runners now store `baseline_curve[i]["per_threshold"]` — a list of the full
+`{scr,tpp}_metric_threshold_N` dict, one entry per draw — reconstructed from
+`size_response_curve`'s call order after the fact (the `Scorer` signature it
+takes is a bare `keep_indices -> float`, so the per-threshold dict is captured
+in a closure-local list and re-walked against `points`, not threaded through).
+`falsification/e4_per_threshold_analysis.py` consumes it. Left here as the
+record: the mean-across-`n_values` collapse was a real shape-behind-a-scalar
+risk (F8b), it just turned out not to be masking anything — both verdicts are
+threshold-uniform.
+
+**SCR's per-threshold score is a ratio; TPP's is a difference.**
+`get_scr_plotting_dict` divides by `(clean_acc − original_acc)`, which can be
+small and noisy on any single draw; `create_tpp_plotting_dict`'s `total_metric`
+is a plain subtraction. Observed consequence: the baseline `top_usage` SCR
+curve is flat and noisy (0.004–0.033 across N=100–7379) while the equivalent
+TPP curve is clean and near-monotonic (0.087–0.212) — plausibly a property of
+how the two metrics are constructed rather than of the two dictionaries being
+compared. **Verified partly (RESULTS addenda 13–14):** both the conditional and
+the full `--resample-train` bootstrap confirm SCR is the noisier metric here
+(margin CI ~15× wider than TPP's), but SCR's mean-level `vsae − top_usage@1474`
+margin still excludes zero under both (+0.082 → +0.088), so the disagreement is
+not purely a metric-construction artifact.
 
 ---
 
@@ -1029,13 +1707,16 @@ verified bit-identical after that change). A full 13-seed arm is ≈ 13 min trai
 |---|---|
 | **this file** | current state, what is established, next steps, the pre-registration, open decisions |
 | `CLAUDE.md` | standing landmines in the vSAE code; read before touching `dictionary_learning/` |
-| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does |
+| `falsification/RESULTS_2026-09-03.md` | all measured results. Addendum 1: 13-seed/5σ rerun. 2: gradient projection. 3: the learned sigma collapses **— CORRECTED by 8, do not trust in isolation**. 4: the E1 code diff, enumerated and frozen (15 items). 5: the closing arm — E1 lands. 6: the liveness/reconstruction frontier. 7: the sigma-annealing arm — 84% of E2's gap is the init, not the reparameterisation. 8: the `scale_biases` bug — corrects 3, confirms Claims-worth-opening #3. 9: the official `evaluate()` re-run — the proxy's ≈0.12 FVE does not replicate, the 94.7%/5.3% split does. 10: E4's SCR scorer — the vSAE's SCR score is not explained by dictionary size. 11: E4's TPP scorer — reverses addendum 10's verdict, a live case of the thesis's Failure 1. 12: the SCR/TPP disagreement is threshold-uniform, not an artifact of averaging across `n_values`. 13: E4 bootstrap error bars — the disagreement is not a test-set-noise artifact either (both margins clear zero, opposite signs), but SCR's side is ~15× wider and rests on the N=2 threshold alone. 14: E4 full `--resample-train` bootstrap — SCR's mean margin widens to +0.088 [+0.008, +0.171] but does not cross zero; N=2/N=5 feature selection is bit-identical under train resampling |
 | `falsification/FINDINGS_2026-09-02.md` | the five instrumentation bugs the pilot exposed |
 | `falsification/REMEDIATION.md` | fix tracking + the four author decisions and their rationale |
 | `RUNBOOK.md` | commands, arm table, E4 design |
 | `falsification/frontier.py`, `read_penalty_clamp.py`, `read_learned_sigma.py` | the checkpoint-reading analyses behind addenda 3, 4 and 6 — `read_learned_sigma.py`'s own numbers need the addendum-8 bias correction applied by hand; it does not do this itself |
 | `falsification/read_selection_jaccard.py` | Jaccard-overlap-during-training analysis behind addendum 8; applies the bias correction itself — the pattern to copy for re-reading any other `var_flag=1` checkpoint |
 | `falsification/reeval_var_flag1.py` | official `evaluate()` re-run behind addendum 9; writes `evaluation_results_corrected.json` per checkpoint, which `compare_arms.py` (and `frontier.py`) now prefer automatically |
+| `falsification/e4_local_sae.py`, `falsification/run_e4_scr.py`, `falsification/run_e4_tpp.py` | E4's local (non-Hub) checkpoint loaders and the SCR/TPP masking-grid/scorer/verdict behind addenda 10-12; either runner's `--smoke` flag gives a fast pipeline check before a full run. Both now store `baseline_curve[i]["per_threshold"]` |
+| `falsification/e4_per_threshold_analysis.py` | re-derives the E4 size verdict once per ablation threshold from the stored per-`n_value` breakdown (addendum 12) |
+| `falsification/e4_bootstrap.py`, `falsification/e4_bootstrap_{scr,tpp}_results.json`, `falsification/e4_bootstrap_scr_resample_train_results.json` | E4's test-set bootstrap error bars: conditional (addendum 13, both metrics) and full `--resample-train` (addendum 14, SCR only — node effects re-derived per draw, 10GB-card memory handling, 7.2 h for 200 draws on the full grid). `--smoke` for a fast check; `.partial` checkpoint every 10 draws with exact resume |
 | `workshop/figs/frontier.pdf` | the frontier figure (addendum 6) |
 ## Verify the environment is sane
 

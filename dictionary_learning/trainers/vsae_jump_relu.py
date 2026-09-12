@@ -26,6 +26,7 @@ from ..trainers.trainer import (
     get_lr_schedule,
     get_sparsity_warmup_fn,
 )
+from .jumprelu import JumpReLUFunction, StepFunction
 
 
 @dataclass
@@ -34,6 +35,9 @@ class VSAEJumpReLUConfig:
     activation_dim: int
     dict_size: int
     threshold: float = 0.001  # JumpReLU threshold parameter
+    # STE bandwidth for JumpReLUFunction/StepFunction (see jump_relu() below --
+    # RESULTS addendum TBD found threshold received zero gradient without this).
+    bandwidth: float = 0.001
     var_flag: int = 0  # 0: fixed variance, 1: learned variance
     use_april_update_mode: bool = True
     dtype: torch.dtype = torch.bfloat16
@@ -190,45 +194,75 @@ class VSAEJumpReLU(Dictionary, nn.Module):
     def jump_relu(self, x: torch.Tensor, threshold: torch.Tensor) -> torch.Tensor:
         """
         Apply JumpReLU activation: ReLU(x) if x > threshold, else 0.
-        
+
+        Uses JumpReLUFunction's straight-through estimator, not a plain
+        `(x > threshold).float()` mask. The mask form is numerically identical
+        in the forward pass (threshold is clamped positive below, so x >
+        threshold already implies x > 0), but its backward pass is zero
+        everywhere: `>` is non-differentiable, so `threshold` -- despite being
+        an nn.Parameter registered with the optimizer -- never received a
+        gradient and could not train. That made every "VSAEJumpReLU" run a
+        frozen-threshold ReLU-SAE with no controllable sparsity, not a learned
+        discrete gate. JumpReLUFunction's backward supplies the same
+        rectangle-kernel pseudo-derivative Anthropic's JumpReLU paper (and this
+        repo's own non-variational `jumprelu.py`) uses for exactly this reason.
+
         Args:
-            x: Input tensor
+            x: Input tensor (pre-activation)
             threshold: Threshold tensor (per-feature)
-            
+
         Returns:
             JumpReLU activated tensor
         """
-        return F.relu(x) * (x > threshold).float()
+        threshold_clamped = torch.clamp(threshold, min=1e-6)
+        return JumpReLUFunction.apply(x, threshold_clamped, self.config.bandwidth)
     
-    def encode(self, x: torch.Tensor, output_pre_jump: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
+    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Encode input to latent space.
-        
-        FIXED: No ReLU on mean - VAE means should be unconstrained for expressiveness
-        
+        Encode input to the latent distribution's parameters.
+
+        Returns the UNCONSTRAINED, UNGATED pre-activation as `mu` -- the
+        JumpReLU gate is applied later, in `select()`, AFTER sampling. This
+        ordering (encode -> reparameterize -> discrete select) mirrors
+        vsae_topk.py's encoder -> reparameterize -> Top-K flow so that noise
+        can actually change which features end up active, the same way it can
+        for TopK's selection. An earlier version gated inside encode() and
+        sampled afterward, which meant noise only perturbed the VALUE of
+        already-selected features and could never change the selected SET --
+        structurally incapable of producing the selection churn this
+        architecture exists to test against TopK/BatchTopK (RESULTS addendum
+        TBD; found before any A4 sweep ran, so nothing on disk used the old
+        order).
+
         Args:
             x: Input activations [batch_size, activation_dim]
-            output_pre_jump: Whether to return pre-activation values
-            
+
         Returns:
-            If output_pre_jump=False: (mu, log_var)
-            If output_pre_jump=True: (mu, pre_jump, log_var)
+            (mu, log_var): mu is the raw pre-activation, log_var is None
+            unless var_flag == 1.
         """
         x_processed = self._preprocess_input(x)
-        
-        # Encode mean with JumpReLU
-        pre_jump = x_processed @ self.W_enc + self.b_enc
-        mu = self.jump_relu(pre_jump, self.threshold)
-        
+
+        # Unconstrained mean pre-activation -- NOT gated here.
+        mu = x_processed @ self.W_enc + self.b_enc
+
         # Encode variance if learning it
         log_var = None
         if self.var_flag == 1:
-            # FIXED: Direct encoding of log variance (can be negative)
             log_var = x_processed @ self.W_enc_var + self.b_enc_var
-        
-        if output_pre_jump:
-            return mu, pre_jump, log_var
+
         return mu, log_var
+
+    def select(self, z: torch.Tensor) -> torch.Tensor:
+        """Apply the JumpReLU gate to a (possibly noise-perturbed) pre-activation.
+
+        Named separately from `jump_relu` (which just applies the STE given a
+        threshold) to make call sites explicit about WHERE in the noise order
+        the gate is being applied: on the noisy z (the actual forward pass,
+        where selection can churn) vs. on the noise-free mu (diagnostics, the
+        auxiliary loss -- see VSAEJumpReLUTrainer).
+        """
+        return self.jump_relu(z, self.threshold)
     
     def reparameterize(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
         """
@@ -282,22 +316,23 @@ class VSAEJumpReLU(Dictionary, nn.Module):
         
         # Store original dtype
         original_dtype = x.dtype
-        
-        # Encode
+
+        # Encode (raw, ungated pre-activation)
         mu, log_var = self.encode(x)
-        
-        # Sample from latent distribution
+
+        # Sample from latent distribution, THEN gate -- see encode()'s docstring.
         z = self.reparameterize(mu, log_var)
-        
+        gated = self.select(z)
+
         # Decode
-        x_hat = self.decode(z)
-        
+        x_hat = self.decode(gated)
+
         # Convert back to original dtype
         x_hat = x_hat.to(dtype=original_dtype)
-        
+
         if output_features:
-            z = z.to(dtype=original_dtype)
-            return x_hat, z
+            gated = gated.to(dtype=original_dtype)
+            return x_hat, gated
         return x_hat
     
     def get_kl_diagnostics(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -309,15 +344,20 @@ class VSAEJumpReLU(Dictionary, nn.Module):
         """
         with torch.no_grad():
             mu, log_var = self.encode(x)
-            
+            # Deterministic (noise-free) gate, purely for the effective_l0
+            # diagnostic -- mu itself is the raw, ungated pre-activation, so
+            # `mu > 0` would count every positive pre-activation, not the
+            # actually-selected (above-threshold) set.
+            gated = self.select(mu)
+
             if self.var_flag == 1 and log_var is not None:
                 log_var_safe = torch.clamp(log_var, -6, 2)
                 var = torch.exp(log_var_safe)  # σ²
-                
+
                 kl_mu = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
                 kl_var = 0.5 * torch.sum(var - 1 - log_var_safe, dim=1).mean()
                 kl_total = kl_mu + kl_var
-                
+
                 return {
                     'kl_total': kl_total,
                     'kl_mu_term': kl_mu,
@@ -328,7 +368,7 @@ class VSAEJumpReLU(Dictionary, nn.Module):
                     'mean_mu_magnitude': mu.norm(dim=-1).mean(),
                     'mu_std': mu.std(),
                     'threshold_mean': self.threshold.mean(),
-                    'effective_l0': (mu > 0).float().sum(dim=-1).mean(),
+                    'effective_l0': (gated > 0).float().sum(dim=-1).mean(),
                 }
             else:
                 kl_total = 0.5 * torch.sum(mu.pow(2), dim=1).mean()
@@ -340,7 +380,7 @@ class VSAEJumpReLU(Dictionary, nn.Module):
                     'mean_mu_magnitude': mu.norm(dim=-1).mean(),
                     'mu_std': mu.std(),
                     'threshold_mean': self.threshold.mean(),
-                    'effective_l0': (mu > 0).float().sum(dim=-1).mean(),
+                    'effective_l0': (gated > 0).float().sum(dim=-1).mean(),
                 }
     
     def scale_biases(self, scale: float) -> None:
@@ -391,11 +431,22 @@ class VSAEJumpReLU(Dictionary, nn.Module):
             
             # Normalize decoder weights
             self.W_dec.div_(norms.unsqueeze(1))
-            
+
             # Scale encoder weights and biases accordingly
             self.W_enc.mul_(norms.unsqueeze(0))
             self.b_enc.mul_(norms)
-            
+            # threshold is compared directly against mu = x @ W_enc + b_enc (or a
+            # noisy version of it), which just scaled by `norms` per-feature --
+            # rescaling W_enc/b_enc
+            # without also rescaling threshold shifts every feature's gate boundary
+            # and silently changes which activations clear it. Left out originally;
+            # the model output identity this method asserts below caught it (found
+            # 2026-09-12: every call on a non-unit-norm decoder -- i.e. every real
+            # checkpoint -- was tripping the assertion, and from_pretrained's
+            # try/except was swallowing it and returning the partially-normalized,
+            # output-changed model anyway).
+            self.threshold.mul_(norms)
+
             # Verify normalization worked
             new_norms = torch.norm(self.W_dec, dim=1)
             assert torch.allclose(new_norms, torch.ones_like(new_norms), atol=1e-6)
@@ -451,11 +502,15 @@ class VSAEJumpReLU(Dictionary, nn.Module):
                 
                 # Auto-detect threshold
                 threshold = state_dict.get("threshold", torch.tensor(0.001)).mean().item()
-                
+                # bandwidth is a Python float, not a saved tensor -- it has to come
+                # from the caller (load_dictionary passes it from config["trainer"]).
+                bandwidth = kwargs.get("bandwidth", 0.001)
+
                 config = VSAEJumpReLUConfig(
                     activation_dim=activation_dim,
                     dict_size=dict_size,
                     threshold=threshold,
+                    bandwidth=bandwidth,
                     var_flag=var_flag,
                     use_april_update_mode=use_april_update_mode,
                     dtype=dtype,
@@ -538,6 +593,14 @@ class VSAEJumpReLUTrainingConfig:
     kl_coeff: float = 500.0
     kl_warmup_steps: Optional[int] = None  # KL annealing to prevent posterior collapse
     aux_weight: float = 0.1  # Weight for auxiliary reconstruction loss
+    # L0-target sparsity loss (Anthropic's JumpReLU recipe, mirrored from this
+    # repo's non-variational JumpReluTrainer): the only thing that gives
+    # `threshold` a training signal shaped like "hit this sparsity", now that
+    # jump_relu()'s STE lets it receive gradient at all. Without this term the
+    # threshold gradient exists but has nothing pushing it toward a target L0 --
+    # it would just drift with whatever the reconstruction/KL loss implies.
+    sparsity_penalty: float = 1.0
+    target_l0: float = 20.0
     warmup_steps: Optional[int] = None
     sparsity_warmup_steps: Optional[int] = None  # For any actual sparsity penalties
     decay_start: Optional[int] = None
@@ -668,18 +731,18 @@ class VSAEJumpReLUTrainer(SAETrainer):
         self.effective_l0 = 0.0
         self.threshold_mean = 0.0
 
-    def _compute_consistent_l0(self, mu: torch.Tensor) -> float:
+    def _compute_consistent_l0(self, gated: torch.Tensor) -> float:
         """
         Compute L0 consistently as average features per sample (like evaluation).
-        
+
         Args:
-            mu: Encoded features [batch_size, dict_size]
-            
+            gated: Encoded features AFTER the JumpReLU gate [batch_size, dict_size]
+
         Returns:
             Average number of active features per sample
         """
         # Count active features per sample (features > threshold)
-        active_per_sample = (mu > 0).float().sum(dim=-1)  # [batch_size]
+        active_per_sample = (gated > 0).float().sum(dim=-1)  # [batch_size]
         return active_per_sample.mean().item()
     
     def _compute_kl_loss(self, mu: torch.Tensor, log_var: Optional[torch.Tensor]) -> torch.Tensor:
@@ -712,72 +775,100 @@ class VSAEJumpReLUTrainer(SAETrainer):
         
         return kl_loss
     
-    def _compute_auxiliary_loss(self, x: torch.Tensor, mu: torch.Tensor) -> torch.Tensor:
-        """Compute auxiliary reconstruction loss for better convergence."""
-        # Create auxiliary reconstruction using just the encoded features
-        x_aux = self.ae.decode(mu)
-        
-        # Compute auxiliary loss
+    def _compute_auxiliary_loss(self, x: torch.Tensor, gated_det: torch.Tensor) -> torch.Tensor:
+        """Compute auxiliary reconstruction loss for better convergence.
+
+        Uses the DETERMINISTIC gated code (gate applied to mu directly, no
+        sampling noise) so this term gives a stable convergence signal
+        independent of the reparameterization -- decoding a noisy code here
+        would just re-derive (a noisy estimate of) the main reconstruction
+        loss.
+        """
+        x_aux = self.ae.decode(gated_det)
         aux_loss = torch.mean(torch.sum((x - x_aux) ** 2, dim=1))
-        
         return aux_loss
-    
+
     def loss(self, x: torch.Tensor, step: int, logging: bool = False):
         """Compute loss with proper scaling separation."""
         sparsity_scale = self.sparsity_warmup_fn(step)  # For any L1 penalties
         kl_scale = self.kl_warmup_fn(step)  # FIXED: Separate KL annealing
-        
+
         # Store original dtype
         original_dtype = x.dtype
-        
-        # Forward pass
+
+        # Forward pass. mu is the raw, ungated pre-activation; noise is added
+        # to it BEFORE the JumpReLU gate (VSAEJumpReLU.encode()'s docstring),
+        # so `gated` is the code that can actually exhibit selection churn --
+        # this is what gets decoded and what the L0-target loss measures.
+        threshold_clamped = torch.clamp(self.ae.threshold, min=1e-6)
         mu, log_var = self.ae.encode(x)
         z = self.ae.reparameterize(mu, log_var)
-        x_hat = self.ae.decode(z)
-        
+        gated = self.ae.select(z)
+        x_hat = self.ae.decode(gated)
+
         # Ensure compatibility
         x_hat = x_hat.to(dtype=original_dtype)
-        
+
         # Reconstruction loss
         recon_loss = torch.mean(torch.sum((x - x_hat) ** 2, dim=1))
-        
-        # KL divergence loss
+
+        # KL divergence loss -- on the dense pre-gate mu (matches vsae_topk.py:
+        # KL is computed on the encoder's mean over the FULL dictionary, before
+        # any sparsifying selection, not on the already-sparse gated code).
         kl_loss = self._compute_kl_loss(mu, log_var)
         kl_loss = kl_loss.to(dtype=original_dtype)
-        
-        # Auxiliary loss for better convergence
-        aux_loss = self._compute_auxiliary_loss(x, mu)
+
+        # Auxiliary loss for better convergence, from the noise-free gated code.
+        gated_det = self.ae.select(mu)
+        aux_loss = self._compute_auxiliary_loss(x, gated_det)
         aux_loss = aux_loss.to(dtype=original_dtype)
-        
+
+        # L0-target sparsity loss -- the STE gradient signal that actually drives
+        # `threshold` toward a target sparsity (see VSAEJumpReLUTrainingConfig).
+        # Measured on z (the actual, possibly-noisy gating decision this forward
+        # pass made), not mu, since that's what determines the achieved L0.
+        l0 = StepFunction.apply(
+            z, threshold_clamped, self.ae.config.bandwidth
+        ).sum(dim=-1).mean()
+        sparsity_loss = (
+            self.training_config.sparsity_penalty
+            * ((l0 / self.training_config.target_l0) - 1).pow(2)
+            * sparsity_scale
+        )
+        sparsity_loss = sparsity_loss.to(dtype=original_dtype)
+
         # FIXED: Separate scaling - KL gets kl_scale, aux gets sparsity_scale
         total_loss = (
-            recon_loss + 
+            recon_loss +
             self.training_config.kl_coeff * kl_scale * kl_loss +
-            self.training_config.aux_weight * sparsity_scale * aux_loss
+            self.training_config.aux_weight * sparsity_scale * aux_loss +
+            sparsity_loss
         )
         
         # Update logging stats
         with torch.no_grad():
-            # self.effective_l0 = float((mu > 0).float().sum().item()) / mu.numel() 
-            self.effective_l0 = self._compute_consistent_l0(mu) # to keep training/evaluation consistent
+            self.effective_l0 = self._compute_consistent_l0(gated)  # the actual decoded code
             self.threshold_mean = float(torch.mean(self.ae.threshold).item())
-        
+
         if not logging:
             return total_loss
-        
+
         # Return detailed loss information with diagnostics
         LossLog = namedtuple('LossLog', ['x', 'x_hat', 'f', 'losses'])
-        
+
         # Get additional diagnostics
         kl_diagnostics = self.ae.get_kl_diagnostics(x)
-        
+
         return LossLog(
-            x, x_hat, z,
+            x, x_hat, gated,
             {
                 'l2_loss': torch.norm(x - x_hat, dim=-1).mean().item(),
                 'mse_loss': recon_loss.item(),
                 'kl_loss': kl_loss.item(),
                 'aux_loss': aux_loss.item(),
+                'sparsity_loss': sparsity_loss.item(),
+                'l0': l0.item(),
+                'target_l0': self.training_config.target_l0,
                 'loss': total_loss.item(),
                 'sparsity_scale': sparsity_scale,
                 'kl_scale': kl_scale,  # Separate from sparsity scaling
@@ -819,6 +910,7 @@ class VSAEJumpReLUTrainer(SAETrainer):
             'activation_dim': self.model_config.activation_dim,
             'dict_size': self.model_config.dict_size,
             'threshold': self.model_config.threshold,
+            'bandwidth': self.model_config.bandwidth,
             'var_flag': self.model_config.var_flag,
             'use_april_update_mode': self.model_config.use_april_update_mode,
             'log_var_init': self.model_config.log_var_init,
@@ -830,6 +922,8 @@ class VSAEJumpReLUTrainer(SAETrainer):
             'kl_coeff': self.training_config.kl_coeff,
             'kl_warmup_steps': self.training_config.kl_warmup_steps,
             'aux_weight': self.training_config.aux_weight,
+            'sparsity_penalty': self.training_config.sparsity_penalty,
+            'target_l0': self.training_config.target_l0,
             'warmup_steps': self.training_config.warmup_steps,
             'sparsity_warmup_steps': self.training_config.sparsity_warmup_steps,
             'decay_start': self.training_config.decay_start,

@@ -111,6 +111,106 @@ is swallowed by an `except ... continue`, and the run reports success with the
 cross-entropy metrics written as NaN. Every committed checkpoint shows that
 signature. `falsification/run_arm.py` now evaluates at batch 2 x 48, which fixes it.
 
+**`vsae_batch_topk.py::scale_biases` carried the SAME `var_encoder.bias`
+corruption bug vsae_topk.py had — found and fixed 2026-09-11 (RESULTS addendum
+18).** It multiplied `var_encoder.bias` by `norm_factor` at save time, exactly
+the mistake addendum 8 describes for `vsae_topk.py`: wrong for a log-variance
+bias, and it drives any saved `var_flag=1` BatchTopK checkpoint's `log_var` to
+read as clamp-collapsed regardless of what was learned. Now fixed the same way
+(rescale `var_encoder.weight` instead, bias untouched) — every
+`a3_batchtopk_*` checkpoint (`falsification/run_arm.py`) was trained after the
+fix and needs no correction. `vsae_jump_relu.py` already carried the fix
+proactively (never exercised by an actual run before this).
+
+**`vsae_batch_topk.py::_apply_topk_sparsity`'s global budget breaks under
+`loss_recovered()`'s 3D activations — found 2026-09-11, NOT fixed (out of
+scope for A3; use FVE and Jaccard, not `frac_recovered`, for this trainer).**
+The global top-`(k * batch_size)` selection uses `z.size(0)` as `batch_size`.
+During training `z` is pre-flattened to `[n_tokens, d]`, so that's correct.
+But `dictionary_learning/evaluation.py`'s `loss_recovered_transformer_lens`
+calls this model directly inside a transformer_lens hook on UNFLATTENED
+`[batch, seq_len, d]` activations, where `z.size(0)` is the sequence-batch
+size, not the token count — undershooting the active-feature budget by
+`~ctx_len` (e.g. 256×2 instead of 256×2×128). The reconstruction this produces
+is nowhere near training-time sparsity, so `frac_recovered` comes out
+catastrophically negative (worse than zero-ablation) even when
+`frac_variance_explained` — computed on the buffer's own flattened 2D batches,
+a different code path — looks fine. Any `a3_batchtopk_*` (or other
+`VSAEBatchTopK`) checkpoint's `frac_recovered`/`loss_reconstructed` is
+unreliable; `frac_variance_explained` is not.
+
+**`training_scripts/train_vsae_batchtopk.py`'s `ExperimentConfig.__post_init__`
+computes `warmup_steps`/`sparsity_warmup_steps`/`decay_start_step` from
+`total_steps` AT CONSTRUCTION TIME — found 2026-09-11.** `create_full_config()`
+defaults `total_steps=25000`; `falsification/run_arm.py`'s override loop then
+sets `total_steps=10000` via `setattr` without re-running `__post_init__`, so
+those three derived fields silently stay computed from 25000 (e.g.
+`decay_start_step=20000`, past the entire 10000-step run) unless overridden
+explicitly alongside `total_steps`. `run_arm.py`'s `a3_batchtopk_*` arms pin
+all three to the values `train_vsae_topk.py`'s own `__post_init__` produces at
+`total_steps=10000` (200 / 500 / 8000). This is specific to
+`train_vsae_batchtopk.py` — `train_vsae_topk.py`'s own `create_full_config()`
+default already happens to be `total_steps=10000`, so the mismatch never
+triggers there, which is luck, not a property of `run_arm.py`'s override
+mechanism. Check any trainer's own `total_steps` default before trusting
+BASE's override of it.
+
+**`run_e4_scr.py` / `run_e4_tpp.py`'s activation cache is loaded if the file
+exists at all — it does not check the config that built it.** Found
+2026-09-11: running `--smoke` (test_set_size=50) on a new dataset/class pair
+and then the full run (test_set_size=1000) on the same one silently reuses the
+tiny smoke-sized cache for the "full" run, with no warning — visible only as
+suspiciously exact small-fraction accuracy values (e.g. 0.9583333730697632 =
+23/24) and an undersized `e4_scr_artifacts/*_activations.pt` (~200MB instead
+of ~4GB). Never `--smoke` a pair/dataset you're about to run for real; if you
+need a pipeline sanity check, use a scratch `--out` and delete the resulting
+`e4_scr_artifacts/<dataset>_<pair>_*` files before the real run.
+
+**`vsae_jump_relu.py` had three compounding bugs — found and fixed 2026-09-12,
+before any A4 (JumpReLU discreteness) arm ran, so nothing on disk is
+affected.** No training script had ever exercised this trainer end to end;
+`training_scripts/train_vsae_jumprelu.py` (new) is the first.
+
+1. **`threshold` received zero gradient.** `VSAEJumpReLU.jump_relu()` computed
+   `F.relu(x) * (x > threshold).float()`: numerically identical to a real
+   JumpReLU forward pass (threshold is clamped positive, so `x > threshold`
+   already implies `x > 0`), but `>` is non-differentiable, so the boolean mask
+   carries no gradient back to `threshold` — despite being an `nn.Parameter`
+   registered with the optimizer, it could never move from its init value.
+   Fixed by routing through `JumpReLUFunction`, the straight-through estimator
+   this repo's own non-variational `jumprelu.py` already defines for exactly
+   this reason (import it from there rather than duplicating it).
+2. **No L0-target sparsity term.** Even with a working gradient, nothing was
+   pushing `threshold` toward any particular sparsity level.
+   `VSAEJumpReLUTrainer.loss()` now has one, mirroring `JumpReluTrainer`'s
+   `sparsity_penalty * ((l0/target_l0) - 1)^2` via the matching `StepFunction`
+   STE. Unlike TopK/BatchTopK's architectural hard-k, `target_l0` is a SOFT
+   target reached by gradient descent — check achieved `l0` against
+   `target_l0` in a run's results before trusting any sparsity-matched
+   comparison against the hard-k arms, and note noise can push the achieved
+   L0 well below target when sigma is large relative to the margin the
+   threshold has adapted to (observed directly: l0 dropped from ~270 to ~71
+   at `log_var_init=-2.0` after only 2000 steps in a smoke test).
+3. **The gate was applied BEFORE sampling, not after — this one changes what
+   the model tests, not just whether it trains.** `encode()` used to compute
+   `mu = jump_relu(pre_jump, threshold)` (a deterministic gate) and only then
+   `reparameterize(mu, log_var)` added noise. That makes noise perturb the
+   VALUE of already-selected features but structurally unable to change the
+   selected SET — it can never produce the selection churn that is the entire
+   point of comparing this trainer against A2/A3 (TopK, BatchTopK), where
+   `vsae_topk.py`'s own docstring states the order as `encoder → μ,σ² →
+   reparameterize → z → Top-K(|z|)`, noise strictly before selection. Fixed by
+   moving the gate after the noise: `encode()` now returns the raw, ungated
+   pre-activation as `mu`; a new `VSAEJumpReLU.select(z)` applies the gate, and
+   the trainer calls it on the noisy `z = reparameterize(mu, log_var)`, not on
+   `mu` directly. Verified directly: repeated forward passes on the same token
+   at `log_var_init=1.0` now show mean Jaccard 0.35 between the selected sets
+   (was 1.0 — no churn possible — before the fix). A side effect, not a new
+   bug: KL is now computed on the dense, ungated `mu` over the full
+   dictionary, matching `vsae_topk.py`'s convention (KL on the pre-selection
+   mean) rather than the previous behavior of computing it on an
+   already-mostly-zero gated code.
+
 ## Environment
 
 - **Two environments, and it matters which you are in.** Run

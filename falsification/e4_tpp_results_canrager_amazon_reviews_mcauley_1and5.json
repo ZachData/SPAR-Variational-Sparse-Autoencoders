@@ -1,0 +1,892 @@
+{
+  "dataset": "canrager/amazon_reviews_mcauley_1and5",
+  "metric": "tpp",
+  "n_values": [
+    2,
+    5,
+    10,
+    20
+  ],
+  "smoke": false,
+  "baseline_curve": [
+    {
+      "n_features": 100,
+      "strategy": "top_usage",
+      "scores": [
+        0.11785000115633011
+      ],
+      "mean": 0.11785000115633011,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.06395000219345093,
+          "tpp_threshold_5_total_metric": 0.10635000169277191,
+          "tpp_threshold_10_total_metric": 0.15119999945163726,
+          "tpp_threshold_20_total_metric": 0.14990000128746034
+        }
+      ]
+    },
+    {
+      "n_features": 250,
+      "strategy": "top_usage",
+      "scores": [
+        0.15088750720024108
+      ],
+      "mean": 0.15088750720024108,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.07729999423027038,
+          "tpp_threshold_5_total_metric": 0.13110000193119048,
+          "tpp_threshold_10_total_metric": 0.18785001933574677,
+          "tpp_threshold_20_total_metric": 0.20730001330375672
+        }
+      ]
+    },
+    {
+      "n_features": 500,
+      "strategy": "top_usage",
+      "scores": [
+        0.15942500531673431
+      ],
+      "mean": 0.15942500531673431,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.07745000422000885,
+          "tpp_threshold_5_total_metric": 0.14605000615119934,
+          "tpp_threshold_10_total_metric": 0.20580001473426818,
+          "tpp_threshold_20_total_metric": 0.20839999616146088
+        }
+      ]
+    },
+    {
+      "n_features": 1000,
+      "strategy": "top_usage",
+      "scores": [
+        0.163937509059906
+      ],
+      "mean": 0.163937509059906,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.07345001101493835,
+          "tpp_threshold_5_total_metric": 0.15415000915527344,
+          "tpp_threshold_10_total_metric": 0.21850001215934753,
+          "tpp_threshold_20_total_metric": 0.2096500039100647
+        }
+      ]
+    },
+    {
+      "n_features": 1474,
+      "strategy": "top_usage",
+      "scores": [
+        0.1644125074148178
+      ],
+      "mean": 0.1644125074148178,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.07315000593662262,
+          "tpp_threshold_5_total_metric": 0.15160000324249268,
+          "tpp_threshold_10_total_metric": 0.2199000060558319,
+          "tpp_threshold_20_total_metric": 0.21300001442432404
+        }
+      ]
+    },
+    {
+      "n_features": 2000,
+      "strategy": "top_usage",
+      "scores": [
+        0.16042500883340835
+      ],
+      "mean": 0.16042500883340835,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.0669500082731247,
+          "tpp_threshold_5_total_metric": 0.15220000147819518,
+          "tpp_threshold_10_total_metric": 0.21805001497268678,
+          "tpp_threshold_20_total_metric": 0.20450001060962678
+        }
+      ]
+    },
+    {
+      "n_features": 3000,
+      "strategy": "top_usage",
+      "scores": [
+        0.1728125013411045
+      ],
+      "mean": 0.1728125013411045,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.09435000121593476,
+          "tpp_threshold_5_total_metric": 0.16739999055862426,
+          "tpp_threshold_10_total_metric": 0.22064999639987945,
+          "tpp_threshold_20_total_metric": 0.20885001718997956
+        }
+      ]
+    },
+    {
+      "n_features": 5000,
+      "strategy": "top_usage",
+      "scores": [
+        0.1641875095665455
+      ],
+      "mean": 0.1641875095665455,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.09334999918937684,
+          "tpp_threshold_5_total_metric": 0.16545000970363616,
+          "tpp_threshold_10_total_metric": 0.21445001363754274,
+          "tpp_threshold_20_total_metric": 0.18350001573562622
+        }
+      ]
+    },
+    {
+      "n_features": 7379,
+      "strategy": "top_usage",
+      "scores": [
+        0.15767500996589662
+      ],
+      "mean": 0.15767500996589662,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        }
+      ]
+    },
+    {
+      "n_features": 100,
+      "strategy": "random",
+      "scores": [
+        0.0008250012993812561,
+        0.0006249994039535522,
+        0.02288750112056732,
+        -0.00011250823736190798,
+        0.005775004625320435,
+        -0.00503750815987587,
+        -0.0028374969959259035,
+        -0.0040875054895877835,
+        -0.000962500274181366,
+        -0.0026250027120113375
+      ],
+      "mean": 0.0014449984580278395,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": -0.004249992966651917,
+          "tpp_threshold_5_total_metric": 0.0023000121116638185,
+          "tpp_threshold_10_total_metric": 0.0016499966382980346,
+          "tpp_threshold_20_total_metric": 0.003599989414215088
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.004300004243850708,
+          "tpp_threshold_5_total_metric": 0.0022999972105026247,
+          "tpp_threshold_10_total_metric": 0.00034999549388885497,
+          "tpp_threshold_20_total_metric": 0.004150009155273438
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.01944999396800995,
+          "tpp_threshold_5_total_metric": 0.02080000042915344,
+          "tpp_threshold_10_total_metric": 0.023000019788742065,
+          "tpp_threshold_20_total_metric": 0.02829999029636383
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.004050016403198242,
+          "tpp_threshold_5_total_metric": 0.004500001668930054,
+          "tpp_threshold_10_total_metric": 4.9996376037597654e-05,
+          "tpp_threshold_20_total_metric": -0.000950014591217041
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.002200007438659668,
+          "tpp_threshold_5_total_metric": 0.006600016355514526,
+          "tpp_threshold_10_total_metric": 0.006850016117095947,
+          "tpp_threshold_20_total_metric": 0.011849993467330932
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.01135002076625824,
+          "tpp_threshold_5_total_metric": -0.003200000524520874,
+          "tpp_threshold_10_total_metric": -0.004950007796287537,
+          "tpp_threshold_20_total_metric": -0.0006500035524368286
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.010249999165534974,
+          "tpp_threshold_5_total_metric": -0.002500000596046448,
+          "tpp_threshold_10_total_metric": -0.0019500046968460084,
+          "tpp_threshold_20_total_metric": 0.0033500164747238157
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.011750021576881408,
+          "tpp_threshold_5_total_metric": -0.006199994683265686,
+          "tpp_threshold_10_total_metric": -0.0005499869585037231,
+          "tpp_threshold_20_total_metric": 0.0021499812602996824
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.006700012087821961,
+          "tpp_threshold_5_total_metric": -0.0002500087022781372,
+          "tpp_threshold_10_total_metric": -0.0029499828815460205,
+          "tpp_threshold_20_total_metric": 0.006050002574920654
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.007450014352798462,
+          "tpp_threshold_5_total_metric": 0.0003500163555145264,
+          "tpp_threshold_10_total_metric": -0.0030499935150146485,
+          "tpp_threshold_20_total_metric": -0.00035001933574676516
+        }
+      ]
+    },
+    {
+      "n_features": 250,
+      "strategy": "random",
+      "scores": [
+        0.0013624988496303556,
+        0.02445000410079956,
+        0.010187499225139618,
+        0.01662500575184822,
+        0.015437501668930055,
+        0.02336249649524689,
+        0.005287496745586396,
+        0.0050249949097633355,
+        -0.006999998539686203,
+        0.025937503576278685
+      ],
+      "mean": 0.012067500278353691,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": -0.006450003385543824,
+          "tpp_threshold_5_total_metric": 0.0020999908447265625,
+          "tpp_threshold_10_total_metric": 0.0020000159740447996,
+          "tpp_threshold_20_total_metric": 0.007799991965293884
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.0012500077486038209,
+          "tpp_threshold_5_total_metric": 0.026550012826919555,
+          "tpp_threshold_10_total_metric": 0.03024999499320984,
+          "tpp_threshold_20_total_metric": 0.039750000834465025
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.002950003743171692,
+          "tpp_threshold_5_total_metric": 0.016249990463256835,
+          "tpp_threshold_10_total_metric": 0.013350015878677369,
+          "tpp_threshold_20_total_metric": 0.014099994301795959
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.006449997425079346,
+          "tpp_threshold_5_total_metric": 0.021050000190734865,
+          "tpp_threshold_10_total_metric": 0.025350010395050047,
+          "tpp_threshold_20_total_metric": 0.026550009846687317
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.004500001668930054,
+          "tpp_threshold_5_total_metric": 0.018100008368492126,
+          "tpp_threshold_10_total_metric": 0.016099992394447326,
+          "tpp_threshold_20_total_metric": 0.02305000424385071
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.005149996280670166,
+          "tpp_threshold_5_total_metric": 0.021900007128715517,
+          "tpp_threshold_10_total_metric": 0.031199994683265685,
+          "tpp_threshold_20_total_metric": 0.035199987888336184
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.004100003838539123,
+          "tpp_threshold_5_total_metric": 0.004299992322921753,
+          "tpp_threshold_10_total_metric": 0.007149997353553772,
+          "tpp_threshold_20_total_metric": 0.01380000114440918
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.002550011873245239,
+          "tpp_threshold_5_total_metric": 0.005950009822845459,
+          "tpp_threshold_10_total_metric": 0.006749996542930603,
+          "tpp_threshold_20_total_metric": 0.009949985146522521
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.008100000023841859,
+          "tpp_threshold_5_total_metric": -0.01254999339580536,
+          "tpp_threshold_10_total_metric": -0.0051499903202056885,
+          "tpp_threshold_20_total_metric": -0.002200010418891907
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.003599998354911804,
+          "tpp_threshold_5_total_metric": 0.031050005555152894,
+          "tpp_threshold_10_total_metric": 0.03880000412464142,
+          "tpp_threshold_20_total_metric": 0.03750000298023224
+        }
+      ]
+    },
+    {
+      "n_features": 500,
+      "strategy": "random",
+      "scores": [
+        0.02720000371336937,
+        0.02095000371336937,
+        0.04128750711679459,
+        0.06604999899864197,
+        0.011237500607967377,
+        0.0724750004708767,
+        0.012437492609024048,
+        0.05096250101923942,
+        0.05537500008940697,
+        0.05011249855160713
+      ],
+      "mean": 0.0408087506890297,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": -0.008699995279312134,
+          "tpp_threshold_5_total_metric": 0.01059998869895935,
+          "tpp_threshold_10_total_metric": 0.040800005197525024,
+          "tpp_threshold_20_total_metric": 0.06610001623630524
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.007150009274482727,
+          "tpp_threshold_5_total_metric": 0.015850001573562623,
+          "tpp_threshold_10_total_metric": 0.032650014758110045,
+          "tpp_threshold_20_total_metric": 0.042450007796287534
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.024350005388259887,
+          "tpp_threshold_5_total_metric": 0.04175000786781311,
+          "tpp_threshold_10_total_metric": 0.05270001590251923,
+          "tpp_threshold_20_total_metric": 0.04634999930858612
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.03804998695850372,
+          "tpp_threshold_5_total_metric": 0.06444998979568481,
+          "tpp_threshold_10_total_metric": 0.07600001096725464,
+          "tpp_threshold_20_total_metric": 0.0857000082731247
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.007999995350837707,
+          "tpp_threshold_5_total_metric": 0.011299994587898255,
+          "tpp_threshold_10_total_metric": 0.015799999237060547,
+          "tpp_threshold_20_total_metric": 0.02585000395774841
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.051199990510940555,
+          "tpp_threshold_5_total_metric": 0.07510000765323639,
+          "tpp_threshold_10_total_metric": 0.08020000457763672,
+          "tpp_threshold_20_total_metric": 0.08339999914169312
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.00525001585483551,
+          "tpp_threshold_5_total_metric": 0.005850005149841309,
+          "tpp_threshold_10_total_metric": 0.023399990797042847,
+          "tpp_threshold_20_total_metric": 0.025749990344047548
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.018600007891654967,
+          "tpp_threshold_5_total_metric": 0.04010000824928284,
+          "tpp_threshold_10_total_metric": 0.07010000646114349,
+          "tpp_threshold_20_total_metric": 0.0750499814748764
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.02524999976158142,
+          "tpp_threshold_5_total_metric": 0.056299996376037595,
+          "tpp_threshold_10_total_metric": 0.0633499950170517,
+          "tpp_threshold_20_total_metric": 0.07660000920295715
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.025849997997283936,
+          "tpp_threshold_5_total_metric": 0.05434999763965607,
+          "tpp_threshold_10_total_metric": 0.061050000786781314,
+          "tpp_threshold_20_total_metric": 0.059199997782707216
+        }
+      ]
+    },
+    {
+      "n_features": 1000,
+      "strategy": "random",
+      "scores": [
+        0.10123751312494278,
+        0.08100000172853469,
+        0.0792500101029873,
+        0.05915000587701798,
+        0.07512500360608101,
+        0.11010000556707383,
+        0.04640000537037849,
+        0.08185000121593475,
+        0.07433749958872796,
+        0.09192500561475753
+      ],
+      "mean": 0.08003750517964363,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.040550020337104795,
+          "tpp_threshold_5_total_metric": 0.08770001828670501,
+          "tpp_threshold_10_total_metric": 0.1276499956846237,
+          "tpp_threshold_20_total_metric": 0.1490500181913376
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.0008500158786773681,
+          "tpp_threshold_5_total_metric": 0.04544999599456787,
+          "tpp_threshold_10_total_metric": 0.12000000774860382,
+          "tpp_threshold_20_total_metric": 0.15940001904964446
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.009850019216537475,
+          "tpp_threshold_5_total_metric": 0.04975000321865082,
+          "tpp_threshold_10_total_metric": 0.1090500146150589,
+          "tpp_threshold_20_total_metric": 0.14835000336170195
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.00015001296997070314,
+          "tpp_threshold_5_total_metric": 0.03975000977516174,
+          "tpp_threshold_10_total_metric": 0.08819999694824218,
+          "tpp_threshold_20_total_metric": 0.10850000381469727
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.010399994254112244,
+          "tpp_threshold_5_total_metric": 0.03435000479221344,
+          "tpp_threshold_10_total_metric": 0.10275000333786011,
+          "tpp_threshold_20_total_metric": 0.15300001204013824
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.029050007462501526,
+          "tpp_threshold_5_total_metric": 0.08330002129077911,
+          "tpp_threshold_10_total_metric": 0.1494999945163727,
+          "tpp_threshold_20_total_metric": 0.17854999899864196
+        },
+        {
+          "tpp_threshold_2_total_metric": -0.0007999956607818604,
+          "tpp_threshold_5_total_metric": 0.022600007057189942,
+          "tpp_threshold_10_total_metric": 0.058750000596046445,
+          "tpp_threshold_20_total_metric": 0.10505000948905945
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.02745000422000885,
+          "tpp_threshold_5_total_metric": 0.06704998910427093,
+          "tpp_threshold_10_total_metric": 0.10610000789165497,
+          "tpp_threshold_20_total_metric": 0.12680000364780425
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.03370000720024109,
+          "tpp_threshold_5_total_metric": 0.06665000319480896,
+          "tpp_threshold_10_total_metric": 0.09444999694824219,
+          "tpp_threshold_20_total_metric": 0.10254999101161957
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.02585000991821289,
+          "tpp_threshold_5_total_metric": 0.07900000214576722,
+          "tpp_threshold_10_total_metric": 0.11419999599456787,
+          "tpp_threshold_20_total_metric": 0.14865001440048217
+        }
+      ]
+    },
+    {
+      "n_features": 1474,
+      "strategy": "random",
+      "scores": [
+        0.09648749902844429,
+        0.13238750919699668,
+        0.08971251025795937,
+        0.08896250352263452,
+        0.08520000278949738,
+        0.09562500789761542,
+        0.12047499567270278,
+        0.11141250655055046,
+        0.11182501167058945,
+        0.09532499760389328
+      ],
+      "mean": 0.10274125441908837,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.014449995756149293,
+          "tpp_threshold_5_total_metric": 0.07829999029636384,
+          "tpp_threshold_10_total_metric": 0.13444999754428863,
+          "tpp_threshold_20_total_metric": 0.1587500125169754
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07625001072883605,
+          "tpp_threshold_5_total_metric": 0.11825001239776611,
+          "tpp_threshold_10_total_metric": 0.1545000195503235,
+          "tpp_threshold_20_total_metric": 0.1805499941110611
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.006700003147125244,
+          "tpp_threshold_5_total_metric": 0.05340000689029693,
+          "tpp_threshold_10_total_metric": 0.12175001502037049,
+          "tpp_threshold_20_total_metric": 0.1770000159740448
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.01515001356601715,
+          "tpp_threshold_5_total_metric": 0.06590001285076141,
+          "tpp_threshold_10_total_metric": 0.11664999425411224,
+          "tpp_threshold_20_total_metric": 0.15814999341964722
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.0023999959230422974,
+          "tpp_threshold_5_total_metric": 0.05270000696182251,
+          "tpp_threshold_10_total_metric": 0.11220000088214874,
+          "tpp_threshold_20_total_metric": 0.17350000739097596
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.0040499955415725705,
+          "tpp_threshold_5_total_metric": 0.07160001993179321,
+          "tpp_threshold_10_total_metric": 0.12339999973773956,
+          "tpp_threshold_20_total_metric": 0.18345001637935637
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.025799989700317383,
+          "tpp_threshold_5_total_metric": 0.08054999709129333,
+          "tpp_threshold_10_total_metric": 0.16474998891353607,
+          "tpp_threshold_20_total_metric": 0.21080000698566437
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.030350008606910707,
+          "tpp_threshold_5_total_metric": 0.07534999847412109,
+          "tpp_threshold_10_total_metric": 0.13655000925064087,
+          "tpp_threshold_20_total_metric": 0.20340000987052917
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.019250011444091795,
+          "tpp_threshold_5_total_metric": 0.05940001606941223,
+          "tpp_threshold_10_total_metric": 0.15330001711845398,
+          "tpp_threshold_20_total_metric": 0.21535000205039978
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.011750006675720214,
+          "tpp_threshold_5_total_metric": 0.07144999504089355,
+          "tpp_threshold_10_total_metric": 0.11994999647140503,
+          "tpp_threshold_20_total_metric": 0.17814999222755432
+        }
+      ]
+    },
+    {
+      "n_features": 2000,
+      "strategy": "random",
+      "scores": [
+        0.12278750166296959,
+        0.10047499984502793,
+        0.14022501185536385,
+        0.12292500212788582,
+        0.12088750675320627,
+        0.1240125022828579,
+        0.11592500656843185,
+        0.11867499798536302,
+        0.12031250968575477,
+        0.12742501199245454
+      ],
+      "mean": 0.12136500507593155,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.049950006604194644,
+          "tpp_threshold_5_total_metric": 0.09744998514652252,
+          "tpp_threshold_10_total_metric": 0.14820001423358917,
+          "tpp_threshold_20_total_metric": 0.19555000066757203
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.009299999475479126,
+          "tpp_threshold_5_total_metric": 0.07090000510215759,
+          "tpp_threshold_10_total_metric": 0.12834999561309815,
+          "tpp_threshold_20_total_metric": 0.19334999918937684
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.08535000383853912,
+          "tpp_threshold_5_total_metric": 0.12755001783370973,
+          "tpp_threshold_10_total_metric": 0.15500001907348632,
+          "tpp_threshold_20_total_metric": 0.1930000066757202
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.05780001282691956,
+          "tpp_threshold_5_total_metric": 0.1106999933719635,
+          "tpp_threshold_10_total_metric": 0.13840000331401825,
+          "tpp_threshold_20_total_metric": 0.18479999899864197
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.04179999232292175,
+          "tpp_threshold_5_total_metric": 0.0971500188112259,
+          "tpp_threshold_10_total_metric": 0.15140001177787782,
+          "tpp_threshold_20_total_metric": 0.19320000410079957
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.03620000183582306,
+          "tpp_threshold_5_total_metric": 0.09804999530315399,
+          "tpp_threshold_10_total_metric": 0.15539999902248383,
+          "tpp_threshold_20_total_metric": 0.2064000129699707
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.0455500066280365,
+          "tpp_threshold_5_total_metric": 0.08774999976158142,
+          "tpp_threshold_10_total_metric": 0.14315000772476197,
+          "tpp_threshold_20_total_metric": 0.18725001215934753
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.023699995875358582,
+          "tpp_threshold_5_total_metric": 0.07779999375343323,
+          "tpp_threshold_10_total_metric": 0.16890000998973848,
+          "tpp_threshold_20_total_metric": 0.20429999232292176
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.018800008296966552,
+          "tpp_threshold_5_total_metric": 0.07214999794960023,
+          "tpp_threshold_10_total_metric": 0.16630001962184907,
+          "tpp_threshold_20_total_metric": 0.22400001287460328
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.042100003361701964,
+          "tpp_threshold_5_total_metric": 0.10425001680850983,
+          "tpp_threshold_10_total_metric": 0.1493000090122223,
+          "tpp_threshold_20_total_metric": 0.21405001878738403
+        }
+      ]
+    },
+    {
+      "n_features": 3000,
+      "strategy": "random",
+      "scores": [
+        0.11781250536441802,
+        0.14800001233816146,
+        0.1552750118076801,
+        0.1382000043988228,
+        0.1399125076830387,
+        0.1457250088453293,
+        0.13671251460909845,
+        0.14212501496076585,
+        0.11248750984668732,
+        0.13145001158118247
+      ],
+      "mean": 0.13677001014351847,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.013700008392333984,
+          "tpp_threshold_5_total_metric": 0.07650000154972077,
+          "tpp_threshold_10_total_metric": 0.17014999985694884,
+          "tpp_threshold_20_total_metric": 0.2109000116586685
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.03919999301433563,
+          "tpp_threshold_5_total_metric": 0.15320002138614655,
+          "tpp_threshold_10_total_metric": 0.20925000607967376,
+          "tpp_threshold_20_total_metric": 0.19035002887248992
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.09175000190734864,
+          "tpp_threshold_5_total_metric": 0.1535500019788742,
+          "tpp_threshold_10_total_metric": 0.1874500185251236,
+          "tpp_threshold_20_total_metric": 0.18835002481937407
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.01040000021457672,
+          "tpp_threshold_5_total_metric": 0.12430000007152557,
+          "tpp_threshold_10_total_metric": 0.18955000936985017,
+          "tpp_threshold_20_total_metric": 0.2285500079393387
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.02264999449253082,
+          "tpp_threshold_5_total_metric": 0.1267000138759613,
+          "tpp_threshold_10_total_metric": 0.1977500021457672,
+          "tpp_threshold_20_total_metric": 0.2125500202178955
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.061850011348724365,
+          "tpp_threshold_5_total_metric": 0.13235000967979432,
+          "tpp_threshold_10_total_metric": 0.18750000298023223,
+          "tpp_threshold_20_total_metric": 0.2012000113725662
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.04804999232292175,
+          "tpp_threshold_5_total_metric": 0.11775002181529999,
+          "tpp_threshold_10_total_metric": 0.1739000201225281,
+          "tpp_threshold_20_total_metric": 0.20715002417564393
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.04385000765323639,
+          "tpp_threshold_5_total_metric": 0.12165002226829529,
+          "tpp_threshold_10_total_metric": 0.1890000194311142,
+          "tpp_threshold_20_total_metric": 0.21400001049041747
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.007900002598762512,
+          "tpp_threshold_5_total_metric": 0.06520000994205474,
+          "tpp_threshold_10_total_metric": 0.15215000808238982,
+          "tpp_threshold_20_total_metric": 0.22470001876354218
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.04765000343322754,
+          "tpp_threshold_5_total_metric": 0.11320000886917114,
+          "tpp_threshold_10_total_metric": 0.16560001969337462,
+          "tpp_threshold_20_total_metric": 0.1993500143289566
+        }
+      ]
+    },
+    {
+      "n_features": 5000,
+      "strategy": "random",
+      "scores": [
+        0.16673750802874565,
+        0.14403751268982887,
+        0.1583375185728073,
+        0.14827501699328421,
+        0.14412501230835917,
+        0.16222501173615456,
+        0.16101251393556595,
+        0.1435125082731247,
+        0.1613875150680542,
+        0.1281375102698803
+      ],
+      "mean": 0.15177876278758048,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.09275001287460327,
+          "tpp_threshold_5_total_metric": 0.16970000565052032,
+          "tpp_threshold_10_total_metric": 0.21680000722408294,
+          "tpp_threshold_20_total_metric": 0.18770000636577605
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.05694999396800995,
+          "tpp_threshold_5_total_metric": 0.17300001084804534,
+          "tpp_threshold_10_total_metric": 0.192600017786026,
+          "tpp_threshold_20_total_metric": 0.1536000281572342
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.06935001015663148,
+          "tpp_threshold_5_total_metric": 0.1400500178337097,
+          "tpp_threshold_10_total_metric": 0.1976000189781189,
+          "tpp_threshold_20_total_metric": 0.22635002732276915
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.06585001051425934,
+          "tpp_threshold_5_total_metric": 0.1459500163793564,
+          "tpp_threshold_10_total_metric": 0.21370002925395964,
+          "tpp_threshold_20_total_metric": 0.16760001182556153
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.04615001082420349,
+          "tpp_threshold_5_total_metric": 0.11835002005100251,
+          "tpp_threshold_10_total_metric": 0.19925000369548798,
+          "tpp_threshold_20_total_metric": 0.21275001466274263
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07599999904632568,
+          "tpp_threshold_5_total_metric": 0.15320002138614655,
+          "tpp_threshold_10_total_metric": 0.21385000944137572,
+          "tpp_threshold_20_total_metric": 0.20585001707077027
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.06319999992847443,
+          "tpp_threshold_5_total_metric": 0.18830001056194307,
+          "tpp_threshold_10_total_metric": 0.21790002286434174,
+          "tpp_threshold_20_total_metric": 0.17465002238750457
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.03145000040531158,
+          "tpp_threshold_5_total_metric": 0.12320001423358917,
+          "tpp_threshold_10_total_metric": 0.20225001573562623,
+          "tpp_threshold_20_total_metric": 0.2171500027179718
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.06530001163482665,
+          "tpp_threshold_5_total_metric": 0.14490001499652863,
+          "tpp_threshold_10_total_metric": 0.2189500153064728,
+          "tpp_threshold_20_total_metric": 0.21640001833438874
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.059150001406669615,
+          "tpp_threshold_5_total_metric": 0.12125000953674317,
+          "tpp_threshold_10_total_metric": 0.16489999890327453,
+          "tpp_threshold_20_total_metric": 0.16725003123283386
+        }
+      ]
+    },
+    {
+      "n_features": 7379,
+      "strategy": "random",
+      "scores": [
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662,
+        0.15767500996589662
+      ],
+      "mean": 0.15767500996589662,
+      "per_threshold": [
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        },
+        {
+          "tpp_threshold_2_total_metric": 0.07944999933242798,
+          "tpp_threshold_5_total_metric": 0.18404999673366546,
+          "tpp_threshold_10_total_metric": 0.2060500204563141,
+          "tpp_threshold_20_total_metric": 0.1611500233411789
+        }
+      ]
+    }
+  ],
+  "vsae": {
+    "live_n": 1474,
+    "score": 0.10312500819563866,
+    "per_threshold": {
+      "tpp_threshold_2_total_metric": 0.012450000643730164,
+      "tpp_threshold_5_total_metric": 0.061750000715255736,
+      "tpp_threshold_10_total_metric": 0.13455000817775725,
+      "tpp_threshold_20_total_metric": 0.20375002324581146
+    },
+    "top_usage_reference_at_vsae_n": 0.1644125074148178,
+    "random_reference_at_vsae_n": 0.10274125441908837
+  },
+  "verdict": {
+    "top_usage": {
+      "explained_by_size": true,
+      "margin": -0.06128749921917914,
+      "reference_score": 0.1644125074148178
+    },
+    "random": {
+      "explained_by_size": false,
+      "margin": 0.00038375377655029685,
+      "reference_score": 0.10274125441908837
+    }
+  }
+}
