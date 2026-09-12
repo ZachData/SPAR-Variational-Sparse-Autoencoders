@@ -12,7 +12,28 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-12. **This session so far: A4, the JumpReLU discreteness
+Last updated: 2026-09-12. **This session, second thread: E4 box (5), the last
+item in the SCR/TPP disagreement checklist — "masked vs. trained-small" is not
+a live confound (RESULTS addendum 21).** Trained a real TopK SAE from scratch
+at `dict_size=1474` (the vSAE's exact live-feature count), same config as the
+recovered baseline otherwise (`falsification/train_e4_size_matched_baseline.py`,
+~79s, FVE 0.932 — though only 65.5% of its 1474 entries ever fire, itself a
+small finding: matching the live-feature COUNT doesn't guarantee matching
+which fraction of a budget stays alive). Scored it directly (no masking) with
+SCR and TPP on the original professor/nurse comparison point
+(`falsification/score_e4_size_matched_baseline.py`). **Result: SCR's
+trained-from-scratch score (0.020127) matches the masked-curve reference
+(0.020127) to 6×10⁻⁸ — indistinguishable — so SCR's "not explained by size"
+verdict (margin +0.0816, unchanged to 4 decimals) is confirmed immune to this
+confound. TPP's trained-from-scratch score (0.2025) is actually slightly
+*higher* than the masked reference (0.1905, +0.0121), making the vSAE's
+"explained by size" margin marginally more negative (−0.0970 vs. −0.0849) —
+reinforcing, not weakening, that verdict.** Both of E4's headline verdicts
+survive a confound-controlled reference on the pair they were built on.
+**PROJECT.md Next steps #0 is now fully closed — all 5 boxes in the SCR/TPP
+checklist are done.**
+
+**First thread this session: A4, the JumpReLU discreteness
 companion — the sharpest remaining test of Claim #3** (a per-feature learned
 threshold, no k at all, vs. A2/A3's hard top-k in two scopes). No training
 script existed for `VSAEJumpReLU` before this session (CLAUDE.md flagged the
@@ -305,9 +326,9 @@ numbers were unaffected.
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
 | Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **A4 done (addendum 20): the naive JumpReLU coupling number (r=+0.9334) is confounded by an 8x swing in achieved sparsity that A2/A3's hard-k arms never had; controlling for it weakens the coupling to r=+0.6297 (n=4).** Neither a clean replication nor a clean refutation of A2/A3's tight FVE-Jaccard coupling — the real finding is that JumpReLU's soft, gradient-learned threshold isn't noise-robust the way hard top-k is: achieved sparsity itself collapses under noise (L0 36.8-290.8 across the grid), a failure mode TopK/BatchTopK cannot exhibit by construction. Four real `vsae_jump_relu.py` bugs found and fixed first (dead threshold gradient, missing L0-target loss, gate-before-noise ordering, `normalize_decoder` not rescaling threshold) — nothing on disk before this session used the trainer at all. |
-| In progress | Nothing running. A4 (addendum 20) is done this session, alongside A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) from the prior one. Next up is undecided: E4 box (5) (size-matched baseline), the mechanism-paper writeup (now including A4's more nuanced JumpReLU finding), or Claims-worth-opening #4/#5. |
-| Blocking | Nothing blocked on compute or data. E4 boxes (1)-(4) done (addenda 12-15, 19); box (5) open. Next steps A (mechanism paper) and its A4 companion are all closed. |
+| Newest result | **E4 box (5) done (addendum 21): "masked vs. trained-small" is not a live confound.** A TopK SAE trained from scratch at dict_size=1474 (the vSAE's exact live count) scores 0.020127 on SCR — matching the masked-curve reference (0.020127) to 6e-8 — and 0.2025 on TPP, slightly *above* the masked reference (0.1905). Both of E4's headline verdicts (SCR not explained, TPP explained) survive unchanged or marginally reinforced. **PROJECT.md Next steps #0 is now fully closed — all 5 boxes done.** Also this session, A4 done (addendum 20): the naive JumpReLU coupling number (r=+0.9334) is confounded by an 8x swing in achieved sparsity that A2/A3's hard-k arms never had; controlling for it weakens the coupling to r=+0.6297 (n=4) — the real finding is that a soft, gradient-learned threshold isn't noise-robust the way hard top-k is. |
+| In progress | Nothing running. E4 box (5) (addendum 21) and A4 (addendum 20) both done this session, alongside A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) from the prior one. **Every box in every open checklist is now closed.** Next up is undecided: the mechanism-paper writeup, a follow-up A4 design controlling its L0 confound, extending box (5)'s check to the other 7 (dataset, pair) points, or Claims-worth-opening #4/#5. |
+| Blocking | Nothing blocked on compute or data. E4's SCR/TPP disagreement checklist (5 boxes) and Next steps A (mechanism paper, including its A4 companion) are both fully closed. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -560,11 +581,20 @@ general.
 exactly as PROJECT.md's E4 design anticipated when it specified this budget).
 One dataset for both metrics; the second SAEBench dataset
 (`canrager/amazon_reviews_mcauley_1and5`) and the other three bias_in_bios class
-pairs are not yet run. And neither result says anything about CLAUDE.md
-landmine 3: the baseline still has `auxk_alpha=0.03125` against the vSAE's 0,
-and ruling out dictionary size as the explanation (or not) does not rule AuxK in
-or out — the two confounds are independent and this design controls only the
-first.
+pairs are not yet run (though addendum 19 has since widened coverage to them,
+with both verdicts replicating as the dominant pattern). And neither result
+says anything about CLAUDE.md landmine 3: the baseline still has
+`auxk_alpha=0.03125` against the vSAE's 0, and ruling out dictionary size as
+the explanation (or not) does not rule AuxK in or out — the two confounds are
+independent and this design controls only the first.
+
+**The reference curve itself is now confound-checked too (addendum 21).** A
+TopK SAE trained from scratch at `dict_size=1474` — the vSAE's exact live
+count, no masking involved — scores 0.020127 on SCR against the masked
+curve's 0.020127 at the same N (a 6×10⁻⁸ difference) and 0.2025 on TPP against
+the masked curve's 0.1905 (trained-from-scratch scores slightly *higher*).
+"Masked vs. trained-small" — the last open item in this design — is not a
+live confound in either verdict on the pair these addenda are built on.
 
 ### The method earned its keep twice
 
@@ -840,10 +870,9 @@ The two threads, both now done:
 
 ### 0. E4 — understand the SCR/TPP disagreement before widening coverage
 
-**STATUS: items (1)–(4) done (RESULTS addenda 12–15, 19); (5) open.** Boxes
-(1)–(4) are checked below; pick up at box (5). Nothing here needs re-deriving
-— the reasoning is written out in Claims-worth-opening #6, this is just the
-checklist.
+**STATUS: ALL 5 ITEMS DONE (RESULTS addenda 12–15, 19, 21).** This checklist
+is closed. Nothing here needs re-deriving — the reasoning is written out in
+Claims-worth-opening #6, this is just the checklist (kept for the record).
 
 Addenda 10-11 (2026-09-05/06) found SCR and TPP give opposite verdicts on the
 same two checkpoints, same dataset (`LabHC/bias_in_bios_class_set1`), same
@@ -912,22 +941,32 @@ has been:
   fixed en route: `--smoke`-testing a new pair before its real run silently
   poisons the "full" run's cache (SAEBench loads by filename existence only,
   not by config match) — now a CLAUDE.md landmine.
-- [ ] **(5) Train a size-matched baseline from scratch**
-  (Claims-worth-opening #6d, most expensive) — removes "masked vs.
-  trained-small" as a live confound in the reference curve itself, at the cost
-  of a real training run.
+- [x] **(5) Train a size-matched baseline from scratch** (Claims-worth-opening
+  #6d, most expensive) — **done 2026-09-12, RESULTS addendum 21.**
+  `falsification/train_e4_size_matched_baseline.py` trained a real TopK SAE at
+  `dict_size=1474` (the vSAE's exact live-feature count), config otherwise
+  identical to the recovered baseline; `falsification/score_e4_size_matched_
+  baseline.py` scored it directly (no masking) on the original professor/nurse
+  comparison point. **Result: "masked vs. trained-small" is not a live
+  confound.** SCR's trained-from-scratch score (0.020127) matches the masked
+  curve's reference (0.020127) to 6×10⁻⁸; TPP's (0.2025) is slightly *higher*
+  than the masked reference (0.1905, +0.0121). Both verdicts survive unchanged
+  (SCR) or marginally reinforced (TPP). A secondary finding: even given the
+  exact live-feature-count budget, this trained-from-scratch baseline only
+  keeps 65.5% of its 1474 entries alive — matching a count doesn't guarantee
+  matching how efficiently a plain TopK network uses it.
 
-Boxes (1)–(4) are done (addenda 12–15, 19); box (5) is not scoped in code yet
-— it is the plan, recorded before picking it up, per this project's own working
-style. When starting a fresh session on this: read this checklist,
-Claims-worth-opening #6 in full, and RESULTS addenda 10–19, then pick up at box
-(5). Box (2) confirmed the prediction from (1): TPP's N=20 margin is a
-knife-edge (−0.009 [−0.017, −0.000]), so the "explained by size" reading rests
-on N≤10; SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps)
-and its mean-level verdict is carried by N=2 alone — where, addendum 14 shows,
-the feature selection is bit-identical under train resampling. Box (3) then
+**All 5 boxes in this checklist are now done (addenda 12–15, 19, 21).** Box
+(2) confirmed the prediction from (1): TPP's N=20 margin is a knife-edge
+(−0.009 [−0.017, −0.000]), so the "explained by size" reading rests on N≤10;
+SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps) and
+its mean-level verdict is carried by N=2 alone — where, addendum 14 shows, the
+feature selection is bit-identical under train resampling. Box (3) then
 falsified the leading hypothesis for *why* SCR and TPP disagree (usage-rank
-sorting) — addendum 15 — so the disagreement itself is still open.
+sorting) — addendum 15 — so the disagreement itself is still open, but every
+diagnostic this checklist planned to run against it (averaging artifact,
+test-set noise, feature-selection hypothesis, dataset/pair coverage, and now
+the masking confound) has been run and none of them explain it away.
 
 ### 1. Desk work — no GPU, no new code
 
