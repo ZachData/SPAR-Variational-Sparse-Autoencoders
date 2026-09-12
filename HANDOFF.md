@@ -6,6 +6,22 @@ is a table of contents with a heartbeat.
 
 Last touched: 2026-09-12.
 
+## Done 2026-09-12 — E4 box (5), the size-matched baseline (addendum 21): no confound, E4's checklist is fully closed
+
+Trained a real TopK SAE from scratch at `dict_size=1474` (the vSAE's exact
+live-feature count), config otherwise identical to the recovered baseline
+(`falsification/train_e4_size_matched_baseline.py`, ~79s). Scored it directly
+(no masking) with SCR and TPP on the original professor/nurse comparison point
+(`falsification/score_e4_size_matched_baseline.py`). **Result: SCR's
+trained-from-scratch score (0.020127) matches the masked-curve reference
+(0.020127) to 6×10⁻⁸ — indistinguishable; TPP's (0.2025) is slightly *higher*
+than the masked reference (0.1905, +0.0121).** Both headline verdicts survive
+unchanged (SCR) or marginally reinforced (TPP) — "masked vs. trained-small"
+was the last open confound in this design and it is not live. Side finding:
+even matched to the vSAE's exact live-feature count, this baseline only kept
+65.5% of its 1474 entries alive. **PROJECT.md Next steps #0 — all 5 boxes in
+the SCR/TPP disagreement checklist — is now fully closed.**
+
 ## Done 2026-09-12 — A4, JumpReLU's discreteness test (addendum 20): confounded, not a clean replication
 
 91/91 runs, 0 failures. The naive Pearson r(FVE, Jaccard) = +0.9334 looks like
@@ -109,40 +125,51 @@ Two lines of work:
   size" replicates on amazon via `top_usage` but its `random` bracket goes
   from decisive to a coin flip. Found and fixed a real cache-contamination
   trap en route (`--smoke`-testing a pair before its real run silently
-  poisons the "full" run's cache — now a CLAUDE.md landmine). **Only box (5)
-  (train a size-matched baseline from scratch) remains open in E4's
-  checklist.**
+  poisons the "full" run's cache — now a CLAUDE.md landmine).
+- **E4 box (5) is DONE (RESULTS addendum 21) — see the top of this file for
+  the full account. `PROJECT.md` Next steps #0 is now FULLY CLOSED, all 5
+  boxes.** "Masked vs. trained-small" is not a live confound: a TopK SAE
+  trained from scratch at the vSAE's exact live count (1474) scores
+  indistinguishably from the masked curve on SCR (6×10⁻⁸ apart) and slightly
+  *better* than the masked curve on TPP — both headline verdicts survive.
 - Branch `claude/falsification-framework`, pushed to origin, merged to `master`.
 
 ### Next task — nothing pre-selected; pick from the options below
 
 Both mechanism-paper threads (`PROJECT.md` **Next steps A**), Claim #3's
 discreteness companion for all three architectures (A2 TopK, A3 BatchTopK, A4
-JumpReLU), and E4 box (4) are all closed as of this session: A1 (RESULTS
-addendum 15, falsified), A2 (RESULTS addendum 17, confirmed sharper than
-predicted), A3/BatchTopK (RESULTS addendum 18, generalises), A4/JumpReLU
-(RESULTS addendum 20, confounded — neither a clean replication nor refutation,
-surfaces a different finding about soft-threshold sparsity collapse under
-noise), E4 box (4) (RESULTS addendum 19, replicates). **The paper's three
-parts are now all established** — (1) fixed-variance KL is a null L2 penalty
-(E1); (2) sampling-on damage tracks selection churn almost linearly for hard
-top-k mechanisms (TopK, BatchTopK), and a soft learned-threshold mechanism
-(JumpReLU) fails differently — its sparsity level itself isn't noise-robust;
-(3) the literature's effect sizes are implementation-variance-sized (E1's 5
-factors, E3's ReLU, the decoder-gradient projection, the initial weight draw).
-Nothing is queued next — read `PROJECT.md`'s "Next steps" section fresh and
-pick from what remains:
+JumpReLU), and E4's ENTIRE SCR/TPP disagreement checklist (all 5 boxes) are
+closed as of this session and the prior one: A1 (RESULTS addendum 15,
+falsified), A2 (RESULTS addendum 17, confirmed sharper than predicted),
+A3/BatchTopK (RESULTS addendum 18, generalises), A4/JumpReLU (RESULTS
+addendum 20, confounded — neither a clean replication nor refutation, surfaces
+a different finding about soft-threshold sparsity collapse under noise), E4
+box (4) (RESULTS addendum 19, replicates), E4 box (5) (RESULTS addendum 21,
+no confound). **The paper's three parts are now all established** — (1)
+fixed-variance KL is a null L2 penalty (E1); (2) sampling-on damage tracks
+selection churn almost linearly for hard top-k mechanisms (TopK, BatchTopK),
+and a soft learned-threshold mechanism (JumpReLU) fails differently — its
+sparsity level itself isn't noise-robust; (3) the literature's effect sizes
+are implementation-variance-sized (E1's 5 factors, E3's ReLU, the
+decoder-gradient projection, the initial weight draw). Nothing is queued
+next — read `PROJECT.md`'s "Next steps" section fresh and pick from what
+remains:
 
-- **E4 box (5)** — train a size-matched baseline from scratch (expensive,
-  removes the last confound in the reference curve — "masked vs.
-  trained-small"). The only item left in E4's checklist.
 - **Write up the mechanism paper itself** — the material is now complete per
   the framing in `PROJECT.md` Next steps A's intro, including A4's more
-  nuanced JumpReLU finding (confounded comparison, different failure mode).
+  nuanced JumpReLU finding (confounded comparison, different failure mode)
+  and E4's now-fully-closed checklist (the SCR/TPP disagreement itself is
+  still unexplained, but every planned diagnostic against it, including the
+  masking confound, has been run).
 - **A follow-up A4 design that controls the L0 confound** — e.g. many more
   grid points concentrated in the L0-matched sigma region, or a hard L0 cap
   enforced architecturally rather than as a soft loss term (though the latter
   arguably turns JumpReLU into another top-k variant). Not scoped in code.
+- **Extend E4 box (5)'s confound check to the other 7 (dataset, pair) points**
+  addendum 19 added — box (5) as scoped only re-ran the original professor/
+  nurse comparison; the 7 other points still rest on the masked-not-trained
+  reference. Not required to close the box, but would extend the check's
+  coverage the way box (4) extended boxes (1)-(3)'s.
 - **Claims-worth-opening #4/#5** — desk work, no GPU, still open.
 
 ### Done 2026-09-09/10 — box (2), the bootstrap error bars (addenda 13–14)
@@ -286,17 +313,24 @@ Closes `PROJECT.md` Next steps #0 box (4); box (5) is the one item left open.
   wider than TPP's and rests on the N=2 threshold alone. Both verdicts
   replicate as the dominant pattern across 3 more `bias_in_bios` pairs and a
   second dataset (7/8 SCR points "not explained," TPP's `top_usage` verdict
-  holding on both datasets) — addendum 19.
+  holding on both datasets) — addendum 19. The masked-curve reference itself
+  is confound-checked: a trained-from-scratch baseline at the vSAE's exact
+  live count reproduces the masked curve's SCR score to 6×10⁻⁸ and scores
+  slightly *higher* than it on TPP — "masked vs. trained-small" is not a live
+  confound (addendum 21). **All 5 boxes of E4's SCR/TPP checklist are closed;
+  the disagreement itself remains unexplained.**
 
 ## Next action
 
 Both threads of `PROJECT.md` **Next steps A** are closed (A1 addendum 15, A2
 addenda 16–17), Claim #3's discreteness companion is closed for all three
 architectures (A3 BatchTopK addendum 18, A4 JumpReLU addendum 20 — confounded,
-see above), and E4 box (4) (addendum 19) — nothing is pre-selected for the next
-session. See "Next task" above for the menu (E4 box (5), a follow-up A4 design
-that controls the L0 confound, or writing up the mechanism paper).
-Read `PROJECT.md`'s Next steps section fresh and pick.
+see above), and E4's entire SCR/TPP checklist is closed (box (4) addendum 19,
+box (5) addendum 21) — nothing is pre-selected for the next session. See
+"Next task" above for the menu (writing up the mechanism paper, a follow-up
+A4 design that controls the L0 confound, or extending box (5)'s confound
+check to the other 7 dataset/pair points). Read `PROJECT.md`'s Next steps
+section fresh and pick.
 
 ## Environment
 

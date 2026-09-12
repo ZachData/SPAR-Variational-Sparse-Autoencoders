@@ -1,0 +1,37 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "LabHC/bias_in_bios_class_set1",
+  "column1_vals": [
+    "professor",
+    "nurse"
+  ],
+  "scr": {
+    "score": 0.020127048814940963,
+    "per_threshold": {
+      "scr_metric_threshold_2": -0.05932202747723595,
+      "scr_metric_threshold_5": 0.08050844782181646,
+      "scr_metric_threshold_10": 0.05508454135867777,
+      "scr_metric_threshold_20": 0.004237233556505582
+    },
+    "vsae_score": 0.10169480502588382,
+    "masked_top_usage_at_n": 0.020126985674427816,
+    "masked_random_at_n": -0.03167382595898443,
+    "vsae_minus_trained_small": 0.08156775621094287,
+    "trained_small_minus_masked_top_usage": 6.314051314779134e-08
+  },
+  "tpp": {
+    "score": 0.20253751948475837,
+    "per_threshold": {
+      "tpp_threshold_2_total_metric": 0.09055001139640809,
+      "tpp_threshold_5_total_metric": 0.2011000096797943,
+      "tpp_threshold_10_total_metric": 0.25880002081394193,
+      "tpp_threshold_20_total_metric": 0.25970003604888914
+    },
+    "vsae_score": 0.10553750023245811,
+    "masked_top_usage_at_n": 0.19045000672340395,
+    "masked_random_at_n": 0.15626625753939152,
+    "vsae_minus_trained_small": -0.09700001925230026,
+    "trained_small_minus_masked_top_usage": 0.012087512761354419
+  }
+}
