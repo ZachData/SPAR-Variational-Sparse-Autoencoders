@@ -974,11 +974,17 @@ Two recovered Pythia-70M checkpoints from the original preprint this
 codebase extends --- a Top-K baseline ($d=8192$, AuxK $\alpha=0.03125$) and
 its corresponding vSAE ($\beta=1$, fixed variance, AuxK \emph{off},
 $1{,}474/8192$ live features) --- were scored with SAEBench's spurious
-correlation removal (SCR) and targeted probe perturbation (TPP) metrics on
-the same dataset (\texttt{bias\_in\_bios}, professor/nurse) and the same
+correlation removal (SCR) and targeted probe perturbation (TPP) metrics
+\citep{karvonen2025saebenchcomprehensivebenchmarksparse} on the same
+dataset (\texttt{bias\_in\_bios}, professor/nurse) and the same
 size-response design: mask the baseline dictionary down to a grid of $N$
 features by usage frequency, score each point, and compare the vSAE's own
-(unmasked, natural) score against the resulting curve at $N=1{,}474$.
+(unmasked, natural) score against the resulting curve at $N=1{,}474$. SCR
+is SAEBench's adaptation of the earlier SHIFT
+protocol~\citep{marks2025sparsefeaturecircuitsdiscovering} (ablate
+SAE latents a probe identifies as encoding a spurious attribute, and
+measure how much target-concept accuracy survives); TPP extends the same
+idea to simultaneous multi-class disentanglement.
 
 \begin{table}[h]
 \centering
@@ -1106,6 +1112,27 @@ claim. We regard the correct response to a finding like this as reporting
 the disagreement itself, with its own confound-checking, rather than
 resolving it by fiat or by omission.
 
+\paragraph{Independent, more direct evidence has since appeared.}
+\citet{chanin2026reliable} audits SCR and TPP against three tests neither
+this paper nor SAEBench's own release applied --- reseed noise on fixed
+canonical SAEs, correlation with a synthetic benchmark's known ground-truth
+quality, and discriminability across a training trajectory --- and finds
+both fail basic sanity checks at their canonical settings: SCR and TPP
+\emph{decline} over the course of training on the panels tested (implying
+an untrained SAE is ``better'' than a trained one), TPP's canonical setting
+shows essentially zero correlation with ground-truth quality on synthetic
+SAEs, and SCR turns \emph{negatively} correlated with ground-truth quality
+at large $N$, ranking a perfect oracle below 11 of 35 trained SAEs tested.
+The recommendation is to avoid both at their canonical settings entirely.
+This is a different, and more direct, kind of evidence than anything in
+this section --- it audits each metric against a ground truth we do not
+have access to, rather than checking whether the two metrics agree with
+each other --- but it points the same way: neither metric's number should
+be read as a settled fact about feature quality. It does not resolve which
+verdict this paper's own SCR/TPP disagreement should be believed, if
+either; if anything, it weakens confidence in both, which is consistent
+with, not contrary to, the position this section already takes.
+
 \section{Discussion}
 \label{sec:discussion}
 
@@ -1134,13 +1161,28 @@ guaranteed to help.
 sparse code, \S\ref{sec:mechanism}'s synthesis gives a specific, testable
 design recommendation rather than a negative result: put the noise in the
 \emph{selection decision} (as Gumbel-Softmax and Concrete relaxations do for
-discrete choices generally), not in the magnitude of an already-selected
-feature. A prior with mass at zero --- spike-and-slab being the textbook
-example for sparse codes, in contrast to the isotropic Gaussian's zero mass
-at the origin --- is a second, related direction: it would make the KL term
-itself do something other than shrink activation magnitude uniformly.
-Neither is tested here; both follow directly from identifying the specific
-mechanism this paper measures rather than only its symptom.
+discrete choices generally~\citep{jang2016categorical,maddison2016concrete},
+and as \citet{berthet2020learning}'s differentiable perturbed optimisers do
+specifically for top-$k$-type discrete selection --- exactly the operation
+whose interaction with reparameterisation noise this paper measures ---
+by perturbing the ranking \emph{before} the argmax/top-$k$ step and
+differentiating through the resulting expectation, rather than perturbing
+an already-selected value afterward), not in the magnitude of an
+already-selected feature. The hard-concrete stochastic gate of
+\citet{louizos2018learning}, developed for $L_0$-regularised weight
+sparsity rather than sparse coding, is a close structural cousin: a
+continuously-relaxed \emph{gate} decides membership, and a separate
+mechanism sets magnitude, which is exactly the separation this paper's
+noise-in-selection recommendation asks for and JumpReLU's own architecture
+(gate, then value) gestures toward without actually placing the
+\emph{noise} at the gate. A prior with mass at zero --- spike-and-slab
+being the textbook example for sparse codes, in contrast to the isotropic
+Gaussian's zero mass at the origin, and already used for exactly this
+purpose in a VAE by \citet{tonolini2020variational} --- is a second,
+related direction: it would make the KL term itself do something other
+than shrink activation magnitude uniformly. Neither is tested here; both
+follow directly from identifying the specific mechanism this paper
+measures rather than only its symptom.
 
 \paragraph{A note on the liveness--reconstruction relationship.} An
 exploratory (not pre-registered) reading of every replicated arm in this
@@ -1235,19 +1277,34 @@ trick~\citep{kingma2013autoencoding} and the $\beta$-weighted KL trade-off
 this paper's Eq.~\ref{eq:vsae} follows~\citep{higgins2017betavae} are the two
 pieces of machinery this paper's central object combines with Top-K
 selection. The straight-through gradient estimator used to make JumpReLU's
-threshold trainable~\citep{bengio2013estimating}, and the two continuous
+threshold trainable~\citep{bengio2013estimating}, the two continuous
 relaxations of discrete sampling this paper's constructive discussion points
 toward as the right place to put stochasticity in a
 selection-based architecture~\citep{jang2016categorical,maddison2016concrete},
-are the closest prior treatments of the specific tension
-\S\ref{sec:mechanism} measures: that a continuous relaxation of a discrete
-choice and a discrete choice made from continuously-perturbed inputs are not
-the same operation, and only one of them is what a sampled sparse code
-actually needs. We are not aware of a prior controlled decomposition of a
+and, closer still to top-$k$ selection specifically, the differentiable
+perturbed optimisers of \citet{berthet2020learning} and the hard-concrete
+stochastic sparsity gate of \citet{louizos2018learning} --- both of which
+place noise at the discrete decision itself rather than at an
+already-selected value's magnitude, and the latter of which structurally
+separates a gate from a magnitude the way JumpReLU's own architecture does,
+without placing noise at the gate --- are the closest prior treatments of
+the specific tension \S\ref{sec:mechanism} measures: that a continuous
+relaxation of a discrete choice and a discrete choice made from
+continuously-perturbed inputs are not the same operation, and only one of
+them is what a sampled sparse code actually needs.
+\citet{tonolini2020variational}'s spike-and-slab VAE is the closest prior
+instance of this paper's second constructive suggestion (a prior with mass
+at zero), applied to a different sparse-coding setting than Top-K
+selection. We are not aware of a prior controlled decomposition of a
 variational sparse autoencoder into its constituent implementation choices,
-of a dose-response measurement of the reparameterisation-selection
-interaction across multiple selection mechanisms, or of a reported
-disagreement between SCR and TPP of the kind \S\ref{sec:e4} documents.
+or of a dose-response measurement of the reparameterisation-selection
+interaction across multiple selection mechanisms. \citet{chanin2026reliable}
+independently audits SCR and TPP against ground-truth and training-
+trajectory sanity checks and recommends against both at their canonical
+settings; \S\ref{sec:e4} is, to our knowledge, the first report of the two
+metrics giving opposite-signed verdicts on the same checkpoints, which is a
+different, complementary kind of finding to Chanin's --- disagreement
+between two metrics versus failure of either against a ground truth.
 
 \section{Conclusion}
 \label{sec:conclusion}

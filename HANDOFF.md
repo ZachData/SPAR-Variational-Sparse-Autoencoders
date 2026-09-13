@@ -91,6 +91,17 @@ isn't theoretical. Written into the mechanism paper's §5.2 (new tables,
 four new bib entries). **This closes Claims-worth-opening #5 — every item
 on PROJECT.md's active checklists is now closed.**
 
+**Then a final lit-review pass added four references to the mechanism
+paper**, one substantive: Chanin 2026 ("Are Sparse Autoencoder Benchmarks
+Reliable?", arXiv:2605.18229) independently audits SCR and TPP against
+ground-truth/training-trajectory checks this repo's own E4 work never ran,
+and finds both fail at canonical settings — different, complementary
+evidence to E4's own "the two metrics disagree with each other" finding,
+now discussed in §6.3. Plus three citation-gap fills: Tonolini et al. 2020
+(spike-and-slab VAE), Berthet et al. 2020 (differentiable perturbed
+optimisers, the real precedent for "put noise at the discrete decision"),
+Louizos et al. 2018 (hard-concrete sparsity gates). No experiments, no GPU.
+
 Four experiments' arms, scripts and results this session: see RESULTS
 addenda 22–25, `falsification/read_a4_followup.py`,
 `falsification/score_e4_size_matched_baseline.py`,

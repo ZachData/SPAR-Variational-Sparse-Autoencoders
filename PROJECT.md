@@ -114,6 +114,32 @@ All 115 falsification tests stayed green throughout. **This closes
 Claims-worth-opening #5 — every item on PROJECT.md's active checklist is
 now closed.**
 
+**Finally, a lit-review pass on the mechanism paper found four references
+worth adding, one of them substantive.** `arXiv:2605.18229` (Chanin 2026,
+"Are Sparse Autoencoder Benchmarks Reliable?", found via web search — not
+part of the falsification battery, purely a literature check) independently
+audits SCR and TPP against ground-truth and training-trajectory sanity
+checks (three tests this repo's own E4 work never applied) and finds both
+fail at their canonical settings — SCR/TPP decline during training, TPP
+shows ~zero correlation with synthetic ground-truth quality, SCR goes
+*negative* at large N and ranks a perfect oracle below 11 of 35 trained
+SAEs. This is a different, complementary kind of evidence to E4's own
+finding (SCR/TPP disagreeing with *each other*, not either one audited
+against ground truth) and is now discussed in §6.3 of the mechanism paper —
+it doesn't resolve E4's disagreement, but it means neither verdict should
+be trusted blindly, which reinforces rather than undercuts this paper's own
+stance of reporting the disagreement rather than picking a side. Three
+smaller, more expected additions fill existing citation gaps: Tonolini et
+al. 2020 (spike-and-slab VAE, for the paper's own "spike-and-slab" mention
+that previously had no citation), Berthet et al. 2020 (differentiable
+perturbed optimisers — the actual ML literature for putting noise at a
+top-k-style discrete decision rather than an already-selected value, which
+sharpens the paper's central constructive claim), and Louizos et al. 2018
+(hard-concrete stochastic sparsity gates — structurally close to what
+JumpReLU's gate-then-value architecture could be but isn't). All four
+verified against the papers' actual abstracts/full text before adding, not
+from memory. No experiments, no GPU.
+
 Last updated 2026-09-12 (prior entry, preserved): **That session, second
 thread: E4 box (5), the last
 item in the SCR/TPP disagreement checklist — "masked vs. trained-small" is not
