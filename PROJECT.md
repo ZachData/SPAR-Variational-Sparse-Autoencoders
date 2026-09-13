@@ -66,6 +66,29 @@ way: the figure-regeneration script initially overwrote the original
 `git status` showing it as deleted, restored with `git checkout --`, no
 data lost.
 
+**Then, at the user's request, extended E4 box (5)'s confound check to the
+other 7 (dataset, pair) points (RESULTS addendum 24).** Addendum 21 found
+"masked vs. trained-small" wasn't a live confound on the original
+professor/nurse point (SCR: 6×10⁻⁸ apart) but explicitly hadn't tested the
+7 other points addendum 19 added. Generalised
+`falsification/score_e4_size_matched_baseline.py` with
+`--dataset`/`--column1-vals`/`--skip-scr`/`--skip-tpp` and re-scored the
+SAME already-trained `dict_size=1474` checkpoint (no new training) against
+the 7 other SCR points and the 1 new TPP point (amazon; TPP has no
+per-pair concept). **Result: the confound is real and often large per pair
+for SCR — but does not systematically favour either verdict.** Mean
+absolute reference-curve shift is 0.075 (up to 0.138 at one point),
+comparable to the margins the verdict rests on, yet the mean `vSAE −
+trained-small` margin across all 8 points (+0.079) is essentially the same
+as the mean `vSAE − masked` margin (+0.072) — only 1 of 8 points
+(Software/Electronics) flips which side of zero it lands on, so 6 of 8
+(was 7 of 8) still say "not explained by size." TPP's two available points
+both hold their "explained by size" verdict unchanged. **This nuances
+addendum 21's finding rather than reversing it**: the original point's
+near-exact match was somewhat special, not typical of the other 7, but the
+aggregate SCR/TPP verdicts both survive the wider check regardless. All
+115 falsification tests stayed green throughout this session.
+
 Last updated 2026-09-12 (prior entry, preserved): **That session, second
 thread: E4 box (5), the last
 item in the SCR/TPP disagreement checklist — "masked vs. trained-small" is not
@@ -380,9 +403,9 @@ numbers were unaffected.
 | Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
-| Data | Prior battery (11 arms, 153 checkpoints) plus this session's 2 new experiments: `claim4_baseline_noproj` (13 seeds) and 4 new A4 densifying arms (5 seeds each, 20 checkpoints) — 5 new arms, 33 new checkpoints, 0 failures |
-| Newest result | **A4's n=4 doubt closed (addendum 23): densifying the L0-matched grid to n=8 reproduces the weakened coupling** (r(FVE,Jaccard)=+0.5026 vs. the original +0.6297 at n=4) — not a small-sample artifact. Alongside Claims-worth-opening #4 (addendum 22): the decoder-gradient-projection effect does NOT generalise to a plain, penalty-free TopK SAE ($d=0.2$–$0.5$, null, vs. $d$ up to $-14.3$ inside the vSAE family) — real but scoped to models carrying an activation penalty. Both written into the new mechanism paper (`workshop/mechanism_paper.tex`) alongside its three already-established parts (E1 null decomposition, A2/A3/A4 selection-churn dose-response, E1/E3 implementation-variance lower bound), with E4 reported as an unresolved case study. |
-| In progress | Nothing running. The mechanism paper is drafted and both strengthening experiments (Claims-worth-opening #4, A4's n=4 follow-up) are closed this session. Every box in every prior open checklist (E4's 5, Next steps A's 2, A3/A4) was already closed as of 2026-09-12. Remaining options: extending E4 box (5)'s check to the other 7 (dataset, pair) points, Claims-worth-opening #5 (seed-count survey), or further paper polish/compilation. |
+| Data | Prior battery (11 arms, 153 checkpoints) plus this session's new work: `claim4_baseline_noproj` (13 seeds), 4 new A4 densifying arms (5 seeds each, 20 checkpoints), and 8 new E4 scoring runs against the already-trained size-matched baseline (no new training) — 5 new arms, 33 new checkpoints, 0 failures |
+| Newest result | **E4 box (5) extended to all 8 (dataset, pair) points (addendum 24): "masked vs. trained-small" is a real, often-large per-pair confound for SCR, but doesn't systematically favour either verdict.** Mean `vSAE − trained-small` margin (+0.079) barely differs from mean `vSAE − masked` margin (+0.072) on the same 8 points; only 1 of 8 flips sign; 6 of 8 (was 7/8) still say "not explained by size." TPP's 2 points both hold. Nuances, doesn't reverse, addendum 21. Also this session: A4's n=4 doubt closed (addendum 23, r=+0.5026 at n=8 vs. +0.6297 at n=4 — not a small-sample artifact) and Claims-worth-opening #4 answered (addendum 22, the decoder-gradient-projection effect doesn't generalise beyond models with a penalty term). All three written into the new mechanism paper (`workshop/mechanism_paper.tex`) alongside its three already-established parts, with E4 reported as an unresolved case study. |
+| In progress | Nothing running. The mechanism paper is drafted and three strengthening experiments (Claims-worth-opening #4, A4's n=4 follow-up, E4 box (5) extended to all 8 points) are closed this session. Every box in every prior open checklist (E4's 5, Next steps A's 2, A3/A4) was already closed as of 2026-09-12. Remaining options: Claims-worth-opening #5 (seed-count survey), or further paper polish/compilation. |
 | Blocking | Nothing blocked on compute or data. No LaTeX toolchain is installed on this machine, so `workshop/mechanism_paper.tex` has been checked by hand (citations resolve, braces/environments balance, all `\ref`s have matching `\label`s) but never compiled to PDF. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
@@ -643,13 +666,20 @@ says anything about CLAUDE.md landmine 3: the baseline still has
 the explanation (or not) does not rule AuxK in or out — the two confounds are
 independent and this design controls only the first.
 
-**The reference curve itself is now confound-checked too (addendum 21).** A
-TopK SAE trained from scratch at `dict_size=1474` — the vSAE's exact live
-count, no masking involved — scores 0.020127 on SCR against the masked
-curve's 0.020127 at the same N (a 6×10⁻⁸ difference) and 0.2025 on TPP against
-the masked curve's 0.1905 (trained-from-scratch scores slightly *higher*).
-"Masked vs. trained-small" — the last open item in this design — is not a
-live confound in either verdict on the pair these addenda are built on.
+**The reference curve itself is now confound-checked too, on all 8 (dataset,
+pair) points (addenda 21, 24).** A TopK SAE trained from scratch at
+`dict_size=1474` — the vSAE's exact live count, no masking involved —
+scores 0.020127 on SCR against the masked curve's 0.020127 on the original
+professor/nurse point (a 6×10⁻⁸ difference) and 0.2025 on TPP against the
+masked curve's 0.1905 (trained-from-scratch scores slightly *higher*). That
+near-exact match turned out to be somewhat special to this one point, not
+typical: extended to the other 7 (dataset, pair) points box (4) added
+(addendum 24), the SCR reference-curve shift averages 0.075 (up to 0.138)
+and flips 1 of 8 points' sign — but the shifts don't systematically favour
+either verdict, so the *aggregate* verdict survives (mean margin +0.079 vs.
++0.072; 6 of 8, was 7/8, still "not explained"). TPP's 2 available points
+both hold. "Masked vs. trained-small" is a real per-pair effect but not a
+confound that would flip either headline verdict.
 
 ### The method earned its keep twice
 
@@ -1011,7 +1041,17 @@ has been:
   keeps 65.5% of its 1474 entries alive — matching a count doesn't guarantee
   matching how efficiently a plain TopK network uses it.
 
-**All 5 boxes in this checklist are now done (addenda 12–15, 19, 21).** Box
+  **Extended to the other 7 (dataset, pair) points box (4) added — done
+  2026-09-13, RESULTS addendum 24.** The near-exact match above turned out
+  to be somewhat special to the professor/nurse point, not typical: across
+  all 8 points the SCR reference-curve shift averages 0.075 (up to 0.138),
+  comparable to the margins the verdict rests on, and it flips 1 of 8
+  points' sign (Software/Electronics). But it doesn't systematically favour
+  either verdict — the mean margin barely moves (+0.079 vs. +0.072) and 6
+  of 8 (was 7/8) still say "not explained." TPP's 2 available points both
+  hold. This nuances, not reverses, the "not a live confound" reading.
+
+**All 5 boxes in this checklist are now done (addenda 12–15, 19, 21, 24).** Box
 (2) confirmed the prediction from (1): TPP's N=20 margin is a knife-edge
 (−0.009 [−0.017, −0.000]), so the "explained by size" reading rests on N≤10;
 SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps) and

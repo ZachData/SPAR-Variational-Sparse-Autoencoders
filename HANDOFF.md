@@ -6,7 +6,7 @@ is a table of contents with a heartbeat.
 
 Last touched: 2026-09-13.
 
-## Done 2026-09-13 — the mechanism paper is drafted, and Claims-worth-opening #4 is answered (addendum 22)
+## Done 2026-09-13 — the mechanism paper is drafted and strengthened by three experiments (addenda 22–24)
 
 `workshop/mechanism_paper.tex` (new, standalone LaTeX, not the old superseded
 `workshop/paper.tex`) writes up the three established parts of PROJECT.md
@@ -50,8 +50,30 @@ paper. (Caught and fixed a self-inflicted close call along the way: a
 figure-regeneration script briefly overwrote the original 6-point figure
 before renaming — caught via `git status`, restored with `git checkout --`.)
 
-Both experiments' arms, scripts and results: see RESULTS addenda 22–23 and
-`falsification/read_a4_followup.py`. GPU note for whoever runs training
+**Then ran a third experiment, this one at the user's specific request:
+extended E4 box (5)'s confound check to the other 7 (dataset, pair) points
+addendum 19 added (RESULTS addendum 24).** Addendum 21 found "masked vs.
+trained-small" wasn't a live confound on the original professor/nurse
+point (6×10⁻⁸ apart on SCR). Generalised `score_e4_size_matched_baseline.py`
+with `--dataset`/`--column1-vals`/`--skip-scr`/`--skip-tpp` (same pattern
+addendum 19 used for the masking-curve runners) and re-scored the SAME
+already-trained `dict_size=1474` checkpoint — no new training — against the
+other 7 SCR points and 1 new TPP point (amazon; TPP has no per-pair
+concept). **Result: the confound is real and often large per pair for
+SCR** (mean absolute reference-curve shift 0.075, up to 0.138, comparable
+to the margins the verdict rests on) **but does not systematically favour
+either verdict** — the mean `vSAE − trained-small` margin (+0.079) is
+essentially the same as the mean `vSAE − masked` margin (+0.072) on the
+same 8 points, and only 1 of 8 points (Software/Electronics) flips which
+side of zero it's on. 6 of 8 (was 7 of 8) still say "not explained by
+size." TPP's two available points both hold their "explained by size"
+verdict. **This nuances addendum 21's reading rather than reversing it**:
+the original point's near-perfect match was somewhat special, not typical,
+but the aggregate SCR/TPP verdicts survive the wider check anyway.
+
+Three experiments' arms, scripts and results: see RESULTS addenda 22–24,
+`falsification/read_a4_followup.py`, `falsification/score_e4_size_matched_
+baseline.py`. GPU note for whoever runs training
 next: another Claude Code session's unrelated CPU-heavy job
 (`Mets/p7d_redundancy/*`) was running on this machine for part of this
 session and repeatedly triggered the harness's low-memory kill on

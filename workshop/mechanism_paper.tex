@@ -946,15 +946,31 @@ attempt and ran five diagnostics, roughly cheapest-to-test first.
   together, and a dictionary trained from scratch at that exact size might
   organise its capacity differently. Training a real Top-K SAE at
   $\mathrm{dict\_size}=1474$ (otherwise identical config) and scoring it
-  directly finds its SCR score ($0.020127$) matches the masked curve's
-  reference ($0.020127$) to $6\times10^{-8}$, and its TPP score ($0.2025$)
-  is slightly \emph{higher} than the masked reference ($0.1905$). Both
-  verdicts survive unchanged (SCR) or are marginally reinforced (TPP): this
-  specific confound is not live. (A secondary finding en route: even given
-  the vSAE's exact live-feature count as its budget, a plain Top-K network
+  directly against the original professor/nurse point finds its SCR score
+  ($0.020127$) matches the masked curve's reference ($0.020127$) to
+  $6\times10^{-8}$, and its TPP score ($0.2025$) is slightly \emph{higher}
+  than the masked reference ($0.1905$) --- on that one point, this specific
+  confound is not live. It is not this well-behaved everywhere: scoring the
+  same trained-from-scratch checkpoint against the other 7 (dataset, pair)
+  points item 4 added finds the reference-curve shift is often substantial
+  for SCR (mean absolute shift $0.075$, up to $0.138$ at one point,
+  comparable to the margins the verdict rests on) and flips one of eight
+  points' individual sign (Software/Electronics, $+0.110\to-0.027$).
+  \textbf{The aggregate verdict is essentially unmoved regardless}: the mean
+  margin under the trained-small reference ($+0.079$) is marginally
+  \emph{larger} than under the masked reference ($+0.072$) on the same
+  eight points, and 6 of 8 (was 7 of 8) still say ``not explained.'' TPP's
+  two available points (bias\_in\_bios, amazon; TPP has no per-pair concept)
+  both keep their ``explained by size'' verdict under the trained-small
+  reference. The honest summary is narrower than the single-point reading:
+  the masking-vs-training confound is real and can move an individual
+  pair's verdict, but it does not systematically favour either metric's
+  side, so it does not explain the SCR/TPP disagreement itself. (A
+  secondary finding en route, from the original point: even given the
+  vSAE's exact live-feature count as its budget, a plain Top-K network
   trained at that size keeps only $65.5\%$ of it alive --- matching a
-  feature \emph{count} does not guarantee matching how efficiently a network
-  uses it.)
+  feature \emph{count} does not guarantee matching how efficiently a
+  network uses it.)
 \end{enumerate}
 
 \subsection{What we take this to show}

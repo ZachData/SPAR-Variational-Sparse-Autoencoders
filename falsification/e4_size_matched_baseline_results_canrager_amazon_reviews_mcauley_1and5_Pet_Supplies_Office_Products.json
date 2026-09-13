@@ -1,0 +1,23 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "canrager/amazon_reviews_mcauley_1and5",
+  "column1_vals": [
+    "Pet_Supplies",
+    "Office_Products"
+  ],
+  "scr": {
+    "score": -0.08539603741282821,
+    "per_threshold": {
+      "scr_metric_threshold_2": -0.11386138321710429,
+      "scr_metric_threshold_5": 0.024752448953938598,
+      "scr_metric_threshold_10": 0.049504897907877196,
+      "scr_metric_threshold_20": -0.30198011329602437
+    },
+    "vsae_score": 0.07920785140622685,
+    "masked_top_usage_at_n": 0.01608904755919006,
+    "masked_random_at_n": 0.05012373126216067,
+    "vsae_minus_trained_small": 0.16460388881905508,
+    "trained_small_minus_masked_top_usage": -0.10148508497201827
+  }
+}
