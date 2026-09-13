@@ -4,7 +4,60 @@ Short by design. Read this first, act from `PROJECT.md`. When this file and
 `PROJECT.md` disagree, `PROJECT.md` wins — it is the living document and this one
 is a table of contents with a heartbeat.
 
-Last touched: 2026-09-12.
+Last touched: 2026-09-13.
+
+## Done 2026-09-13 — the mechanism paper is drafted, and Claims-worth-opening #4 is answered (addendum 22)
+
+`workshop/mechanism_paper.tex` (new, standalone LaTeX, not the old superseded
+`workshop/paper.tex`) writes up the three established parts of PROJECT.md
+Deliverables #4 (E1's null decomposition, the A2/A3/A4 selection-churn
+dose-response across three selection mechanisms, and E1/E3's
+implementation-variance lower bound), with E4's SCR/TPP disagreement
+reported as an unresolved case study rather than forced to a verdict. No
+LaTeX toolchain is on this machine, so it's checked by hand (citations
+resolve against `workshop/references.bib`, braces/environments balance, all
+`\ref`s have matching `\label`s) but never compiled — do that before
+submitting anywhere.
+
+Then ran one control experiment to strengthen it: **Claims-worth-opening #4
+is answered (RESULTS addendum 22) — the decoder-gradient-projection effect
+does NOT generalise to a plain, penalty-free TopK SAE.** New arm
+`claim4_baseline_noproj` (`baseline` with a new `project_decoder_grad=False`
+flag, 13 seeds) is null on every metric ($d=0.2$–$0.5$) at the same power
+that detected $d$ up to $-14.3$ for the identical change inside the vSAE
+family — the effect is real but interacts with the penalty term
+specifically, not a generic TopK SAE training factor. Required adding
+`project_decoder_grad` to `top_k_with_feature_penalty.py` and
+`train_topk.py` (default `True`, no existing checkpoint affected). All 115
+tests stayed green.
+
+**Also caught and fixed a factual error in the paper's own first draft**:
+GELU-1L arms train at layer 0, not layer 3 — CLAUDE.md's "layer 3, not layer
+0" landmine is about the recovered Pythia checkpoints only, and the draft
+had conflated the two. Worth remembering if anyone writes about this
+repo's layer configuration again.
+
+**Then ran a second strengthening experiment: A4's n=4 doubt is closed
+(RESULTS addendum 23).** Four new JumpReLU arms
+(`a4_jumprelu_sigma_init_{m3_5,m4_5,m5_5,m6}`, densifying the L0-matched
+sigma region, 5 seeds/arm — deliberately scoped down since coverage, not
+per-point precision, was what needed strengthening) double the L0-matched
+grid to n=8. **Result: the weakened coupling reproduces** — r(FVE,Jaccard)
+= +0.5026 (n=8) vs. the original +0.6297 (n=4), r(FVE,L0) = −0.4704 vs.
+−0.5467 — confirming this isn't a small-sample fluke. New figure
+`workshop/figs/a4_followup_dose_response.pdf`, both figures now in the
+paper. (Caught and fixed a self-inflicted close call along the way: a
+figure-regeneration script briefly overwrote the original 6-point figure
+before renaming — caught via `git status`, restored with `git checkout --`.)
+
+Both experiments' arms, scripts and results: see RESULTS addenda 22–23 and
+`falsification/read_a4_followup.py`. GPU note for whoever runs training
+next: another Claude Code session's unrelated CPU-heavy job
+(`Mets/p7d_redundancy/*`) was running on this machine for part of this
+session and repeatedly triggered the harness's low-memory kill on
+backgrounded multi-seed training loops (never the GPU itself — it stayed
+idle throughout). Single-seed foreground calls were reliable; long
+backgrounded loops were not, while that other job was running.
 
 ## Done 2026-09-12 — E4 box (5), the size-matched baseline (addendum 21): no confound, E4's checklist is fully closed
 

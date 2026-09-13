@@ -76,6 +76,19 @@ ARMS: dict[str, dict[str, Any]] = {
         "script": "train_topk.py",
         "overrides": {**BASE, "k": 256, "activation_penalty": 1.0},
     },
+    # Claims-worth-opening #4: does vsae_topk.py's decoder-gradient-projection
+    # effect (RESULTS addendum 2/5, d up to -14.3 on FVE) generalise to a plain
+    # TopK SAE, or is it specific to interacting with the KL/penalty term?
+    # Identical to `baseline` (E0's clean TopK SAE, no penalty) except the
+    # gradient projection is turned off -- the same one-line change vsae_topk.py
+    # already omits by default. Compare directly against `baseline`, which has
+    # always had the projection on (previously hardcoded, now the explicit
+    # default).
+    "claim4_baseline_noproj": {
+        "script": "train_topk.py",
+        "overrides": {**BASE, "k": 256, "activation_penalty": 0.0,
+                      "project_decoder_grad": False},
+    },
     # E1 reference: the fixed-variance vSAE that E1 should reproduce.
     # kl_warmup_steps=0 is load-bearing. The trainer defaults it to int(0.1*steps)
     # = 1000, ramping kl_scale 0 -> 1 over the first 10% of training, while
@@ -481,6 +494,29 @@ for _lvi, _name in (
     (-4.0, "a4_jumprelu_sigma_init_m4"),
     (-5.0, "a4_jumprelu_sigma_init_m5"),
     (-8.0, "a4_jumprelu_sigma_low_init"),  # matches e2_sigma_low_init, clamped to -6.0 effective
+):
+    ARMS[_name] = {
+        "script": "train_vsae_jumprelu.py",
+        "overrides": {**_A4_JUMPRELU_BASE, "var_flag": 1, "kl_coeff": 0.0,
+                      "log_var_init": _lvi, "checkpoint_steps": _EARLY_SCHEDULE},
+    }
+
+# A4 follow-up (RESULTS addendum 20's open item): the original 6-point grid's
+# L0-matched subsample (log_var_init in {-3,-4,-5,-8}, achieved L0 in
+# [247,291]) was only n=4, too small to distinguish "the coupling genuinely
+# weakens" from "this design cannot see it". These four points densify
+# exactly that L0-matched region -- between -3 (last point clearly OUTSIDE
+# the band, L0=290.8, borderline) and -6 (the reparameterize() clamp floor;
+# -8.0 already tests the saturated point beyond it, so a further -6.5/-7
+# would be redundant with the existing -8.0 arm, not new information).
+# log_var_init=-3.5..-5.5 fill the gap the original 1-unit-spaced grid left
+# unsampled; -6.0 is the clamp boundary itself, distinct from -8.0's
+# already-saturated interior.
+for _lvi, _name in (
+    (-3.5, "a4_jumprelu_sigma_init_m3_5"),
+    (-4.5, "a4_jumprelu_sigma_init_m4_5"),
+    (-5.5, "a4_jumprelu_sigma_init_m5_5"),
+    (-6.0, "a4_jumprelu_sigma_init_m6"),
 ):
     ARMS[_name] = {
         "script": "train_vsae_jumprelu.py",

@@ -12,7 +12,62 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-12. **This session, second thread: E4 box (5), the last
+Last updated: 2026-09-13. **This session: wrote the mechanism paper**
+(`workshop/mechanism_paper.tex`, new — a fresh LaTeX file, longer-form, not
+page-limited, built around the three established parts of PROJECT.md
+Deliverables #4: E1's null decomposition, the A2/A3/A4 selection-churn
+dose-response, and E1/E3's implementation-variance lower bound, with E4
+reported honestly as an unresolved case study rather than forced to a
+verdict), **then ran one more control experiment to strengthen it: Claims-
+worth-opening #4 is now answered (RESULTS addendum 22).** The
+decoder-gradient-projection effect (addendum 2/5, $d$ up to $-14.3$ on FVE
+inside the vSAE family) does **not** generalise to a plain, penalty-free
+TopK SAE — a new arm (`claim4_baseline_noproj`, `baseline` with
+`project_decoder_grad=False`, 13 seeds) is null on every metric, both
+liveness thresholds agreeing ($d=0.2$–$0.5$, $p=0.22$–$0.63$, at the same
+5.16σ-floor power that detected the vSAE-family effect). This narrows the
+claim rather than weakening it: the projection's effect is real and
+undocumented in either paper's equations, but scoped to models carrying an
+activation penalty, not TopK SAE training in general — closing Claims-worth-
+opening #4's open fork in favour of "interacts with the penalty," not
+"generic unreported factor in the field." Required adding a
+`project_decoder_grad` config flag to `top_k_with_feature_penalty.py` and
+`train_topk.py` (default `True`, every existing checkpoint's behaviour
+unchanged); also recorded the previously-unrecorded `activation_penalty`
+field in that trainer's `config` property while in the same spot. All 115
+falsification tests stayed green throughout. Along the way, caught and fixed
+a factual error in the mechanism paper's own first draft before it went
+further: the GELU-1L arms train at **layer 0** (`run_arm.py`'s own `BASE`,
+confirmed against `experiments/baseline/*/config.json`), not layer 3 — the
+"layer 3, not layer 0" CLAUDE.md landmine is about the recovered **Pythia**
+checkpoints only (confirmed `layer: 3` in their own `config.json`), and the
+paper's first draft had conflated the two.
+
+**Then ran a second strengthening experiment: A4's open n=4 doubt is closed
+(RESULTS addendum 23).** Addendum 20's "the L0-matched coupling weakens to
+r=+0.6297" rested on only 4 confound-controlled grid points, too few to
+tell a genuine weakening from a design that simply couldn't see the
+coupling. Four new arms (`a4_jumprelu_sigma_init_{m3_5,m4_5,m5_5,m6}`,
+`log_var_init` ∈ {−3.5,−4.5,−5.5,−6.0}, densifying the gap the original
+1-unit grid spacing left unsampled) ran at 5 seeds/arm — a deliberately
+scoped-down follow-up, since the thing under-powered was grid *coverage*,
+not per-point precision. **Result: doubling the L0-matched region's grid
+density to n=8 reproduces the same qualitative pattern** — r(FVE,Jaccard)
+= +0.5026 (n=8) against the original +0.6297 (n=4), r(FVE,L0) = −0.4704
+against −0.5467, both moving modestly in a direction consistent with
+sampling noise on a still-small n, not a reversal. The full 10-point grid's
+naive coupling is essentially unchanged (+0.9341 vs. +0.9334). This closes
+the specific "is n=4 the whole story" doubt without needing the harder
+alternative (an architectural L0 cap). New figure
+`workshop/figs/a4_followup_dose_response.pdf`; both figures now written
+into the mechanism paper. Also fixed a self-inflicted near-miss along the
+way: the figure-regeneration script initially overwrote the original
+6-point `a4_jumprelu_dose_response.pdf` before being renamed — caught via
+`git status` showing it as deleted, restored with `git checkout --`, no
+data lost.
+
+Last updated 2026-09-12 (prior entry, preserved): **That session, second
+thread: E4 box (5), the last
 item in the SCR/TPP disagreement checklist — "masked vs. trained-small" is not
 a live confound (RESULTS addendum 21).** Trained a real TopK SAE from scratch
 at `dict_size=1474` (the vSAE's exact live-feature count), same config as the
@@ -325,10 +380,10 @@ numbers were unaffected.
 | Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
-| Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **E4 box (5) done (addendum 21): "masked vs. trained-small" is not a live confound.** A TopK SAE trained from scratch at dict_size=1474 (the vSAE's exact live count) scores 0.020127 on SCR — matching the masked-curve reference (0.020127) to 6e-8 — and 0.2025 on TPP, slightly *above* the masked reference (0.1905). Both of E4's headline verdicts (SCR not explained, TPP explained) survive unchanged or marginally reinforced. **PROJECT.md Next steps #0 is now fully closed — all 5 boxes done.** Also this session, A4 done (addendum 20): the naive JumpReLU coupling number (r=+0.9334) is confounded by an 8x swing in achieved sparsity that A2/A3's hard-k arms never had; controlling for it weakens the coupling to r=+0.6297 (n=4) — the real finding is that a soft, gradient-learned threshold isn't noise-robust the way hard top-k is. |
-| In progress | Nothing running. E4 box (5) (addendum 21) and A4 (addendum 20) both done this session, alongside A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) from the prior one. **Every box in every open checklist is now closed.** Next up is undecided: the mechanism-paper writeup, a follow-up A4 design controlling its L0 confound, extending box (5)'s check to the other 7 (dataset, pair) points, or Claims-worth-opening #4/#5. |
-| Blocking | Nothing blocked on compute or data. E4's SCR/TPP disagreement checklist (5 boxes) and Next steps A (mechanism paper, including its A4 companion) are both fully closed. |
+| Data | Prior battery (11 arms, 153 checkpoints) plus this session's 2 new experiments: `claim4_baseline_noproj` (13 seeds) and 4 new A4 densifying arms (5 seeds each, 20 checkpoints) — 5 new arms, 33 new checkpoints, 0 failures |
+| Newest result | **A4's n=4 doubt closed (addendum 23): densifying the L0-matched grid to n=8 reproduces the weakened coupling** (r(FVE,Jaccard)=+0.5026 vs. the original +0.6297 at n=4) — not a small-sample artifact. Alongside Claims-worth-opening #4 (addendum 22): the decoder-gradient-projection effect does NOT generalise to a plain, penalty-free TopK SAE ($d=0.2$–$0.5$, null, vs. $d$ up to $-14.3$ inside the vSAE family) — real but scoped to models carrying an activation penalty. Both written into the new mechanism paper (`workshop/mechanism_paper.tex`) alongside its three already-established parts (E1 null decomposition, A2/A3/A4 selection-churn dose-response, E1/E3 implementation-variance lower bound), with E4 reported as an unresolved case study. |
+| In progress | Nothing running. The mechanism paper is drafted and both strengthening experiments (Claims-worth-opening #4, A4's n=4 follow-up) are closed this session. Every box in every prior open checklist (E4's 5, Next steps A's 2, A3/A4) was already closed as of 2026-09-12. Remaining options: extending E4 box (5)'s check to the other 7 (dataset, pair) points, Claims-worth-opening #5 (seed-count survey), or further paper polish/compilation. |
+| Blocking | Nothing blocked on compute or data. No LaTeX toolchain is installed on this machine, so `workshop/mechanism_paper.tex` has been checked by hand (citations resolve, braces/environments balance, all `\ref`s have matching `\label`s) but never compiled to PDF. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -1155,30 +1210,44 @@ gap, with the FVE and Jaccard curves kneeing together. That is **Next steps A2**
 and does not touch `vsae_jump_relu.py`. Together the two axes are the mechanism
 section of the second paper: noise scale × selection hardness.
 
-### 4. "A one-line optimiser detail moves reconstruction more than the architecture
-under study" — ~30 min, converts a local finding into a general one
+### 4. ~~"A one-line optimiser detail moves reconstruction more than the architecture
+under study"~~ — ANSWERED 2026-09-13, RESULTS addendum 22
 
-The decoder-gradient projection is worth d = −14.3 on FVE in the vSAE. That is
-larger than most published architectural interventions, and it appears in no
-equations. Right now it reads as a bug in one file. One arm makes it general:
-**turn the projection off in `top_k.py` and train the baseline** — a plain TopK SAE
-with no penalty and no KL.
+**The projection's effect does not generalise; it interacts with the penalty.**
+`falsification/run_arm.py`'s `claim4_baseline_noproj` arm (13 seeds) is
+`baseline` — the clean, penalty-free TopK SAE — with
+`project_decoder_grad=False` (a new config flag on
+`top_k_with_feature_penalty.py`, default `True`, no existing checkpoint's
+behaviour changed). Turning the projection off in this penalty-free setting
+moves nothing: FVE $d=+0.3$ ($p=0.50$), `frac_recovered` $d=+0.5$
+($p=0.22$), both liveness thresholds $d=0.2$–$0.3$ ($p=0.53$/$0.63$), all at
+the same 13-seed/5.16σ-floor power that detected $d$ up to $-14.3$ for the
+identical one-line change inside the vSAE family (addendum 2/5). Both
+liveness thresholds agree (both null), so this is a robust null under F8b,
+not a shape change hiding behind one threshold.
 
-* Same magnitude there → the projection is a **generic and unreported factor in
-  TopK SAE training**, and any comparison between codebases that differ on it is
-  confounded. That is a claim about the field, not about this repo.
-* **The closing arm strengthened this claim's premise (2026-09-04).** The
-  projection is no longer the only such detail: the *initial weight draw* —
-  normalised Gaussian versus normalised uniform, identical in every summary
-  statistic anyone reports — is worth d = −4.7 on FVE and d = −7.3 on
-  `frac_recovered` on its own (RESULTS addendum 5). Two one-line details, neither
-  in any equations, each larger than many published architectural interventions.
-* Different magnitude → it **interacts with the penalty**, which is already the
-  leading interpretation given that the projection moved the vSAE *away* from
-  `e1_penalty` on liveness (0.1816 → 0.2197 against 0.1836). An interaction between
-  an optimiser detail and a loss term is a subtler and more interesting result.
+The second, not the first, of this entry's two original branches is what
+happened: **the projection is not a generic, unreported factor in TopK SAE
+training** — a comparison between two independently-implemented plain TopK
+SAEs that differ only on this line would not, on this evidence, be expected
+to differ measurably. It **interacts specifically with the penalty term**,
+consistent with the original observation that the projection moved the vSAE
+*away from*, not toward, `e1_penalty` on liveness (0.1816 → 0.2197 against
+0.1836) even though `e1_penalty` has had the projection on all along. This
+narrows what can honestly be claimed about the effect rather than weakening
+it, and is now written into the mechanism paper (`workshop/mechanism_paper.tex`,
+the subsection following the implementation-variance table in its
+"reported effect sizes" section).
 
-Either way the E1 decomposition gets a control arm it currently lacks.
+*Original framing, preserved for context:* the decoder-gradient projection
+was worth d = −14.3 on FVE in the vSAE — larger than most published
+architectural interventions, and it appears in no equations. The projection
+is no longer the only such one-line detail found this way: the *initial
+weight draw* — normalised Gaussian versus normalised uniform, identical in
+every summary statistic anyone reports — is worth d = −4.7 on FVE and
+d = −7.3 on `frac_recovered` on its own (RESULTS addendum 5). Three one-line
+details now measured this precisely, none in any equations, none reported
+in the literature that trains models with them.
 
 ### 5. "Most published SAE comparisons cannot reach the significance they imply" —
 desk work
