@@ -47,6 +47,12 @@ class ExperimentConfig:
     # comparable to the vSAE's kl_coeff. 0.0 = clean TopK baseline (E0);
     # set to the vSAE's beta for the degeneracy control (E1).
     activation_penalty: float = 0.0
+    # Whether to project the parallel-to-decoder-direction component out of the
+    # decoder gradient before the optimizer step. True reproduces every existing
+    # checkpoint's behaviour (this was previously unconditional). Claims-worth-
+    # opening #4 (PROJECT.md) sets this False to test whether vsae_topk.py's own
+    # project_decoder_grad effect generalises to a plain TopK SAE.
+    project_decoder_grad: bool = True
     threshold_beta: float = 0.999  # Threshold EMA coefficient
     threshold_start_step: int = 1000  # When to start threshold updates
     
@@ -198,6 +204,7 @@ class ExperimentRunner:
             lr=self.config.lr,  # Will be auto-computed if None
             auxk_alpha=self.config.auxk_alpha,
             activation_penalty=self.config.activation_penalty,
+            project_decoder_grad=self.config.project_decoder_grad,
             threshold_beta=self.config.threshold_beta,
             threshold_start_step=self.config.threshold_start_step,
             warmup_steps=warmup_steps,  # Explicitly override the problematic default

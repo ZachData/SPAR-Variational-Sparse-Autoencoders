@@ -1,0 +1,23 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "canrager/amazon_reviews_mcauley_1and5",
+  "column1_vals": [
+    "Books",
+    "CDs_and_Vinyl"
+  ],
+  "scr": {
+    "score": 0.14218737543557966,
+    "per_threshold": {
+      "scr_metric_threshold_2": -0.025000055879366136,
+      "scr_metric_threshold_5": 0.09374993015079233,
+      "scr_metric_threshold_10": 0.24374989289788157,
+      "scr_metric_threshold_20": 0.25624973457301087
+    },
+    "vsae_score": 0.057812326541134294,
+    "masked_top_usage_at_n": 0.15781236379404504,
+    "masked_random_at_n": 0.06218734563325105,
+    "vsae_minus_trained_small": -0.08437504889444536,
+    "trained_small_minus_masked_top_usage": -0.015624988358465375
+  }
+}

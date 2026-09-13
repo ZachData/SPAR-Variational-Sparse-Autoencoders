@@ -1,0 +1,23 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "LabHC/bias_in_bios_class_set1",
+  "column1_vals": [
+    "surgeon",
+    "psychologist"
+  ],
+  "scr": {
+    "score": -0.017307638081583615,
+    "per_threshold": {
+      "scr_metric_threshold_2": -0.18461526470073775,
+      "scr_metric_threshold_5": 0.09230763235036887,
+      "scr_metric_threshold_10": 0.046153930799479236,
+      "scr_metric_threshold_20": -0.023076850775444815
+    },
+    "vsae_score": 0.08846158607470707,
+    "masked_top_usage_at_n": 0.004807744109056305,
+    "masked_random_at_n": 0.0027885225318122547,
+    "vsae_minus_trained_small": 0.10576922415629068,
+    "trained_small_minus_masked_top_usage": -0.02211538219063992
+  }
+}

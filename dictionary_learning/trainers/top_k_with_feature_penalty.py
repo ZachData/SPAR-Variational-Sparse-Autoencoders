@@ -119,6 +119,18 @@ class TopKTrainingConfig:
     # be switched off, so every run of this trainer silently carried one and no
     # clean TopK baseline was obtainable from it.
     activation_penalty: float = 0.0
+    # Whether to project the decoder gradient's component parallel to each
+    # decoder direction out before the optimizer step (the standard TopK SAE
+    # gradient treatment: renormalising the decoder to unit norm every step
+    # without this projection means the optimiser fights the constraint, since
+    # the radial gradient component is applied and then immediately undone).
+    # Default True preserves every existing checkpoint's behaviour exactly --
+    # this trainer called remove_gradient_parallel_to_decoder_directions
+    # unconditionally before this flag existed. Claims-worth-opening #4
+    # (PROJECT.md) sets this False to test whether vsae_topk.py's own
+    # project_decoder_grad effect (RESULTS addendum 2/5, d up to -14.3 on FVE)
+    # is specific to that trainer or a generic factor in TopK SAE training.
+    project_decoder_grad: bool = True
     dead_feature_threshold: int = 1_000  # Steps before considering feature dead  #changed! was 10k
     
     def __post_init__(self):
@@ -608,13 +620,14 @@ class TopKTrainer(SAETrainer):
         loss.backward()
 
         # Gradient processing specific to Top-K SAE
-        self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
-            self.ae.decoder.weight,
-            self.ae.decoder.weight.grad,
-            self.ae.activation_dim,
-            self.ae.dict_size,
-        )
-        
+        if self.training_config.project_decoder_grad:
+            self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
+                self.ae.decoder.weight,
+                self.ae.decoder.weight.grad,
+                self.ae.activation_dim,
+                self.ae.dict_size,
+            )
+
         # Gradient clipping
         t.nn.utils.clip_grad_norm_(
             self.ae.parameters(), 
@@ -664,6 +677,8 @@ class TopKTrainer(SAETrainer):
             'threshold_beta': self.training_config.threshold_beta,
             'threshold_start_step': self.training_config.threshold_start_step,
             'gradient_clip_norm': self.training_config.gradient_clip_norm,
+            'activation_penalty': self.training_config.activation_penalty,
+            'project_decoder_grad': self.training_config.project_decoder_grad,
             'dead_feature_threshold': self.training_config.dead_feature_threshold,
             # Other attributes
             'layer': self.layer,
