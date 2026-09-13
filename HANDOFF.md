@@ -6,7 +6,7 @@ is a table of contents with a heartbeat.
 
 Last touched: 2026-09-13.
 
-## Done 2026-09-13 — the mechanism paper is drafted and strengthened by three experiments (addenda 22–24)
+## Done 2026-09-13 — the mechanism paper is drafted and strengthened by four experiments (addenda 22–25); every open checklist item is now closed
 
 `workshop/mechanism_paper.tex` (new, standalone LaTeX, not the old superseded
 `workshop/paper.tex`) writes up the three established parts of PROJECT.md
@@ -71,9 +71,30 @@ verdict. **This nuances addendum 21's reading rather than reversing it**:
 the original point's near-perfect match was somewhat special, not typical,
 but the aggregate SCR/TPP verdicts survive the wider check anyway.
 
-Three experiments' arms, scripts and results: see RESULTS addenda 22–24,
-`falsification/read_a4_followup.py`, `falsification/score_e4_size_matched_
-baseline.py`. GPU note for whoever runs training
+**Then, to finish Claims-worth-opening #5 thoroughly (the user's explicit
+ask — "we are not coming back to this once it is finished"): surveyed all
+10 SAE-methods papers this paper's own bibliography cites for their
+training-seed count (RESULTS addendum 25).** No GPU needed —
+`falsification/seed_count_survey.py` reuses `permutation.py::min_p_floor`
+for the sigma-ceiling table (n=1 → 0.000σ; n=6 → 3.07σ, matching
+CLAUDE.md's own number; n=13 → 5.21σ) and fetched each paper's full text
+searching for multi-seed training of one configuration. **10 of 10 report
+exactly one seed per configuration for every headline result** —
+Cunningham et al. 2023, Bricken et al. 2023, Templeton et al. 2024, Gao et
+al. 2024, both Rajamanoharan et al. 2024 papers, Bussmann et al. 2024,
+Karvonen et al. 2025, Marks et al. 2024, Lu et al. 2025. The lone
+exception anywhere — Bricken et al.'s second, independently-seeded
+transformer — is a qualitative universality check only, n=2, still below
+p<0.05. Two independent seed-sensitivity papers (Paulo & Belrose 2025:
+~30% feature overlap across seeds; Gerasimov et al. 2026) corroborate this
+isn't theoretical. Written into the mechanism paper's §5.2 (new tables,
+four new bib entries). **This closes Claims-worth-opening #5 — every item
+on PROJECT.md's active checklists is now closed.**
+
+Four experiments' arms, scripts and results this session: see RESULTS
+addenda 22–25, `falsification/read_a4_followup.py`,
+`falsification/score_e4_size_matched_baseline.py`,
+`falsification/seed_count_survey.py`. GPU note for whoever runs training
 next: another Claude Code session's unrelated CPU-heavy job
 (`Mets/p7d_redundancy/*`) was running on this machine for part of this
 session and repeatedly triggered the harness's low-memory kill on

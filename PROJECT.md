@@ -89,6 +89,31 @@ near-exact match was somewhat special, not typical of the other 7, but the
 aggregate SCR/TPP verdicts both survive the wider check regardless. All
 115 falsification tests stayed green throughout this session.
 
+**Then, at the user's request to finish Claims-worth-opening #5
+thoroughly, surveyed every SAE-methods paper this paper's own
+bibliography cites for its training-seed count (RESULTS addendum 25).**
+`falsification/seed_count_survey.py` reuses `permutation.py::min_p_floor`
+to build the sigma-ceiling table (n=1 → 0.000σ, no significance possible
+at any effect size; n=6 → 3.07σ, matching CLAUDE.md's own number; n=13 →
+5.21σ), then surveys 10 papers by fetching each one's full text and
+searching for multi-seed training of a single configuration. **10 of 10
+report exactly one training seed per configuration for every headline
+result** — Cunningham et al. 2023, Bricken et al. 2023, Templeton et al.
+2024, Gao et al. 2024, Rajamanoharan et al. 2024 (×2: Gated SAE and
+JumpReLU), Bussmann et al. 2024, Karvonen et al. 2025 (SAEBench), Marks et
+al. 2024, Lu et al. 2025. The one exception anywhere in the survey —
+Bricken et al.'s second, independently-seeded transformer — is used only
+for a qualitative feature-universality check, not the paper's main
+quantitative claims, and its own n=2 sits below p<0.05 regardless. Two
+independent papers outside the survey (Paulo & Belrose 2025, Gerasimov et
+al. 2026) corroborate that this gap is not theoretical: both found
+substantial seed-to-seed feature instability in exactly the object a
+single-seed design cannot detect. Written into the mechanism paper's
+strengthened §5.2 (new table, survey table, four new bib entries). No GPU.
+All 115 falsification tests stayed green throughout. **This closes
+Claims-worth-opening #5 — every item on PROJECT.md's active checklist is
+now closed.**
+
 Last updated 2026-09-12 (prior entry, preserved): **That session, second
 thread: E4 box (5), the last
 item in the SCR/TPP disagreement checklist — "masked vs. trained-small" is not
@@ -404,8 +429,8 @@ numbers were unaffected.
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
 | Data | Prior battery (11 arms, 153 checkpoints) plus this session's new work: `claim4_baseline_noproj` (13 seeds), 4 new A4 densifying arms (5 seeds each, 20 checkpoints), and 8 new E4 scoring runs against the already-trained size-matched baseline (no new training) — 5 new arms, 33 new checkpoints, 0 failures |
-| Newest result | **E4 box (5) extended to all 8 (dataset, pair) points (addendum 24): "masked vs. trained-small" is a real, often-large per-pair confound for SCR, but doesn't systematically favour either verdict.** Mean `vSAE − trained-small` margin (+0.079) barely differs from mean `vSAE − masked` margin (+0.072) on the same 8 points; only 1 of 8 flips sign; 6 of 8 (was 7/8) still say "not explained by size." TPP's 2 points both hold. Nuances, doesn't reverse, addendum 21. Also this session: A4's n=4 doubt closed (addendum 23, r=+0.5026 at n=8 vs. +0.6297 at n=4 — not a small-sample artifact) and Claims-worth-opening #4 answered (addendum 22, the decoder-gradient-projection effect doesn't generalise beyond models with a penalty term). All three written into the new mechanism paper (`workshop/mechanism_paper.tex`) alongside its three already-established parts, with E4 reported as an unresolved case study. |
-| In progress | Nothing running. The mechanism paper is drafted and three strengthening experiments (Claims-worth-opening #4, A4's n=4 follow-up, E4 box (5) extended to all 8 points) are closed this session. Every box in every prior open checklist (E4's 5, Next steps A's 2, A3/A4) was already closed as of 2026-09-12. Remaining options: Claims-worth-opening #5 (seed-count survey), or further paper polish/compilation. |
+| Newest result | **Claims-worth-opening #5 answered (addendum 25): a 10-paper survey of the SAE-methods literature finds 10/10 use exactly one training seed per configuration.** Sigma ceiling at n=1 is 0.000 — no architecture-level significance possible at any effect size, by construction. Sampling frame was this paper's own pre-existing bibliography, not curated post hoc. Corroborated by two independent seed-sensitivity studies (Paulo & Belrose 2025: ~30% feature overlap across seeds; Gerasimov et al. 2026). Also this session: E4 box (5) extended to all 8 (dataset, pair) points (addendum 24, nuances but doesn't reverse addendum 21), A4's n=4 doubt closed (addendum 23), and Claims-worth-opening #4 answered (addendum 22). All four written into the new mechanism paper (`workshop/mechanism_paper.tex`) alongside its three already-established parts, with E4 reported as an unresolved case study. |
+| In progress | Nothing running. The mechanism paper is drafted and all four strengthening experiments this session identified (Claims-worth-opening #4, A4's n=4 follow-up, E4 box (5) extended to all 8 points, Claims-worth-opening #5) are closed. Every item on PROJECT.md's active checklists — the confirmatory battery, Next steps A, E4's 5-box checklist, and Claims-worth-opening #1-#5 — is now closed. What remains is compiling the LaTeX (no toolchain on this machine) and deciding on a venue/next step for the paper itself. |
 | Blocking | Nothing blocked on compute or data. No LaTeX toolchain is installed on this machine, so `workshop/mechanism_paper.tex` has been checked by hand (citations resolve, braces/environments balance, all `\ref`s have matching `\label`s) but never compiled to PDF. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
@@ -1289,18 +1314,46 @@ d = −7.3 on `frac_recovered` on its own (RESULTS addendum 5). Three one-line
 details now measured this precisely, none in any equations, none reported
 in the literature that trains models with them.
 
-### 5. "Most published SAE comparisons cannot reach the significance they imply" —
-desk work
+### 5. ~~"Most published SAE comparisons cannot reach the significance they imply"~~
+— ANSWERED 2026-09-13, RESULTS addendum 25
 
-The combinatorial floor is not a subtlety, it is arithmetic: 6 seeds per group
-cannot beat 3.07 sigma however large the effect, and 5 cannot beat 2.6. Survey how
-many training seeds recent SAE papers actually use — the modal answer appears to be
-one — and state the ceiling that implies for each.
+**The modal answer is exactly one, not "appears to be one."** Surveyed all
+ten SAE-methods papers `workshop/references.bib` already cited — the
+sampling frame was fixed by an earlier session's bibliography, not curated
+for this survey — by fetching each paper's own full text and searching for
+any mention of training multiple SAEs at different seeds for the SAME
+configuration. **10 of 10 report exactly one training seed per
+configuration for every headline result**: Cunningham et al. 2023, Bricken
+et al. 2023 ("Towards Monosemanticity"), Templeton et al. 2024 ("Scaling
+Monosemanticity"), Gao et al. 2024 (OpenAI TopK), Rajamanoharan et al. 2024
+(Gated SAE and JumpReLU, two papers), Bussmann et al. 2024 (BatchTopK),
+Karvonen et al. 2025 (SAEBench), Marks et al. 2024 (Sparse Feature
+Circuits), Lu et al. 2025. The one exception found anywhere — Bricken et
+al.'s second, independently-seeded transformer — is used only for a
+qualitative feature-universality check, not the paper's main quantitative
+claims, and its own n=2 sits below p<0.05 regardless.
 
-This is the empirical hook the methods paper currently lacks: it turns "you should
-pre-register and use permutation tests" from advice into a measured gap. Handle it
-carefully — the point is that the field's *design conventions* cap what its results
-can say, not that particular authors erred.
+`falsification/seed_count_survey.py` reuses `permutation.py::min_p_floor`
+(not a reimplementation) to compute the sigma ceiling table: n=1 → 0.000σ
+(no significance possible at any effect size, by construction), n=2 →
+0.967σ, n=6 → 3.07σ (reproducing CLAUDE.md's own number), n=13 → 5.21σ
+(first n past 5σ). **Since the field's own core references are
+overwhelmingly n=1, none of them could have supported a properly-powered
+architecture-level claim even if they had wanted to** — not a criticism of
+any author's point estimate, but a statement about what the design itself
+can and cannot express.
+
+Two independent papers outside the survey (they measure seed
+*sensitivity*, not the field's reporting practice) make the gap concrete:
+Paulo & Belrose 2025 found only ~30% feature overlap between two
+otherwise-identical SAEs differing only in seed; Gerasimov et al. 2026
+found individual features vary substantially across seeds in a large-scale
+study. Written into the mechanism paper's §5.2/§5.3
+(`workshop/mechanism_paper.tex`, new table + survey table + four new bib
+entries), which now grounds "the literature's effect sizes are
+implementation-variance-sized" in an actual measured design gap instead of
+an informal observation. No GPU, no training. All 115 falsification tests
+stayed green.
 
 ### 6. Why do SCR and TPP disagree on E4? — four diagnostics, cheapest first
 

@@ -69,7 +69,11 @@ sparsity collapse, not selection churn. \textbf{Third}, every one of the
 implementation details in the first claim, run individually as a factor, moves
 metrics by $d\approx 5$--$19$ at $5\sigma$ --- the same order of magnitude as,
 or larger than, published architectural claims in this literature, none of
-them stated in any equation. We close with a case study (SAEBench's SCR and
+them stated in any equation, and a design-level survey of ten SAE-methods
+papers (every one cited in our own related work) finds \emph{ten of ten}
+report a single training seed per configuration for their headline
+results --- a design that cannot express statistical significance for an
+architecture-level claim at any effect size. We close with a case study (SAEBench's SCR and
 TPP metrics scored against the same two checkpoints, the same dataset, the
 same masking grid) where two standard downstream metrics disagree in
 direction on whether the vSAE's apparent advantage survives a dictionary-size
@@ -177,7 +181,11 @@ actually stand behind.
 \item A lower bound on implementation variance in this literature: five
   one-line, unremarked implementation choices --- none in any stated
   loss equation --- each move a standard liveness metric by $d\ge 4.7$, up to
-  $d=19.3$ for the single largest, at $5\sigma$ (\S\ref{sec:variance}).
+  $d=19.3$ for the single largest, at $5\sigma$
+  (\S\ref{sec:variance}), and a ten-paper design-level survey
+  (\S\ref{sec:seedsurvey}) showing the field's own core references
+  overwhelmingly use a single-seed design that cannot detect effects of
+  this size, or any size, at any level of statistical significance.
 \item A worked case study in metric disagreement: two standard
   interpretability metrics score the same two checkpoints oppositely on
   whether a result survives a dictionary-size control, and the disagreement
@@ -836,24 +844,119 @@ either direction to further motivate that mechanism; the result is a clean
 null, not a smaller-but-present effect.)
 
 \subsection{A design-level point this implies}
+\label{sec:seedsurvey}
 
 None of these effects required an unusual amount of statistical power to
 detect; they were detected at the same power ($13$ seeds/arm, $5.03$--
 $5.16\sigma$) used throughout this paper. The combinatorial floor on that
 power is worth stating plainly, because it caps what \emph{any} design with
-fewer seeds can claim regardless of the underlying effect size. A two-sided
-seed-permutation test's minimum attainable $p$-value is $2/\binom{2n}{n}$;
-at $n=6$ per group (a seed count we observed informally to be common in
-this literature) that floor is $p=0.00216$, or $3.07\sigma$ --- not because
-the effect is small, but because the design cannot express more evidence
-than that, however large $d$ actually is. Thirteen seeds per group is the
-first $n$ at which this floor drops below the conventional $5\sigma$
-threshold. Every effect size in this paper is real in the sense that it
-survived a design capable of expressing $5\sigma$; the implementation
-choices catalogued in Table~\ref{tab:variance} are large enough that most
-published single-seed or few-seed comparisons in this space could not, even
-in principle, distinguish them from the architectural effect the comparison
-was nominally about.
+fewer seeds can claim, regardless of the underlying effect size. A two-sided
+seed-permutation test's minimum attainable $p$-value is $2/\binom{2n}{n}$
+for $n$ seeds per group (Table~\ref{tab:seedceiling}): at $n=6$ that floor is
+$p=0.00216$, i.e.\ $3.07\sigma$ --- not because the effect is small, but
+because the design cannot express more evidence than that, however large
+$d$ actually is. Thirteen seeds per group is the first $n$ at which this
+floor drops below the conventional $5\sigma$ threshold; at $n=1$, the floor
+is $p=1$ ($0\sigma$) --- a single-seed design cannot express \emph{any}
+level of statistical significance for a claim of the form ``architecture A
+beats architecture B,'' independent of how large the true effect is.
+
+\begin{table}[h]
+\centering
+\caption{The sigma ceiling of a two-sided seed-permutation test, by seeds
+per group. Same formula ($2/\binom{2n}{n}$) as every confirmatory
+comparison in this paper.}
+\label{tab:seedceiling}
+\begin{tabular}{cccccccc}
+\toprule
+$n$/group & 1 & 2 & 3 & 5 & 6 & 10 & 13 & 20 \\
+\midrule
+sigma ceiling & $0.00$ & $0.97$ & $1.65$ & $2.66$ & $3.07$ & $4.40$ & $5.21$ & $6.75$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We checked how large this gap actually is by surveying every SAE-methods
+paper cited in this paper's own related work (\S\ref{sec:related}) --- a
+sampling frame fixed by that bibliography, not curated for this
+subsection --- for how many independently-seeded training runs each
+reports for a single hyperparameter configuration
+(Table~\ref{tab:seedsurvey}). \textbf{Ten of ten report exactly one.} The
+one exception found anywhere in the survey ---
+\citet{bricken2023monosemanticity}'s second, independently-seeded
+transformer --- is used only for a qualitative feature-universality check,
+not the paper's main quantitative claims, and its own $n=2$ sits below the
+conventional $p<0.05$ threshold regardless. Several of these papers train
+\emph{many} SAEs (SAEBench trains ``over 200''
+\citep{karvonen2025saebenchcomprehensivebenchmarksparse}; JumpReLU trains
+``multiple 131k-width SAEs... of each type''
+\citep{rajamanoharan2024jumprelu}), but as a sweep over hyperparameters ---
+width, sparsity, architecture --- not as repeated seeds of one
+configuration; that breadth buys coverage across the hyperparameter space,
+not statistical power for any single comparison within it.
+
+\begin{table}[h]
+\centering
+\caption{Independently-seeded training runs per configuration, surveyed
+across every SAE-methods paper this paper cites. Full text of each paper
+searched via its arXiv HTML (two Anthropic/Transformer-Circuits posts
+exceeded a direct-fetch size limit; those two entries rest on multiple
+independent web searches quoting the papers' own methodology instead, and
+are flagged as such).}
+\label{tab:seedsurvey}
+\begin{tabular}{lc}
+\toprule
+Paper & seeds/configuration \\
+\midrule
+\citet{cunningham2023sparse} & 1 \\
+\citet{bricken2023monosemanticity} & 1 (2 for one supplementary check only)$^{*}$ \\
+\citet{templeton2024scaling} & 1$^{*}$ \\
+\citet{gao2024scalingevaluatingsparseautoencoders} & 1 \\
+\citet{rajamanoharan2024gated} & 1 \\
+\citet{rajamanoharan2024jumprelu} & 1 \\
+\citet{bussmann2024batchtopk} & 1 \\
+\citet{karvonen2025saebenchcomprehensivebenchmarksparse} & 1 \\
+\citet{marks2025sparsefeaturecircuitsdiscovering} & 1 \\
+\citet{lu2025sparseautoencodersagain} & 1 \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+\footnotesize{$^{*}$Not backed by a direct full-text fetch; see caption.}
+\end{table}
+
+One nuance is worth stating precisely rather than flattening: JumpReLU
+\emph{does} report binomial confidence intervals for a manual human-
+interpretability rating study \citep{rajamanoharan2024jumprelu} ---
+evaluation-level uncertainty, not training-seed-level uncertainty. This is
+exactly the distinction \S\ref{app:stats} draws (a token- or rater-level
+test estimates evaluation noise and cannot support an architecture-level
+claim) showing up unprompted in the surveyed literature: eval-level
+uncertainty quantification is not rare here; architecture-level (seed)
+uncertainty, this survey suggests, is close to absent.
+
+This gap is not merely theoretical. Two papers outside the survey above ---
+they measure seed \emph{sensitivity} itself, not the field's reporting
+practice, so they are not part of Table~\ref{tab:seedsurvey} --- found
+substantial seed-to-seed instability in exactly the object a single-seed
+design cannot detect. \citet{paulo2025sae} found only $\sim30\%$ feature
+overlap between two otherwise-identical $131$k-latent SAEs differing only
+in random seed (Llama-3-8B, replicated across multiple layers, LLMs, and
+datasets); \citet{gerasimov2026unstable} found individual features vary
+substantially across seeds in a large-scale multi-seed study, though they
+cluster into reproducible lower-rank subspaces. Neither result was designed
+to be detectable by any of the ten papers surveyed above, and both found
+it anyway once someone looked.
+
+Every effect size in this paper is real in the sense that it survived a
+design capable of expressing $5\sigma$; the implementation choices
+catalogued in Table~\ref{tab:variance} are large enough that a design
+matching the field's own modal practice ($n=1$) could not, even in
+principle, distinguish them from the architectural effect a comparison was
+nominally about --- not because those studies' point estimates are wrong,
+but because a claim of the form ``architecture A beats architecture B''
+is not a claim a single-seed design can license, independent of the true
+effect size.
 
 \section{A case study in metric disagreement: SCR and TPP on the same checkpoints}
 \label{sec:e4}
@@ -1104,17 +1207,29 @@ claim.
 Sparse autoencoders for language-model interpretability were introduced by
 \citet{sharkey2022taking} and \citet{cunningham2023sparse}, building on the
 superposition hypothesis of \citet{elhage2022superposition} and scaled by
-\citet{bricken2023monosemanticity}; Top-K sparsity, which this paper's
-baseline uses throughout, is due to
+\citet{bricken2023monosemanticity} and, to production-model scale,
+\citet{templeton2024scaling}. Top-K sparsity, which this paper's baseline
+uses throughout, is due to
 \citet{gao2024scalingevaluatingsparseautoencoders}, who also introduce the
 AuxK dead-feature revival mechanism this paper's \S\ref{sec:e4} discusses as
-a confound. BatchTopK~\citep{bussmann2024batchtopk} and
-JumpReLU~\citep{rajamanoharan2024jumprelu} are the two alternative selection
-mechanisms this paper's \S\ref{sec:mechanism} tests against Top-K's own
-noise-robustness. SAEBench~\citep{karvonen2025saebenchcomprehensivebenchmarksparse}
-is the source of the SCR and TPP metrics scored in \S\ref{sec:e4}, and of the
+a confound. Gated SAEs~\citep{rajamanoharan2024gated}, BatchTopK
+\citep{bussmann2024batchtopk} and JumpReLU~\citep{rajamanoharan2024jumprelu}
+are, respectively, the sparsity-penalty-side and (for the latter two) the
+selection-mechanism-side alternatives this paper's \S\ref{sec:mechanism} and
+\S\ref{sec:seedsurvey} draw on; \citet{lu2025sparseautoencodersagain} is a
+recent critical re-examination of SAE evaluation practice in the same spirit
+this paper's \S\ref{sec:e4} and \S\ref{sec:seedsurvey} are written in.
+SAEBench~\citep{karvonen2025saebenchcomprehensivebenchmarksparse} is the
+source of the SCR and TPP metrics scored in \S\ref{sec:e4}, and of the
 sparse feature circuit evaluation methodology this codebase's downstream
-tooling is built on~\citep{marks2025sparsefeaturecircuitsdiscovering}. The
+tooling is built on~\citep{marks2025sparsefeaturecircuitsdiscovering}.
+\S\ref{sec:seedsurvey}'s survey of these ten papers' own seed-count
+practice is corroborated by two independent studies of SAE seed
+sensitivity itself, neither part of the survey: \citet{paulo2025sae} found
+only $\sim30\%$ feature overlap between otherwise-identical SAEs differing
+only in random seed, and \citet{gerasimov2026unstable} found individual
+features vary substantially across seeds while clustering into
+reproducible lower-rank subspaces. The
 variational autoencoder and its reparameterisation
 trick~\citep{kingma2013autoencoding} and the $\beta$-weighted KL trade-off
 this paper's Eq.~\ref{eq:vsae} follows~\citep{higgins2017betavae} are the two

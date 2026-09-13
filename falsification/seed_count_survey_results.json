@@ -1,0 +1,101 @@
+{
+  "sigma_ceiling_by_n": {
+    "1": 0.0,
+    "2": 0.967421566101701,
+    "3": 1.6448536269514729,
+    "4": 2.189349755522085,
+    "5": 2.6547590333403264,
+    "6": 3.0666803114797605,
+    "7": 3.439518208201051,
+    "8": 3.782277219225718,
+    "9": 4.101008553706461,
+    "10": 4.399999991799904,
+    "11": 4.682415396090482,
+    "12": 4.950665238079556,
+    "13": 5.206634238220605,
+    "15": 5.687470984873951,
+    "20": 6.7527299062658255,
+    "25": 7.680705702787995,
+    "30": 8.513258606223607,
+    "50": 11.263710278855811
+  },
+  "survey": [
+    {
+      "paper": "Cunningham et al. 2023, \"Sparse Autoencoders Find Highly Interpretable Features in Language Models\"",
+      "arxiv": "2309.08600",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search (arXiv HTML) finds no mention of training multiple SAEs with different seeds for one configuration, no seed-variance error bars; only a reproducibility footnote pointing at the code release, no seed count stated."
+    },
+    {
+      "paper": "Bricken et al. 2023, \"Towards Monosemanticity\" (Anthropic)",
+      "arxiv": null,
+      "url": "https://transformer-circuits.pub/2023/monosemantic-features",
+      "seeds_per_config": 1,
+      "seeds_special_case": 2,
+      "evidence": "All headline results (loss curves, feature counts, interpretability case studies) are reported on a single transformer/dictionary pair, model 'A'. A SECOND, independently-seeded transformer ('B') is trained and its dictionaries compared against A's ONLY for a supplementary feature-universality check ('does the same feature reappear under a different seed?') -- itself descriptive (which features match, not a significance test), not applied to the paper's main quantitative claims. This is the single largest seed count found anywhere in this survey, and it is n=2, used for one qualitative check only. (Full-text fetch of the paper itself was not possible -- the page exceeds this session's fetch size limit; this entry rests on multiple independent web searches quoting the paper's own stated methodology, cross-checked against each other for consistency. Flagged explicitly as the one entry not backed by a direct full-text read.)"
+    },
+    {
+      "paper": "Templeton et al. 2024, \"Scaling Monosemanticity\" (Anthropic, Claude 3 Sonnet)",
+      "arxiv": null,
+      "url": "https://transformer-circuits.pub/2024/scaling-monosemanticity",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search (arXiv HTML mirror) finds the three headline SAEs (1M/4M/34M features) are each a single training run; a learning-rate sweep chooses one value by lowest loss, not by aggregating across seeds. No seed-variance reporting found."
+    },
+    {
+      "paper": "Gao et al. 2024, \"Scaling and evaluating sparse autoencoders\" (OpenAI, TopK)",
+      "arxiv": "2406.04093",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search finds no mention of multi-seed training, variance, or error bars across independently trained models anywhere in main text or appendices."
+    },
+    {
+      "paper": "Rajamanoharan et al. 2024, \"Improving Dictionary Learning with Gated Sparse Autoencoders\" (DeepMind)",
+      "arxiv": "2404.16014",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search finds no mention of multi-seed training, variance, or error bars across independently trained models anywhere in main text or appendices."
+    },
+    {
+      "paper": "Rajamanoharan et al. 2024, \"Jumping Ahead: Improving Reconstruction Fidelity with JumpReLU Sparse Autoencoders\" (DeepMind)",
+      "arxiv": "2407.14435",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search finds 'multiple 131k-width SAEs (with a range of sparsity levels) of each type' trained to build the sparsity-fidelity curves -- a sweep over sparsity, not repeated seeds of one point. Binomial confidence intervals ARE reported for a manual human-interpretability rating study (an evaluation-level, not a training-seed-level, uncertainty), consistent with CLAUDE.md's own token/seed distinction: eval-level uncertainty is not rare in this literature, architecture-level (seed) uncertainty essentially is."
+    },
+    {
+      "paper": "Bussmann et al. 2024, \"BatchTopK Sparse Autoencoders\"",
+      "arxiv": "2412.06410",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search finds no mention of multi-seed training, variance, or error bars across independently trained models anywhere in main text or Appendix A.1's hyperparameter/dataset details."
+    },
+    {
+      "paper": "Karvonen et al. 2025, \"SAEBench: A Comprehensive Benchmark for Sparse Autoencoders\"",
+      "arxiv": "2503.09532",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search finds 'over 200 SAEs' trained -- a sweep over widths (4k/16k/65k) and sparsities across multiple architectures, i.e. 200+ distinct CONFIGURATIONS, not repeated seeds of the same configuration. No seed-variance reporting found for any single configuration."
+    },
+    {
+      "paper": "Marks et al. 2024, \"Sparse Feature Circuits\"",
+      "arxiv": "2403.19647",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search finds no mention of multi-seed training, variance, or error bars across independently trained models anywhere in main text or appendices; uses existing SAE suites (their own Pythia-70M SAEs and Gemma Scope), one each."
+    },
+    {
+      "paper": "Lu et al. 2025, \"Sparse Autoencoders, Again?\"",
+      "arxiv": "2506.04859",
+      "seeds_per_config": 1,
+      "evidence": "Full-text search (main text + Appendix D) finds results presented as single values per method throughout, no confidence intervals or variance measures from repeated training runs."
+    }
+  ],
+  "corroborating_evidence": [
+    {
+      "paper": "Paulo & Belrose 2025, \"Sparse Autoencoders Trained on the Same Data Learn Different Features\"",
+      "arxiv": "2501.16615",
+      "finding": "Only ~30% feature overlap between two otherwise-identical 131k-latent SAEs trained on Llama-3-8B activations, differing only in random seed; observed across multiple layers, three LLMs, two datasets, and several SAE architectures."
+    },
+    {
+      "paper": "Gerasimov et al. 2026, \"Unstable Features, Reproducible Subspaces: Understanding Seed Dependence in Sparse Autoencoders\"",
+      "arxiv": "2606.12138",
+      "finding": "Individual features vary substantially across training seeds and cluster into reproducible lower-rank subspaces; a large-scale study across seeds, models, layers, dictionary sizes, and SAE variants."
+    }
+  ],
+  "n_papers": 10,
+  "n_papers_seeds_eq_1": 10
+}
