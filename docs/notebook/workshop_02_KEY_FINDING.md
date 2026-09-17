@@ -1,5 +1,11 @@
 # The finding that should define the paper
 
+> **Frozen 2026-09-17 — historical record.** This file is the project's working
+> notebook as it stood when the work finished, moved here verbatim from `workshop/02_KEY_FINDING.md`.
+> It is not maintained. The finished account is in `docs/RESULTS.md`,
+> `docs/METHODS.md` and `docs/ERRATA.md`; paths and file names it mentions may
+> have moved (see `docs/notebook/README.md`).
+
 **In every model you evaluated, no sampling ever occurred. The "variational" SAE
 is, operationally, a TopK SAE with an L2 penalty on its activations.**
 

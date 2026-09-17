@@ -1,5 +1,11 @@
 # REMEDIATION — tracking the fixes from the 2026-09-02 sweep
 
+> **Frozen 2026-09-17 — historical record.** This file is the project's working
+> notebook as it stood when the work finished, moved here verbatim from `falsification/REMEDIATION.md`.
+> It is not maintained. The finished account is in `docs/RESULTS.md`,
+> `docs/METHODS.md` and `docs/ERRATA.md`; paths and file names it mentions may
+> have moved (see `docs/notebook/README.md`).
+
 Companion to `falsification/FINDINGS_2026-09-02.md`, which records *what is wrong*
 and the evidence. This file tracks *what is being done about it*.
 

@@ -1,5 +1,11 @@
 # GPU runs — launch these first, they train while I write
 
+> **Frozen 2026-09-17 — historical record.** This file is the project's working
+> notebook as it stood when the work finished, moved here verbatim from `workshop/01_RUNS.md`.
+> It is not maintained. The finished account is in `docs/RESULTS.md`,
+> `docs/METHODS.md` and `docs/ERRATA.md`; paths and file names it mentions may
+> have moved (see `docs/notebook/README.md`).
+
 > **READ `02_KEY_FINDING.md` FIRST.** Every evaluated model used `var_flag=0`,
 > which means `z = mu` and **no sampling ever happened**. The evaluated "vSAE" is a
 > TopK SAE with an L2 activation penalty. This reorders the runs below: the

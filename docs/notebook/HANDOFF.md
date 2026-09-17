@@ -1,5 +1,11 @@
 # HANDOFF — cold-start orientation
 
+> **Frozen 2026-09-17 — historical record.** This file is the project's working
+> notebook as it stood when the work finished, moved here verbatim from `HANDOFF.md`.
+> It is not maintained. The finished account is in `docs/RESULTS.md`,
+> `docs/METHODS.md` and `docs/ERRATA.md`; paths and file names it mentions may
+> have moved (see `docs/notebook/README.md`).
+
 Short by design. Read this first, act from `PROJECT.md`. When this file and
 `PROJECT.md` disagree, `PROJECT.md` wins — it is the living document and this one
 is a table of contents with a heartbeat.

@@ -4,42 +4,47 @@ Started 2026-09-17. The science is done; this file tracks the work of making the
 repository read as finished. Check boxes as they land; every step is a PR onto
 `master`. When everything is checked, this file moves to `docs/notebook/`.
 
-## STATUS — read this first (updated 2026-09-17, end of session 2)
+## STATUS — read this first (updated 2026-09-17, end of session 3)
 
-**Where we are:** Steps 1 and 2 are done except for step 1's four editorial
-calls (listed under it; the author's, not made unilaterally). Step 1 is
-**PR #8** (`finishing-plan`); step 2 is branch `finishing-verifiability`,
-stacked on it, opened as its own PR. Merge #8 first, then the step-2 PR.
+**Where we are:** Steps 1–3 done. Three stacked PRs: **#8** `finishing-plan`
+(step 1), **#9** `finishing-verifiability` (step 2, base #8), **#10**
+`finishing-docs` (step 3, base #9). Merge in that order, retargeting each to
+`master` as its base lands.
 
-**What step 2 delivered:** `experiments/**` metadata JSONs and analysis
-`.npz` are committed (the `.npz` is where the liveness counts live, so the
-plan's "leave .npz ignored" was wrong and was overridden — see the commit);
-`reproduce.py --check` rebuilds all four paper figures and every numeric
-table from that data on a CPU in ~45 s and asserts 125 printed numbers
-against the paper; `docs/REPRODUCE.md` maps each figure/table to its data
-and script. The figures were regenerated at full text width with
-paper-facing titles (no "A2:"/`log_var_init=`), and the four
-`\includegraphics` lines now use `width=\textwidth`. Two stale numbers the
-check surfaced were fixed in the paper: Table 3's −2.0 row used the
-uncorrected `e2_sampling_only` FVE (0.4841) while Table 2 used the
-corrected one (0.4863); and the E2 "total gap" was 0.4410, the arithmetic
-gives 0.4420. Neither changes any downstream number (r stays +0.9993).
+**Tabled by the author (2026-09-17):** the paper rewrite. Step 1's four
+editorial calls (abstract length, author block, the "d ≈ 16" phrasing;
+the figure item is done) and any fuller revision of
+`workshop/mechanism_paper.tex` wait a few days. Do not start them in a
+session that was not asked to. The README's citation block carries the
+same author placeholder and changes with it.
 
-**Next action:** step 3, "Docs — 11 files → 5". `docs/` now exists with
-`REPRODUCE.md` in it; start with `docs/RESULTS.md` (from
-`falsification/RESULTS_2026-09-03.md` + PROJECT.md's "What is established"),
-then `METHODS.md`, `ERRATA.md`, the notebook move, README, CLAUDE.md.
-`reproduce.py --write docs/reproduced_tables.md` gives you every table as
-Markdown to paste from.
+**What step 3 delivered:** `docs/RESULTS.md` (findings in final form, past
+tense, sectioned by finding with a pointer to the notebook addenda each
+rests on), `docs/METHODS.md` (thesis, framework, floors, simulation
+results, measurement conventions, the pre-registration verbatim with
+outcomes beside it), `docs/ERRATA.md` (preprint corrections, every bug with
+what it touched and its status, replaced metrics, retracted results,
+SAEBench modifications), `docs/REPRODUCE.md` with RUNBOOK folded in,
+`docs/notebook/` holding PROJECT / HANDOFF / RESULTS / FINDINGS /
+REMEDIATION / RUNBOOK / OVERVIEW / the workshop notes and draft verbatim
+under a frozen header plus a `README.md` index (and the old README's
+session log), `README.md` rewritten as the front door, `CLAUDE.md` cut to a
+pointer at `docs/ERRATA.md` plus the conventions. Code docstrings that cite
+"PROJECT.md" / "RESULTS addendum N" / "REMEDIATION F6" were left alone;
+`docs/notebook/README.md` resolves them.
 
-**Environment for the next session:** use `/usr/bin/python3` (torch 2.10
-cu128 + nnsight in `~/.local`), *not* bare `python` (miniforge base, CPU-only,
-no nnsight). `reproduce.py` itself needs only numpy/scipy/matplotlib.
-`./workshop/build_paper.sh` builds the paper. `pytest falsification/tests/ -q`
-→ 115 must stay green; `python reproduce.py --check` must exit 0.
+**Next action:** step 4, "Hygiene — one PR", starting with `pyproject.toml`
+and the CI workflow (`pytest falsification/tests/` + `python reproduce.py
+--check` on push/PR to `master`). Check the `wandb` sweep plumbing before
+cutting it; `git log -S` is enough.
 
-**Do not** re-audit the repo, re-read the paper, or re-derive the plan — all
-of that is below and in PRs #8 and #9. Start at step 3.
+**Environment for the next session:** `/usr/bin/python3` for anything with
+torch; `reproduce.py` needs only numpy/scipy/matplotlib. `pytest
+falsification/tests/ -q` → 115 must stay green; `python reproduce.py
+--check` must exit 0.
+
+**Do not** re-audit the repo, re-read the paper, or re-derive the plan.
+Start at step 4.
 
 ## Why
 
@@ -99,13 +104,13 @@ Everything below serves those three.
 - [x] `docs/REPRODUCE.md` — figure/table → arms → data → function → equivalent script, plus the list of numbers that still need a GPU and a checkpoint.
 
 ### 3. Docs — 11 files → 5, frozen tense
-- [ ] `README.md` — front door: the claim under test, the six findings (one paragraph + figure each), reproduce, cite. Today's status table becomes a *final state* block; the session log goes to the notebook.
-- [ ] `docs/RESULTS.md` — findings in final form, past tense, no addendum numbering (from `RESULTS_2026-09-03.md` + PROJECT's "What is established")
-- [ ] `docs/METHODS.md` — pre-registration, statistical design, power analysis (PROJECT.md's frozen lower half)
-- [ ] `docs/ERRATA.md` — CLAUDE.md's landmines + corrections to the preprint, rewritten for a human reader
-- [ ] `docs/REPRODUCE.md` — RUNBOOK cleaned: environment (`/usr/bin/python3`, pinned versions), one command per figure/table
-- [ ] `docs/notebook/` — `PROJECT.md`, `HANDOFF.md`, `RESULTS_2026-09-03.md`, `FINDINGS_2026-09-02.md`, `REMEDIATION.md`, `OVERVIEW.md`, `workshop/00–02_*.md`, `workshop/paper.tex` moved **verbatim**, each with a one-line "frozen <date>; historical record" header
-- [ ] `CLAUDE.md` shrinks to a pointer at `docs/ERRATA.md` + the working conventions
+- [x] `README.md` — front door: the claim under test, the six findings (one paragraph each, the A2 figure inline), reproduce, layout, framework quick start, cite. No status table; the session log went to `docs/notebook/README.md`.
+- [x] `docs/RESULTS.md` — findings in final form, past tense; each section ends with a one-line pointer to the notebook addenda it rests on (a reviewer needs the trail), and a "predicted and wrong" section keeps the falsified predictions
+- [x] `docs/METHODS.md` — thesis, framework, combinatorial floors, the three simulation results, κ/α, measurement conventions, training config, the pre-registration verbatim with outcomes beside it
+- [x] `docs/ERRATA.md` — preprint corrections, every code bug (what / what it touched / status), replaced metrics, retracted results, SAEBench modifications (verified against `git log -- SAEBench-main`)
+- [x] `docs/REPRODUCE.md` — RUNBOOK folded in (GPU commands, framework snippet); pinned versions are step 4's `requirements-lock.txt`
+- [x] `docs/notebook/` — all eleven files moved with `git mv`, verbatim under a frozen header; `README.md` index explains the old names code comments still cite
+- [x] `CLAUDE.md` → pointer at `docs/` + conventions (added: the paper's numbers are checked by `reproduce.py`, not typed)
 
 ### 4. Hygiene — one PR
 - [ ] `pyproject.toml` so `pip install -e .` is true
@@ -131,4 +136,5 @@ Everything below serves those three.
 | Date | Done |
 |---|---|
 | 2026-09-17 | Audit; this plan written. Branches consolidated to `master` (PRs #6, #7). Paper compiled for the first time (`build_paper.sh`); compiler + read-through fixes, incl. Table 6's stale 6-seed numbers; PDF committed. All on PR #8. |
+| 2026-09-17 (session 3) | Step 3. Paper rewrite tabled by the author. `docs/{RESULTS,METHODS,ERRATA}.md` written; RUNBOOK folded into `docs/REPRODUCE.md`; eleven notebook files moved verbatim to `docs/notebook/`; README and CLAUDE.md rewritten. Branch `finishing-docs`, PR #10 (stacked on #9). |
 | 2026-09-17 (session 2) | Step 2. Run metadata + `.npz` committed (2,110 files, 18 MB). `reproduce.py --check`: 125/125 paper numbers reproduce from committed data, CPU only. Figures regenerated at text width with paper-facing labels; paper's Table 3 (−2.0 row) and E2 gap (0.4410→0.4420) corrected. `docs/REPRODUCE.md`. Branch `finishing-verifiability`, PR #9 (stacked on #8). |
