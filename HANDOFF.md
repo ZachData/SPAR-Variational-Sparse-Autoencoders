@@ -239,7 +239,7 @@ Two lines of work:
   trained from scratch at the vSAE's exact live count (1474) scores
   indistinguishably from the masked curve on SCR (6×10⁻⁸ apart) and slightly
   *better* than the masked curve on TPP — both headline verdicts survive.
-- Branch `claude/falsification-framework`, pushed to origin, merged to `master`.
+- Everything is on `master`; `claude/falsification-framework` was merged (PR #5) and deleted 2026-09-17, along with every other branch.
 
 ### Next task — nothing pre-selected; pick from the options below
 

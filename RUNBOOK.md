@@ -15,7 +15,7 @@ tests per arm, 6 seeds per group. Do not change these after seeing results
 ```bash
 cd ~/path/to/SPAR-Variational-Sparse-Autoencoders
 git fetch origin
-git checkout claude/falsification-framework
+git checkout master
 git pull
 
 # CPU-only; must stay green

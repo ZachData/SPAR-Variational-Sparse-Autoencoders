@@ -17,8 +17,8 @@ disagree, `PROJECT.md` wins.
 
 | | |
 |---|---|
-| **Branch** | `claude/falsification-framework`, in sync with `origin` (0 ahead / 0 behind, tree clean). |
-| **PR** | [#5](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/pull/5) open against `master`, checks passing — carries the mechanism paper + the four strengthening experiments (RESULTS addenda 22–25). `master` has nothing this branch lacks (its 4 extra commits are the merges of PRs #2–#4). |
+| **Branch** | Single-branch repo since 2026-09-17: everything lives on `master`. Work on short-lived feature branches and PR them in; delete on merge. |
+| **PR** | [#5](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/pull/5) (mechanism paper + addenda 22–25) merged 2026-09-17; [#6](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/pull/6) is this README. |
 | **Tests** | `python -m pytest falsification/tests/ -q` → **115 passed** (CPU only, ~6 s). |
 | **Battery** | Complete at 13 seeds/arm, 5σ on every comparison. 48 arm directories under `experiments/`, 0 failed runs. |
 | **Paper** | `workshop/mechanism_paper.tex` drafted; every item on its checklist is closed. **Never compiled** — no LaTeX toolchain on this machine. Checked by hand only (citations resolve, braces balance, all `\ref` have `\label`). |
@@ -134,7 +134,7 @@ One line per session, newest first. Detail belongs in `HANDOFF.md` / `RESULTS`.
 
 | Date | What changed |
 |---|---|
-| 2026-09-17 | Sync check (branch == origin, PR #5 open, 115 tests green, preflight green with `/usr/bin/python3`). This README rewritten as the status page; the 2025-08-22 README repeated claims `CLAUDE.md` refutes. |
+| 2026-09-17 | PR #5 merged. Branches consolidated to `master` only (`main`, `claude/falsification-framework`, `claude/vae-workshop-paper-condensing-zumu6b`, `claude/fix-decoder-weight-normalization-…` deleted — the last was already superseded by `_normalize_decoder_weights()` in the SAEBench wrapper). 115 tests green, preflight green with `/usr/bin/python3`. This README rewritten as the status page; the 2025-08-22 README repeated claims `CLAUDE.md` refutes. |
 | 2026-09-13 | Mechanism paper drafted (`workshop/mechanism_paper.tex`); addenda 22–25: Claim #4 (projection null on plain TopK), A4 n=4 doubt closed, E4 box (5) extended to 8 points, Claim #5 seed-count survey; lit-review pass (Chanin 2026 et al.). |
 | 2026-09-12 | A4 JumpReLU run (addendum 20, confounded); 4 bugs fixed in `vsae_jump_relu.py` first. E4 box (5) size-matched baseline (addendum 21) — checklist fully closed. |
 | 2026-09-11 | A1 falsified (15), A2 σ-init dose-response (16–17, r=+0.9993), A3 BatchTopK (18, r=+0.9979), E4 box (4) coverage widened (19). |
