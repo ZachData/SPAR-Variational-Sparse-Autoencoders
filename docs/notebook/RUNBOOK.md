@@ -1,5 +1,11 @@
 # RUNBOOK — commands for when GPU access returns
 
+> **Frozen 2026-09-17 — historical record.** This file is the project's working
+> notebook as it stood when the work finished, moved here verbatim from `RUNBOOK.md`.
+> It is not maintained. The finished account is in `docs/RESULTS.md`,
+> `docs/METHODS.md` and `docs/ERRATA.md`; paths and file names it mentions may
+> have moved (see `docs/notebook/README.md`).
+
 Copy-pasteable. Ordered so failures surface early and cheaply.
 Config values come from `PROJECT.md`; the landmines they avoid are in `CLAUDE.md`.
 

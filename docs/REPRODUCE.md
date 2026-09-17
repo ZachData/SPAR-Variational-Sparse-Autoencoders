@@ -26,15 +26,17 @@ takes about 45 s; the permutation tests are the slow part.
 | GPU measurements cached as JSON: selection Jaccard per checkpoint, SAEBench SCR/TPP scores, the seed-count survey | `falsification/*_results.json` | < 1 MB |
 | The compiled paper | `workshop/mechanism_paper.pdf` | |
 
-Not committed: the 437 checkpoints (`ae.pt`, 2.3 GB — see the release
-notes for the archive), the per-run histogram panels (`.png`) and logs.
+Not committed: the 437 checkpoints (`ae.pt`, 2.3 GB — a release archive is
+planned; see `README.md`), the per-run histogram panels (`.png`) and logs.
 
 ## Environment
 
 * Reproducing the paper: any Python ≥ 3.10 with `numpy`, `scipy`,
   `matplotlib`. No torch.
 * Training or re-measuring checkpoints: the local RTX 3080 (10 GB) with
-  `/usr/bin/python3` (torch 2.10.0+cu128, nnsight 0.7.0, transformer_lens).
+  `/usr/bin/python3` (torch 2.10.0+cu128, nnsight 0.7.0, transformer_lens;
+  `pip install -r requirements.txt`). Training targets bfloat16 on 10 GB and
+  the buffer settings OOM easily if raised.
   A bare `python` on that machine is a CPU-only miniforge and will not work.
   `python falsification/preflight.py` tells you which environment you are in.
 * `pytest falsification/tests/ -q` (115 tests, CPU) must stay green.
@@ -44,7 +46,7 @@ notes for the archive), the per-run histogram panels (`.png`) and logs.
 "Run data" means `experiments/<arm>/seed*/*/evaluation_results.json`,
 preferring `evaluation_results_corrected.json` when present (the re-evaluation
 of pre-fix `var_flag=1` checkpoints with the `scale_biases` bug corrected —
-`falsification/reeval_var_flag1.py`, ERRATA), plus `all_histograms_*.npz` for
+`falsification/reeval_var_flag1.py`, `ERRATA.md`), plus `all_histograms_*.npz` for
 the two liveness thresholds (`falsification/report_summaries.py::liveness`).
 Effect sizes are Cohen's *d* with the pooled SD taken as the mean of the two
 groups' SDs; *p*-values are two-sided seed-permutation tests
@@ -86,17 +88,64 @@ each states its inputs.
 | Selection Jaccard per checkpoint (cached in the `*_dose_response_results.json` above) | `read_a2_dose_response.py`, `read_a3_…`, `read_a4_…`, `read_a4_followup.py` |
 | Pre-activation gap at the k-th/(k+1)-th boundary (median 0.0001, 99th pct 0.0006) | `read_preact_gap.py` |
 | Largest pre-clamp activation (0.194 over 20,000 activations) | `read_penalty_clamp.py` |
-| Learned posterior sigma of the E2 arms | `read_learned_sigma.py` (apply the ERRATA bias correction by hand) |
-| Mean Jaccard 0.35 vs 1.0 before/after the JumpReLU gate fix | `dictionary_learning/trainers/vsae_jump_relu.py` (a direct forward-pass check, described in ERRATA) |
+| Learned posterior sigma of the E2 arms | `read_learned_sigma.py` (apply the `ERRATA.md` bias correction by hand) |
+| Mean Jaccard 0.35 vs 1.0 before/after the JumpReLU gate fix | `dictionary_learning/trainers/vsae_jump_relu.py` (a direct forward-pass check, described in `ERRATA.md`) |
 | SCR/TPP scores (cached in `e4_*_results.json`) | `run_e4_scr.py`, `run_e4_tpp.py`, `score_e4_size_matched_baseline.py` |
 
-## Re-running the training
+## Re-running the training (GPU)
 
-`RUNBOOK.md` has the full set of commands. In short: `falsification/run_arm.py
---arm <arm> --seed <n>` trains one run into `experiments/<arm>/seed<n>/`;
-`run_overnight.sh`, `run_e2_pilot.sh` and `falsification/run_a{2,3,4}_sweep.sh`
-drive the seeded batteries; `run_analysis.sh` produces the
-`comprehensive_summary_*.json` + `.npz` pair for each checkpoint. Never
-hand-edit `create_full_config()` in the training scripts to change a seed —
+Everything below needs the RTX 3080 environment. Runs are ~1 min each for
+gelu-1l; the 10⁶-sample feature-usage analysis is ~6.5 min per checkpoint
+and is the binding cost.
+
+```bash
+python -m pytest falsification/tests/ -q      # must stay green first
+python falsification/preflight.py             # fails loudly rather than 20 min into a run
+python falsification/run_arm.py --check       # validates every arm's config, no torch
+
+# One run. Each arm x seed gets its own directory under experiments/<arm>/seed<n>/;
+# completed runs are skipped via their RUN_COMPLETE.json.
+python falsification/run_arm.py --arm baseline --seed 1 --dry-run
+python falsification/run_arm.py --arm baseline --seed 1
+
+# The seeded batteries (all resumable; they gate on tests + preflight first)
+./run_overnight.sh --dry-run                  # the confirmatory arms, priority order
+nohup ./run_overnight.sh --hours 10 > sweep.out 2>&1 &
+./run_e2_pilot.sh                             # E2 stage 1 (5 betas, seed 101) + selection rule
+./falsification/run_a2_sweep.sh               # A2 TopK sigma sweep, 4 arms x 13 seeds
+./falsification/run_a3_sweep.sh               # A3 BatchTopK
+./falsification/run_a4_sweep.sh               # A4 JumpReLU
+
+# Feature-usage analysis (per-seed output dir handled; serial -- two analysers OOM the card)
+./run_analysis.sh                             # only checkpoints whose summary is older than ae.pt
+./run_analysis.sh --force
+
+# Then the checkpoint readers listed above, and
+python falsification/compare_arms.py <arm_a> <arm_b>     # any two arms, 4M-draw permutation test
+python falsification/report_summaries.py --table         # every analysed run
+```
+
+Never hand-edit `create_full_config()` in a training script to change a seed:
 `get_experiment_name()` omits the seed, so runs written that way overwrite one
-another.
+another. `run_arm.py` and `run_analysis.sh` exist to prevent exactly that.
+The E4 scorers (`run_e4_scr.py`, `run_e4_tpp.py`) cache activations by file
+name only: never `--smoke` a dataset/pair you are about to run for real
+(`ERRATA.md`).
+
+Using the framework on a new comparison, with the pre-registered α and κ:
+
+```python
+from falsification.evalues import FalsificationTest, SequentialFalsifier
+from falsification.permutation import seed_permutation_test
+
+f = SequentialFalsifier(main_hypothesis="<the claim>", alpha=0.1, kappa=0.3)
+res = seed_permutation_test(arm_values_per_seed, baseline_values_per_seed, n_perm=4_000_000)
+f.add(FalsificationTest(
+    name="live-feature fraction",
+    null_hypothesis="...", alt_hypothesis="...",
+    p_value=res["p_value"],
+    unit_of_analysis=res["unit_of_analysis"], n_units=res["n_units"],
+    confounders_controlled=("auxk_alpha", "k", "dict_size", "lr", "steps", "seed"),
+))
+print(f.report())                 # and read res["p_floor"] / res["exact"] before quoting p
+```

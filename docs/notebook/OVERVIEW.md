@@ -1,5 +1,11 @@
 # What this project is, in plain terms
 
+> **Frozen 2026-09-17 — historical record.** This file is the project's working
+> notebook as it stood when the work finished, moved here verbatim from `OVERVIEW.md`.
+> It is not maintained. The finished account is in `docs/RESULTS.md`,
+> `docs/METHODS.md` and `docs/ERRATA.md`; paths and file names it mentions may
+> have moved (see `docs/notebook/README.md`).
+
 ## The problem we're circling
 
 Interpretability researchers routinely claim things like "architecture A learns

@@ -1,5 +1,11 @@
 # Workshop paper assessment (InterpScience @ NeurIPS 2026)
 
+> **Frozen 2026-09-17 — historical record.** This file is the project's working
+> notebook as it stood when the work finished, moved here verbatim from `workshop/00_ASSESSMENT.md`.
+> It is not maintained. The finished account is in `docs/RESULTS.md`,
+> `docs/METHODS.md` and `docs/ERRATA.md`; paths and file names it mentions may
+> have moved (see `docs/notebook/README.md`).
+
 ## Verdict on feasibility
 
 **4-5 pages in ~5h: very doable — but not as a compression of the current paper.**
