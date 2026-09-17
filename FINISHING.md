@@ -51,17 +51,24 @@ The author placeholder is in three places that change together:
 
 1. **Checkpoint archive to HuggingFace.** What to upload: the 434 final
    `experiments/<arm>/seed<n>/<run>/trainer_0/ae.pt` (2.47 GB; exclude the
-   three top-level `experiments/VSAEJumpReLU_*` smoke-test dirs). NOT the
-   3,347 intermediate `ae_<step>.pt` (21 GB) from the dense-schedule arms —
-   only the `*_early` arms' step-wise Jaccard curve in RESULTS §3 used them,
-   and that curve is in `falsification/a2_dose_response_results.json`'s
-   companions / the notebook. Preserve the `experiments/...` path structure
-   so `docs/REPRODUCE.md`'s GPU readers work on top of a download:
+   three top-level `experiments/VSAEJumpReLU_*` smoke-test dirs). Of the
+   3,347 intermediate `ae_<step>.pt` (21 GB, the dense-schedule arms), the
+   only ones a reported number depends on are `e2_sampling_only_early` and
+   `e2_sigma_low_init_early` (2 x 70 files, 0.88 GB):
+   `falsification/read_selection_jaccard.py` reads them for the step-wise
+   Jaccard trajectory in RESULTS §3 (0.069 → 0.811), which is tabulated in
+   notebook addendum 8 and cached nowhere else. Upload those two arms'
+   intermediates too; skip the rest (the A2/A3/A4 arms' dense schedules
+   were never read). Preserve the `experiments/...` path structure so
+   `docs/REPRODUCE.md`'s GPU readers work on top of a download:
    ```bash
    pip install -U huggingface_hub && huggingface-cli login
-   huggingface-cli upload <user>/<repo> experiments experiments \
-       --repo-type model --include "*/seed*/*/trainer_0/ae.pt" --exclude "VSAEJumpReLU_*/**"
+   huggingface-cli upload <user>/<repo> experiments experiments --repo-type model \
+       --include "*/seed*/*/trainer_0/ae.pt" "e2_*_early/seed*/*/trainer_0/ae_*.pt" \
+       --exclude "VSAEJumpReLU_*/**"
    ```
+   (~3.4 GB total. Check the `--include` globs against `huggingface-cli
+   upload --help` for the installed version before trusting them.)
    Decisions that are the author's: the HF account/repo name; whether to
    also upload the 3 Pythia checkpoints under `experiments/e4_pythia_*`
    (they are in the glob above; keep them — E4 depends on them).
@@ -193,7 +200,7 @@ Everything below serves those three.
 - [x] `SAEBench-main/`: version and modified files in `docs/ERRATA.md` §5, pointer in `docs/REPRODUCE.md`
 
 ### 5. Archive and release
-- [ ] Upload the 437 checkpoints (2.3 GB) to a HuggingFace repo; link from README
+- [ ] Upload the 434 final checkpoints (2.47 GB) + the two `*_early` arms' intermediates (0.88 GB) to a HuggingFace repo; link from README (STATUS has the command)
 - [ ] Tag `v1.0`; GitHub release with the PDF attached
 - [ ] Zenodo DOI (optional)
 - [ ] Move this file to `docs/notebook/`
