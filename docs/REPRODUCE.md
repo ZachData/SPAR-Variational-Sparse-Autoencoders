@@ -4,7 +4,7 @@ Every figure and every numeric table in `workshop/mechanism_paper.tex` is
 regenerated from data committed in this repository by one command, on a CPU:
 
 ```bash
-pip install numpy scipy matplotlib          # the only dependencies
+pip install -e ".[dev]"                     # numpy, scipy, matplotlib, pytest -- nothing else
 python reproduce.py --check                 # tables to stdout, figures to workshop/figs/,
                                             # exit 1 if any headline number drifts from the paper
 python reproduce.py --write docs/reproduced_tables.md   # keep the tables as Markdown
@@ -31,12 +31,19 @@ planned; see `README.md`), the per-run histogram panels (`.png`) and logs.
 
 ## Environment
 
-* Reproducing the paper: any Python ≥ 3.10 with `numpy`, `scipy`,
-  `matplotlib`. No torch.
+* Reproducing the paper: any Python ≥ 3.10 with `pip install -e .`
+  (`numpy`, `scipy`, `matplotlib`). No torch. `.github/workflows/ci.yml`
+  runs the tests and `reproduce.py --check` on every push and pull request
+  to `master`, with CPU-only torch so the six trainer-contract tests run too.
 * Training or re-measuring checkpoints: the local RTX 3080 (10 GB) with
-  `/usr/bin/python3` (torch 2.10.0+cu128, nnsight 0.7.0, transformer_lens;
-  `pip install -r requirements.txt`). Training targets bfloat16 on 10 GB and
-  the buffer settings OOM easily if raised.
+  `/usr/bin/python3` (Python 3.14, torch 2.10.0+cu128, nnsight 0.7.0,
+  transformer_lens 2.17.0; `pip install -e ".[train]"`, or `".[e4]"` for
+  the SAEBench size control). `requirements-lock.txt` is the exact `pip
+  freeze` of that environment. Training targets bfloat16 on 10 GB and the
+  buffer settings OOM easily if raised.
+* `SAEBench-main/` is SAEBench v0.4.2, vendored and put on `sys.path` by the
+  E4 scorers rather than installed; the local modifications are listed in
+  `ERRATA.md` §5.
   A bare `python` on that machine is a CPU-only miniforge and will not work.
   `python falsification/preflight.py` tells you which environment you are in.
 * `pytest falsification/tests/ -q` (115 tests, CPU) must stay green.

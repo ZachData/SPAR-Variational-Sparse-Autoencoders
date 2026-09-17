@@ -4,47 +4,37 @@ Started 2026-09-17. The science is done; this file tracks the work of making the
 repository read as finished. Check boxes as they land; every step is a PR onto
 `master`. When everything is checked, this file moves to `docs/notebook/`.
 
-## STATUS — read this first (updated 2026-09-17, end of session 3)
+## STATUS — read this first (updated 2026-09-17, end of session 4)
 
-**Where we are:** Steps 1–3 done. Three stacked PRs: **#8** `finishing-plan`
-(step 1), **#9** `finishing-verifiability` (step 2, base #8), **#10**
-`finishing-docs` (step 3, base #9). Merge in that order, retargeting each to
-`master` as its base lands.
+**Where we are:** Steps 1–4 done. Four stacked PRs: **#8** `finishing-plan`
+(step 1), **#9** `finishing-verifiability` (step 2), **#10** `finishing-docs`
+(step 3), **#11** `finishing-hygiene` (step 4). Merge in that order,
+retargeting each to `master` as its base lands; CI (`ci.yml`) first runs
+for real when #11's workflow reaches `master`.
 
-**Tabled by the author (2026-09-17):** the paper rewrite. Step 1's four
-editorial calls (abstract length, author block, the "d ≈ 16" phrasing;
-the figure item is done) and any fuller revision of
-`workshop/mechanism_paper.tex` wait a few days. Do not start them in a
-session that was not asked to. The README's citation block carries the
-same author placeholder and changes with it.
+**Tabled by the author (2026-09-17):** the paper rewrite — step 1's four
+editorial calls and any fuller revision of `workshop/mechanism_paper.tex`.
+Do not start them in a session that was not asked to. The README citation
+and `CITATION.cff` carry the same author placeholder.
 
-**What step 3 delivered:** `docs/RESULTS.md` (findings in final form, past
-tense, sectioned by finding with a pointer to the notebook addenda each
-rests on), `docs/METHODS.md` (thesis, framework, floors, simulation
-results, measurement conventions, the pre-registration verbatim with
-outcomes beside it), `docs/ERRATA.md` (preprint corrections, every bug with
-what it touched and its status, replaced metrics, retracted results,
-SAEBench modifications), `docs/REPRODUCE.md` with RUNBOOK folded in,
-`docs/notebook/` holding PROJECT / HANDOFF / RESULTS / FINDINGS /
-REMEDIATION / RUNBOOK / OVERVIEW / the workshop notes and draft verbatim
-under a frozen header plus a `README.md` index (and the old README's
-session log), `README.md` rewritten as the front door, `CLAUDE.md` cut to a
-pointer at `docs/ERRATA.md` plus the conventions. Code docstrings that cite
-"PROJECT.md" / "RESULTS addendum N" / "REMEDIATION F6" were left alone;
-`docs/notebook/README.md` resolves them.
-
-**Next action:** step 4, "Hygiene — one PR", starting with `pyproject.toml`
-and the CI workflow (`pytest falsification/tests/` + `python reproduce.py
---check` on push/PR to `master`). Check the `wandb` sweep plumbing before
-cutting it; `git log -S` is enough.
+**Next action:** step 5, archive and release. In order: (1) upload the 437
+checkpoints (`experiments/**/ae.pt`, 2.3 GB, plus the 3 smoke-test dirs are
+NOT needed) to a HuggingFace repo — needs the author's HF account and a
+decision on the repo name; the directory structure under `experiments/`
+should be preserved so `docs/REPRODUCE.md`'s GPU readers work after a
+download; (2) link it from README's Reproduce section and REPRODUCE.md's
+"not committed" line; (3) tag `v1.0` and a GitHub release with
+`workshop/mechanism_paper.pdf` attached — after the paper rewrite lands,
+not before, so the release PDF is the final one; (4) Zenodo optional;
+(5) move this file to `docs/notebook/`.
 
 **Environment for the next session:** `/usr/bin/python3` for anything with
-torch; `reproduce.py` needs only numpy/scipy/matplotlib. `pytest
-falsification/tests/ -q` → 115 must stay green; `python reproduce.py
---check` must exit 0.
+torch; `pip install -e .` covers `reproduce.py`. `pytest` (defaults to
+`falsification/tests/`) → 115; `python reproduce.py --check` → exit 0.
 
 **Do not** re-audit the repo, re-read the paper, or re-derive the plan.
-Start at step 4.
+Start at step 5, item 1 — and it needs the author, since it is an upload to
+their account.
 
 ## Why
 
@@ -113,17 +103,17 @@ Everything below serves those three.
 - [x] `CLAUDE.md` → pointer at `docs/` + conventions (added: the paper's numbers are checked by `reproduce.py`, not typed)
 
 ### 4. Hygiene — one PR
-- [ ] `pyproject.toml` so `pip install -e .` is true
-- [ ] `requirements-lock.txt` frozen from the working env (torch 2.10.0+cu128, nnsight 0.7.0, …)
-- [ ] `LICENSE` (MIT, matching upstream `dictionary_learning`)
-- [ ] `CITATION.cff`
-- [ ] Replace `.github/workflows/build.yml` with a workflow that runs `pytest falsification/tests/` (and `reproduce.py`) on push/PR to `master`; badge in README
-- [ ] `git rm` tracked `__pycache__/*.pyc`
-- [ ] Remove root `train_jumprelu.py`, `train_vsae_jump_relu.py`, `sweep.out`
-- [ ] Remove `sae_vis/` and the four unreferenced `analysis_scripts/` (history keeps them)
-- [ ] Root `tests/`: fix or remove (not both)
-- [ ] `wandb` sweep plumbing in `training_scripts/`: check whether any finished result depends on it before cutting
-- [ ] `SAEBench-main/`: note the vendored version and the modified files in `docs/REPRODUCE.md`
+- [x] `pyproject.toml` so `pip install -e .` is true — setuptools, packages `dictionary_learning`, `dictionary_learning.trainers`, `falsification`; base deps numpy/scipy/matplotlib; extras `train`, `e4`, `interp`, `dev`. Verified in a fresh venv: install, 109 tests + 1 skip without torch, 115 with CPU torch + einops, `reproduce.py --check` green.
+- [x] `requirements-lock.txt` frozen from the working env (`pip freeze` of `/usr/bin/python3`, 294 lines, header says what it is); `requirements.txt` is now `-e .[train,e4,dev]`
+- [x] `LICENSE` (MIT; upstream `dictionary_learning`'s copyright line kept, SAEBench's MIT noted — the vendored copy predates upstream's LICENSE file)
+- [x] `CITATION.cff` (author placeholder, same as the paper — changes with the rewrite)
+- [x] `.github/workflows/ci.yml` replaces upstream's Poetry/PyPI workflow: `pip install -e .[dev]` + CPU torch, `pytest falsification/tests/`, `python reproduce.py --check`, on push/PR to `master`. Figures are regenerated but not diffed (matplotlib stamps its version into the files). Badge in README.
+- [x] `git rm` 43 tracked `__pycache__/*.pyc`
+- [x] Removed root `train_jumprelu.py`, `train_vsae_jump_relu.py`, `sweep.out`
+- [x] Removed `sae_vis/` and the four unreferenced `analysis_scripts/` (history keeps them); `analysis_scripts/` un-ignored so `online_histogram_analyzer.py` is a normal tracked file
+- [x] Root `tests/`: removed. They were upstream `dictionary_learning`'s and import classes this fork does not have (`AutoEncoderNew`); the end-to-end one needs a GPU. `falsification/tests/` is the suite (`pytest` now defaults to it via `pyproject.toml`).
+- [x] `wandb` sweep plumbing: **kept, deliberately.** `--sweep` mode / `BaseSweepRunner` is dormant and no result depends on it, but `train_vsae_topk.py`, `train_vsae_batchtopk.py` and `train_vsae_topk_masked_kl.py` import `dictionary_learning.base_sweep` at module scope and every result was produced through those scripts; cutting it means editing the trainers that produced the data for no gain. `training.py` also imports `wandb` at top level, so `wandb` stays in the `train` extra.
+- [x] `SAEBench-main/`: version and modified files in `docs/ERRATA.md` §5, pointer in `docs/REPRODUCE.md`
 
 ### 5. Archive and release
 - [ ] Upload the 437 checkpoints (2.3 GB) to a HuggingFace repo; link from README
@@ -136,5 +126,6 @@ Everything below serves those three.
 | Date | Done |
 |---|---|
 | 2026-09-17 | Audit; this plan written. Branches consolidated to `master` (PRs #6, #7). Paper compiled for the first time (`build_paper.sh`); compiler + read-through fixes, incl. Table 6's stale 6-seed numbers; PDF committed. All on PR #8. |
+| 2026-09-17 (session 4) | Step 4. `pyproject.toml` (+ extras), `requirements-lock.txt`, `LICENSE`, `CITATION.cff`, `ci.yml` (tests + `reproduce.py --check`), 43 `.pyc` untracked, `sae_vis/`, four analysis scripts, root train scripts and root `tests/` removed; wandb sweep plumbing kept with reason. Branch `finishing-hygiene`, PR #11 (stacked on #10). |
 | 2026-09-17 (session 3) | Step 3. Paper rewrite tabled by the author. `docs/{RESULTS,METHODS,ERRATA}.md` written; RUNBOOK folded into `docs/REPRODUCE.md`; eleven notebook files moved verbatim to `docs/notebook/`; README and CLAUDE.md rewritten. Branch `finishing-docs`, PR #10 (stacked on #9). |
 | 2026-09-17 (session 2) | Step 2. Run metadata + `.npz` committed (2,110 files, 18 MB). `reproduce.py --check`: 125/125 paper numbers reproduce from committed data, CPU only. Figures regenerated at text width with paper-facing labels; paper's Table 3 (−2.0 row) and E2 gap (0.4410→0.4420) corrected. `docs/REPRODUCE.md`. Branch `finishing-verifiability`, PR #9 (stacked on #8). |

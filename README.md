@@ -1,5 +1,7 @@
 # What a KL term actually does to a TopK sparse autoencoder
 
+[![ci](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/actions/workflows/ci.yml/badge.svg)](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/actions/workflows/ci.yml)
+
 A fork of [`dictionary_learning`](https://github.com/saprmarks/dictionary_learning)
 extended with variational sparse autoencoders (vSAEs), plus a falsification
 framework — e-values and permutation tests over training seeds — built to
@@ -82,14 +84,14 @@ reason.
 ## Reproduce
 
 ```bash
-pip install numpy scipy matplotlib
+pip install -e ".[dev]"              # numpy, scipy, matplotlib, pytest
 python reproduce.py --check          # every table and figure in the paper from committed data; ~45 s
-python -m pytest falsification/tests/ -q   # 115 tests, CPU
+python -m pytest falsification/tests/ -q   # 115 tests (6 need torch; CPU torch is enough)
 ./workshop/build_paper.sh            # rebuild the PDF (fetches tectonic on first use)
 ```
 
-`--check` asserts 125 printed numbers against the paper and exits non-zero
-on drift. Run metadata for all 434 runs (`config.json`,
+CI runs exactly that on every push. `--check` asserts 125 printed numbers
+against the paper and exits non-zero on drift. Run metadata for all 434 runs (`config.json`,
 `evaluation_results.json`, the per-feature selection counts) is committed
 under `experiments/`; the 2.3 GB of weights are not. Training needs a GPU;
 `docs/REPRODUCE.md` has the commands and the environment.
@@ -108,9 +110,11 @@ dictionary_learning/     fork of saprmarks/dictionary_learning + the vSAE traine
   trainers/vsae_batch_topk.py      BatchTopK vSAE (frac_recovered unreliable -- ERRATA)
   trainers/vsae_jump_relu.py       JumpReLU vSAE (three bugs fixed before any run -- ERRATA)
 training_scripts/        one script per trainer; run_arm.py drives them
+analysis_scripts/        online_histogram_analyzer.py, the 1M-token feature-usage measurement (run_analysis.sh)
 experiments/             one directory per arm, one per seed; metadata committed, weights not
 comprehensive_histogram_analysis/  the preprint's original checkpoints' analysis
 SAEBench-main/           vendored SAEBench v0.4.2 (modifications listed in ERRATA §5)
+pyproject.toml           pip install -e .   (.[train] for the GPU stack, .[e4] for SAEBench)
 ```
 
 ## Using `falsification/` on your own comparison
@@ -147,5 +151,6 @@ evidence, not down-weighted. Read `p_floor` before quoting `p_value`.
 }
 ```
 
-Built on `dictionary_learning` (Marks, Karvonen & Mueller, 2024) and SAEBench
-(Karvonen et al., 2025). MIT licence, as upstream.
+`CITATION.cff` carries the same entry. Built on `dictionary_learning`
+(Marks, Karvonen & Mueller, 2024) and SAEBench (Karvonen et al., 2025). MIT
+licence (`LICENSE`), as upstream.
