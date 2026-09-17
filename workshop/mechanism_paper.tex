@@ -425,7 +425,7 @@ $\sigma$ learned, $\beta=0$ (\texttt{e2\_sampling\_only}) & $0.486276 \pm 0.0068
 \end{tabular}
 \end{table}
 
-Of the $0.4410$ total gap, removing the KL recovers only $6.4\%$; the
+Of the $0.4420$ total gap, removing the KL recovers only $6.4\%$; the
 remaining $93.6\%$ is attributable to the reparameterisation itself, not the
 regulariser --- a claim about the architecture, not a hyperparameter, and
 considerably stronger than the $\beta$-tuning story this test was originally
@@ -465,7 +465,7 @@ baseline FVE $=0.900159\pm0.0006$.}
 $\log\sigma^2_{\mathrm{init}}$ & $\sigma$ (effective) & FVE & Jaccard \\
 \midrule
 $-1.0$ & $0.6065$ & $0.3766 \pm 0.0028$ & $0.7657 \pm 0.0022$ \\
-$-2.0$ & $0.3679$ & $0.4841 \pm 0.0022$ & $0.8117 \pm 0.0013$ \\
+$-2.0$ & $0.3679$ & $0.4863 \pm 0.0068$ & $0.8117 \pm 0.0013$ \\
 $-3.0$ & $0.2231$ & $0.6140 \pm 0.0020$ & $0.8700 \pm 0.0008$ \\
 $-4.0$ & $0.1353$ & $0.7427 \pm 0.0015$ & $0.9180 \pm 0.0006$ \\
 $-5.0$ & $0.0821$ & $0.8169 \pm 0.0010$ & $0.9453 \pm 0.0002$ \\
@@ -492,11 +492,12 @@ exactly the size the clamp's own floor sigma predicts, not smaller.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.72\textwidth]{a2_dose_response.pdf}
-\caption{TopK: reconstruction quality (FVE, left axis) and selection
-stability (Jaccard, right axis) as a function of the reparameterisation noise
-scale, 13 seeds/point. The two curves are visually near-coincident;
-$r=+0.9993$.}
+\includegraphics[width=\textwidth]{a2_dose_response.pdf}
+\caption{TopK: reconstruction quality (FVE) and selection stability
+(Jaccard) as a function of the reparameterisation noise scale, 13 seeds/point
+(left; both are fractions, so they share one axis), and FVE against Jaccard
+across the six grid points (right), $r=+0.9993$. Error bars are $\pm1$
+SD across seeds and are mostly smaller than the markers.}
 \label{fig:a2}
 \end{figure}
 
@@ -542,7 +543,7 @@ $-8.0$ (clamped) & $0.0498$ & $0.8588 \pm 0.0007$ & $0.9311 \pm 0.0003$ \\
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.72\textwidth]{a3_batchtopk_dose_response.pdf}
+\includegraphics[width=\textwidth]{a3_batchtopk_dose_response.pdf}
 \caption{BatchTopK: the same dose-response, $r=+0.9979$.}
 \label{fig:a3}
 \end{figure}
@@ -599,10 +600,11 @@ $-8.0$ & $0.0498$ & $265.0$ & $0.8632 \pm 0.0006$ & $0.9867 \pm 0.0003$ \\
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.72\textwidth]{a4_jumprelu_dose_response.pdf}
-\caption{JumpReLU: the same sweep. The naive $r=+0.9334$ annotated on this
-figure is confounded (\S\ref{sec:a4confound}); it is superseded by the
-$L_0$-controlled reading in the text.}
+\includegraphics[width=\textwidth]{a4_jumprelu_dose_response.pdf}
+\caption{JumpReLU: the same sweep, with each point's achieved $L_0$ shown
+beside its noise scale. The naive $r=+0.9334$ annotated on this figure is
+confounded by that $L_0$ variation (\S\ref{sec:a4confound}); it is superseded
+by the $L_0$-controlled reading in the text.}
 \label{fig:a4}
 \end{figure}
 
@@ -673,7 +675,7 @@ of having too few confound-controlled points to trust.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.72\textwidth]{a4_followup_dose_response.pdf}
+\includegraphics[width=\textwidth]{a4_followup_dose_response.pdf}
 \caption{JumpReLU with the four densifying points added (ten total; the four
 new points at $\log\sigma^2_{\mathrm{init}}\in\{-3.5,-4.5,-5.5,-6.0\}$ are
 5-seed means). The naive $r=+0.9341$ annotated on this figure is confounded

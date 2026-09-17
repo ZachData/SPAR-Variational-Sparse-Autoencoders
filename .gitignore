@@ -174,7 +174,6 @@ cython_debug/
 #.idea/
 dictionaries
 wandb
-experiment*
 run_experiment.sh
 nohup.out
 *.zip
@@ -182,8 +181,24 @@ nohup.out
 # trained model folders
 trained*/
 analysis_scripts/
+# (comprehensive_histogram_analysis/ was force-added in full and stays tracked;
+# the ignore only stops NEW files there.)
 comprehensive_histogram_analysis/
-experiments/
+# Run outputs. Every run's metadata (config.json, experiment_config.json,
+# evaluation_results.json, comprehensive_summary_*.json, RUN_COMPLETE.json)
+# and its analysis .npz (the exact per-feature selection counts the
+# pre-registered liveness thresholds are computed from -- ~96 KB each) are
+# committed so every number in the paper is recomputable from the repo
+# without a GPU (`reproduce.py`); the weights (ae.pt), figures and logs stay
+# local. A directory excluded outright can't have children re-included,
+# hence the `**` form plus the directory negation. The three
+# `experiments/VSAEJumpReLU_*` dirs are 2000-step smoke tests of the A4
+# trainer fix (2026-09-12), not experiments, and stay ignored.
+experiments/**
+!experiments/**/
+!experiments/**/*.json
+!experiments/**/all_histograms_*.npz
+experiments/VSAEJumpReLU_*/
 feature_degeneracy_analysis/
 gaussianity_analysis/
 latent_analysis/
