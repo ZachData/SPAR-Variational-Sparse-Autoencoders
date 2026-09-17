@@ -3,7 +3,7 @@
 \usepackage[margin=1in]{geometry}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{hyperref}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
 \usepackage{amsfonts}
@@ -16,6 +16,7 @@
 \usepackage{natbib}
 \usepackage{caption}
 \usepackage{subcaption}
+\emergencystretch=2em
 
 \graphicspath{{figs/}}
 
@@ -62,7 +63,7 @@ the two hard-$k$ mechanisms cannot exhibit by construction, and controlling
 for it weakens the coupling to $r=+0.6297$ ($n=4$), confirmed not to be a
 small-sample artifact by doubling the grid density in the confound-controlled
 region ($r=+0.5026$, $n=8$). The general lesson is
-sharper than ``noise hurts’’: the reparameterisation trick is specifically
+sharper than ``noise hurts'': the reparameterisation trick is specifically
 incompatible with \emph{hard, discrete} selection, and the failure mode of a
 \emph{soft} selection mechanism under the same noise is a different one ---
 sparsity collapse, not selection churn. \textbf{Third}, every one of the
@@ -298,11 +299,14 @@ verdict --- we read \texttt{top\_k.py} and \texttt{vsae\_topk.py} against each
 other in full, once, and froze the resulting list before running anything
 further. Fifteen differences exist between the two files (Table~\ref{tab:e1diff}
 enumerates them in \S\ref{app:e1diff}): two are matched by configuration
-already, two were static no-ops confirmed by reading (never reachable, or
-algebraically inert given the training configuration), seven are further
-static no-ops of the same kind, one (the RNG consumption order) is treated as
-noise by the seed-permutation design itself, and five had to be run as
-measured factors. \emph{Exactly one} of the fifteen is a difference in the
+already (and appear as the first rung of Table~\ref{tab:e1ladder}), two were
+run as measured factors, two were confirmed to be no-ops by direct
+measurement, seven are static no-ops confirmed by reading (never reachable,
+or algebraically inert given the training configuration), one (the RNG
+consumption order) is treated as noise by the seed-permutation design itself,
+and one --- the initial weight draw --- was run as the closing factor. The
+five that had to be matched behaviourally are the two configuration items,
+the two measured factors, and the closing one. \emph{Exactly one} of the fifteen is a difference in the
 \emph{objective} rather than the optimiser: \texttt{vsae\_topk.py} penalises
 $\mathrm{clamp}(\mathbf{z},-10,10)$ where the null model penalises
 $\mathbf{f}$ unclamped. Measured directly over 20{,}000 activations across all
@@ -321,13 +325,14 @@ with one additional factor matched at each step, at 13 seeds/arm.
 \caption{E1's decomposition ladder. Effect sizes ($d$) of each generation
 against \texttt{e1\_penalty} (the Top-K+$L_2$ null model), reading down the
 factors matched. Both liveness thresholds ($<0.1\times k/d$, $<0.5\times
-k/d$) are reported per CLAUDE.md's two-threshold rule; \ns\ marks a
+k/d$) are reported, per the pre-registered two-threshold design (\S\ref{sec:e1}); \ns\ marks a
 non-significant result at $p>0.05$ (13 seeds/arm, $p$-floor $2.5\times
 10^{-7}$, $5.03$--$5.16\sigma$).}
 \label{tab:e1ladder}
+\small\setlength{\tabcolsep}{3pt}
 \begin{tabular}{lccccc}
 \toprule
-vSAE arm & factors matched (cumulative) & FVE ($d$) & frac.\ recovered ($d$) & $<0.1\times$ ($d$) & $<0.5\times$ ($d$) \\
+vSAE arm & factors matched (cumulative) & FVE ($d$) & frac.\ rec.\ ($d$) & $<0.1\times$ ($d$) & $<0.5\times$ ($d$) \\
 \midrule
 \texttt{e1\_vsae\_ref} & KL warmup, bias form & $-5.7$ & $-8.5$ & $-2.8$ & $\mathbf{+13.0}$ \\
 \texttt{e1\_vsae\_ref\_unitinit} & + decoder init scale & $\mathbf{+16.5}$ & $+17.7$ & $+0.8$~\ns & $+0.2$~\ns \\
@@ -348,9 +353,9 @@ generation at $5\sigma$. The two non-obvious factors are worth naming
 individually:
 
 \begin{description}
-\item[Decoder-gradient projection.] \texttt{vsae\_topk.py} imports
-  \texttt{remove\_gradient\_parallel\_to\_decoder\_directions} and never calls
-  it, while still renormalising the decoder to unit norm every step --- the
+\item[Decoder-gradient projection.] \texttt{vsae\_topk.py} imports the
+  projection helper \path{remove_gradient_parallel_to_decoder_directions}
+  and never calls it, while still renormalising the decoder to unit norm every step --- the
   radial gradient component is applied and then immediately undone, a
   per-feature change in effective learning rate that looks like an oversight
   rather than a design choice. Run as its own factor: $78.9\%$ of the FVE gap
@@ -444,7 +449,7 @@ scale on this architecture keeps sampling below the boundary gap everywhere
 damage.
 
 We then ran a six-point, 13-seed-per-point sweep over the initial noise scale
-($\log\sigma^2_{\mathrm{init}} \in \{-1,-2,-3,-4,-5,-8\}$, the last clamped to
+($\log\sigma^2_{\mathrm{init}} \in \{-1,\allowbreak -2,\allowbreak -3,\allowbreak -4,\allowbreak -5,\allowbreak -8\}$, the last clamped to
 an effective $-6$), measuring both FVE against the deterministic baseline and
 \emph{selection Jaccard} --- the overlap between the Top-K selected sets of
 two independent stochastic forward passes on the same fixed token, averaged
@@ -689,7 +694,7 @@ turn this into a clean null in the formal sense --- both correlations are
 still nonzero, and eight points remains a small-$n$ correlation by the
 standards of \S\ref{sec:mechanism}'s own permutation-test comparisons
 elsewhere in this paper --- but it rules out the specific alternative
-explanation that addendum 20's original reading was a fluke of only four
+explanation that the original four-point reading was a fluke of only four
 points. What the experiment licenses is a different, and arguably more
 basic, finding than the one it was designed to detect: \emph{a soft,
 gradient-learned threshold's achieved sparsity level, not just its
@@ -745,18 +750,18 @@ holding everything else fixed):
 \toprule
 Threshold & no-ReLU (as in preprint equations) & ReLU (as in released code) \\
 \midrule
-$<0.1\times k/d$ & $0.1309 \pm 0.0060$ & $0.0298 \pm 0.0038$ ($d=+20.8$) \\
-$<0.5\times k/d$ & $0.4654 \pm 0.0060$ & $0.3134 \pm 0.0093$ ($d=+19.8$) \\
+$<0.1\times k/d$ & $0.1315 \pm 0.0074$ & $0.0287 \pm 0.0033$ ($d=+19.3$) \\
+$<0.5\times k/d$ & $0.4655 \pm 0.0113$ & $0.3081 \pm 0.0092$ ($d=+15.3$) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Both thresholds agree in direction, so this is a robust effect, not a shape
 change: adding the ReLU cuts the near-dead-feature population by a factor of
-$\sim4.4$ at the tight threshold. Had either trainer simply been patched to
+$\sim4.6$ at the tight threshold. Had either trainer simply been patched to
 match the other, as is routine practice when reconciling two implementations
 of ``the same'' model, every subsequent number computed from that trainer
-would have silently inherited a $d\approx20$ effect misattributed to whatever
+would have silently inherited a $d\approx15$--$19$ effect misattributed to whatever
 the actual comparison of interest was.
 
 Table~\ref{tab:variance} collects every implementation-level factor measured
@@ -769,7 +774,7 @@ code, and invisible in a state dict or a loss equation.
 \caption{Six one-line implementation details and their individually-measured
 effect sizes, all significant at $5.03$--$5.16\sigma$ (13 seeds/arm). For
 reference, published architectural claims in this literature are typically
-reported without seed variance at all (\S\ref{sec:e4discussion}); a $d>10$
+reported without seed variance at all (\S\ref{sec:seedsurvey}); a $d>10$
 implementation effect is larger than most reported architectural ones.}
 \label{tab:variance}
 \begin{tabular}{lcc}
@@ -780,7 +785,7 @@ KL warmup schedule + bias parameterisation (combined) & liveness (loose) & $13.0
 Initial decoder scale & FVE & $16.5$ \\
 Decoder-gradient-projection omission & FVE & $3.8$--$14.3^{*}$ \\
 Initial decoder-weight distribution (Gaussian vs.\ uniform) & FVE, frac.\ recovered & $4.7$, $7.3$ \\
-\texttt{F.relu(mu)} presence/absence & liveness & $19.8$--$20.8$ \\
+\texttt{F.relu(mu)} presence/absence & liveness & $15.3$--$19.3$ \\
 \bottomrule
 \end{tabular}
 
@@ -790,7 +795,7 @@ contexts (against different upstream generations of the ladder); both values
 are real, significant effects, not a range of uncertainty.}
 \end{table}
 
-\subsection{The decoder-gradient-projection effect does not generalise to a plain, penalty-free Top-K SAE}
+\subsection{The decoder-gradient-projection effect does not generalise to a penalty-free Top-K SAE}
 \label{sec:claim4}
 
 Table~\ref{tab:variance}'s largest entry after the ReLU, the
@@ -867,11 +872,11 @@ beats architecture B,'' independent of how large the true effect is.
 per group. Same formula ($2/\binom{2n}{n}$) as every confirmatory
 comparison in this paper.}
 \label{tab:seedceiling}
-\begin{tabular}{cccccccc}
+\begin{tabular}{lcccccccc}
 \toprule
 $n$/group & 1 & 2 & 3 & 5 & 6 & 10 & 13 & 20 \\
 \midrule
-sigma ceiling & $0.00$ & $0.97$ & $1.65$ & $2.66$ & $3.07$ & $4.40$ & $5.21$ & $6.75$ \\
+sigma ceiling & $0.00$ & $0.97$ & $1.64$ & $2.65$ & $3.07$ & $4.40$ & $5.21$ & $6.75$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -991,6 +996,7 @@ idea to simultaneous multi-class disentanglement.
 \caption{SCR and TPP disagree on the same two checkpoints, same dataset,
 same grid.}
 \label{tab:e4}
+\small
 \begin{tabular}{lccc}
 \toprule
 Metric & vSAE score & baseline curve at $N=1474$ (\texttt{top\_usage}) & margin \\
@@ -1471,24 +1477,30 @@ fixed.
 \section{Reproducibility}
 \label{app:repro}
 
+{\raggedright
 All arms in this paper are defined declaratively in this codebase's
 \texttt{falsification/run\_arm.py} and trained with
-\texttt{python falsification/run\_arm.py \texttt{-}\texttt{-}arm <name>
-\texttt{-}\texttt{-}seed <seed>}; \texttt{falsification/preflight.py} validates
-every arm's wiring without requiring a GPU. \S\ref{sec:e1}'s arms are
-\texttt{e1\_penalty}, \texttt{e1\_vsae\_ref\{,\_unitinit,\_gradproj,\_fullmatch\}};
-\S\ref{sec:mechanism}'s are \texttt{a2\_sigma\_init\_\{m1,m3,m4,m5\}} plus
-\texttt{e2\_sampling\_only} and \texttt{e2\_sigma\_low\_init} (TopK),
-\texttt{a3\_batchtopk\_*} (BatchTopK), and \texttt{a4\_jumprelu\_*}
-(JumpReLU); \S\ref{sec:variance}'s ReLU factor is
-\texttt{e3\_masked\_kl}/\texttt{e3\_masked\_kl\_relu}, and its
-projection-generalisation control (\S\ref{sec:claim4}) is \texttt{baseline}
-vs.\ \texttt{claim4\_baseline\_noproj}. Every arm ran at 13 seeds, except
-\S\ref{sec:a4followup}'s four densifying JumpReLU points
-(\texttt{a4\_jumprelu\_sigma\_init\_\{m3\_5,m4\_5,m5\_5,m6\}}), which ran at
-5 (\texttt{falsification/read\_a4\_followup.py}). The falsification test suite
-(\texttt{python -m pytest falsification/tests/ -q}) exercises the
-permutation-test implementation itself, including the $p$-value floor
-formulas in \S\ref{app:stats}, and stayed green throughout this project.
+\texttt{python falsification/run\_arm.py -{}-arm <name> -{}-seed <seed>};
+\texttt{falsification/preflight.py} validates every arm's wiring without
+requiring a GPU. By section:
+\begin{itemize}\raggedright
+\item \S\ref{sec:e1}: \texttt{e1\_penalty}, \texttt{e1\_vsae\_ref},
+  \texttt{e1\_vsae\_ref\_unitinit}, \texttt{e1\_vsae\_ref\_gradproj},
+  \texttt{e1\_vsae\_ref\_fullmatch}.
+\item \S\ref{sec:mechanism}: \texttt{a2\_sigma\_init\_\{m1,m3,m4,m5\}} plus
+  \texttt{e2\_sampling\_only} and \texttt{e2\_sigma\_low\_init} (TopK);
+  \texttt{a3\_batchtopk\_*} (BatchTopK); \texttt{a4\_jumprelu\_*} (JumpReLU).
+\item \S\ref{sec:variance}: the ReLU factor is \texttt{e3\_masked\_kl} /
+  \texttt{e3\_masked\_kl\_relu}; the projection-generalisation control
+  (\S\ref{sec:claim4}) is \texttt{baseline} vs.\
+  \texttt{claim4\_baseline\_noproj}.
+\end{itemize}
+Every arm ran at 13 seeds, except \S\ref{sec:a4followup}'s four densifying
+JumpReLU points (\texttt{a4\_jumprelu\_sigma\_init\_\{m3\_5,m4\_5,m5\_5,m6\}}),
+which ran at 5 (\texttt{falsification/read\_a4\_followup.py}). The
+falsification test suite (\texttt{python -m pytest falsification/tests/ -q})
+exercises the permutation-test implementation itself, including the
+$p$-value floor formulas in \S\ref{app:stats}, and stayed green throughout
+this project.\par}
 
 \end{document}
