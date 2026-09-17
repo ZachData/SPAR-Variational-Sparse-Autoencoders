@@ -181,7 +181,9 @@ nohup.out
 # trained model folders
 trained*/
 analysis_scripts/
-comprehensive_histogram_analysis/   # (its 248 files were force-added and stay tracked)
+# (comprehensive_histogram_analysis/ was force-added in full and stays tracked;
+# the ignore only stops NEW files there.)
+comprehensive_histogram_analysis/
 # Run outputs. Every run's metadata (config.json, experiment_config.json,
 # evaluation_results.json, comprehensive_summary_*.json, RUN_COMPLETE.json)
 # and its analysis .npz (the exact per-feature selection counts the
