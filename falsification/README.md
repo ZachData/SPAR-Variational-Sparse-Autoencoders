@@ -1,14 +1,20 @@
 # `falsification/`
 
 Sequential falsification with e-values, for validating claims about sparse
-autoencoders. Follows POPPER (Huang et al., 2025); see `../PROJECT.md` for the
-research framing.
+autoencoders. Follows POPPER (Huang et al., 2025); `../docs/METHODS.md` has
+the research framing and the design decisions, `../docs/RESULTS.md` what it
+found when applied here.
 
 ```
-evalues.py       p-to-e calibration, sequential aggregation, implication check
-permutation.py   the four p-value sources, each scoped to a claim type
-worked_example.py  applies the framework to data already in this repo
-tests/           correctness tests, including empirical Type-I control
+evalues.py         p-to-e calibration, sequential aggregation, implication check
+permutation.py     the four p-value sources, each scoped to a claim type
+simulate.py        the Type-I / power simulations the design rests on
+worked_example.py  applies the framework to the preprint's own numbers
+run_arm.py         trains one (arm, seed) from a frozen BASE config      [GPU]
+compare_arms.py    any two arms on every metric, 4M-draw permutation test
+read_*.py          checkpoint readers behind the cached *_results.json   [GPU]
+run_e4_*.py, size_control.py, e4_*.py   the size-matched SCR/TPP control [GPU + SAEBench]
+tests/             115 correctness tests, including empirical Type-I control
 ```
 
 ## Quick start
@@ -76,4 +82,4 @@ before it ran. `seeds_required(alpha, kappa, n_tests)` inverts this into a run b
   control error over training seeds; they say nothing about bias shared by every
   run (a buggy trainer, a mislabelled hook point).
 - Non-rejection is not evidence of a null. For equivalence claims (E1 in
-  `PROJECT.md`) use an equivalence test with a pre-specified margin.
+  `../docs/METHODS.md`) use an equivalence test with a pre-specified margin.

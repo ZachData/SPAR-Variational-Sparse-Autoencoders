@@ -1,0 +1,19 @@
+{
+  "l2_loss": 7.2570411165555315,
+  "l1_loss": 116.74905490875244,
+  "l0": 256.0,
+  "frac_variance_explained": 0.8454419163366159,
+  "cossim": 0.9561739092071851,
+  "l2_ratio": 0.8914988711476326,
+  "relative_reconstruction_bias": 0.9374959766864777,
+  "loss_original": 3.9280833452939987,
+  "loss_reconstructed": 4.234319180250168,
+  "loss_zero": 8.265600969394049,
+  "frac_recovered": 0.9291441241900126,
+  "frac_alive": 1.0,
+  "final_l0": 256.0,
+  "final_mean_activation": 0.4401920437812805,
+  "final_min_top_activation": 0.19079647958278656,
+  "final_max_top_activation": 1.3528400659561157,
+  "final_threshold": 0.19640929996967316
+}

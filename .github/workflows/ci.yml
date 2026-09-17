@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test-and-reproduce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the package (framework + reproduce.py) and CPU torch for the trainer contracts
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install torch einops --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+      - name: Framework tests
+        run: python -m pytest falsification/tests/ -q
+      # Regenerates the figures too; they are not diffed against the committed
+      # ones because matplotlib stamps its version into the PDF/PNG metadata.
+      - name: Every number in the paper reproduces from the committed data
+        run: python reproduce.py --check
