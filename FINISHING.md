@@ -4,6 +4,44 @@ Started 2026-09-17. The science is done; this file tracks the work of making the
 repository read as finished. Check boxes as they land; every step is a PR onto
 `master`. When everything is checked, this file moves to `docs/notebook/`.
 
+## STATUS — read this first (updated 2026-09-17, end of session 1)
+
+**Where we are:** Step 1 (the paper) is done except for four editorial calls
+listed under it. Steps 2–5 are untouched. Branch `finishing-plan` holds
+everything so far as open **PR #8** onto `master`; merge it (or keep working
+on the branch) before starting step 2.
+
+**Next action:** step 2, "Verifiability". Concretely, in this order:
+
+1. `git add -f` every `experiments/**/{config.json,experiment_config.json,evaluation_results.json,comprehensive_summary_*.json}`
+   (≈1,949 files, 2.4 MB; `experiments/` is git-ignored so `-f` or a
+   `.gitignore` negation is needed — prefer the negation so future runs are
+   picked up). Leave `ae.pt`, `.npz`, `.png`, `logs/` ignored.
+2. Write `reproduce.py` at the root: regenerates every figure in
+   `workshop/figs/` and every numeric table in the paper from the committed
+   JSONs, CPU only. The existing readers are the starting point —
+   `falsification/read_a2_dose_response.py`, `read_a3_dose_response.py`,
+   `read_a4_dose_response.py`, `read_a4_followup.py`, `compare_arms.py`,
+   `frontier.py`, `workshop/make_fig_beta.py`. Check whether each one reads
+   checkpoints (GPU) or summaries (CPU); the Jaccard numbers in particular
+   were read from checkpoints and are cached in
+   `falsification/a{2,3,4}_dose_response_results.json`, so read the cache.
+3. While regenerating figures, fix what the paper read-through flagged:
+   drop the internal codes ("A2:", "A3:", "A4:") and `log_var_init=`
+   labels from titles/annotations, use paper-facing titles and larger fonts
+   (they are 0.72\textwidth two-panel figures).
+4. Add a row per figure/table → JSON source in `docs/REPRODUCE.md` (create
+   the file; step 3 will fold RUNBOOK into it).
+
+**Environment for the next session:** use `/usr/bin/python3` (torch 2.10
+cu128 + nnsight in `~/.local`), *not* bare `python` (miniforge base, CPU-only,
+no nnsight). `./workshop/build_paper.sh` builds the paper (fetches `tectonic`
+to `~/.local/bin` on first use). `pytest falsification/tests/ -q` → 115 must
+stay green.
+
+**Do not** re-audit the repo, re-read the paper, or re-derive the plan — all of
+that is below and in PR #8. Start at step 2 item 1.
+
 ## Why
 
 The repo is written as a lab notebook for future-us: ~7,600 lines of dated
@@ -93,4 +131,4 @@ Everything below serves those three.
 
 | Date | Done |
 |---|---|
-| 2026-09-17 | Audit; this plan written. Branches consolidated to `master`. Paper compiled for the first time; fixes above; PDF committed. |
+| 2026-09-17 | Audit; this plan written. Branches consolidated to `master` (PRs #6, #7). Paper compiled for the first time (`build_paper.sh`); compiler + read-through fixes, incl. Table 6's stale 6-seed numbers; PDF committed. All on PR #8. |
