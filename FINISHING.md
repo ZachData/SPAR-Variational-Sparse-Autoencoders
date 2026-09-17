@@ -4,43 +4,42 @@ Started 2026-09-17. The science is done; this file tracks the work of making the
 repository read as finished. Check boxes as they land; every step is a PR onto
 `master`. When everything is checked, this file moves to `docs/notebook/`.
 
-## STATUS — read this first (updated 2026-09-17, end of session 1)
+## STATUS — read this first (updated 2026-09-17, end of session 2)
 
-**Where we are:** Step 1 (the paper) is done except for four editorial calls
-listed under it. Steps 2–5 are untouched. Branch `finishing-plan` holds
-everything so far as open **PR #8** onto `master`; merge it (or keep working
-on the branch) before starting step 2.
+**Where we are:** Steps 1 and 2 are done except for step 1's four editorial
+calls (listed under it; the author's, not made unilaterally). Step 1 is
+**PR #8** (`finishing-plan`); step 2 is branch `finishing-verifiability`,
+stacked on it, opened as its own PR. Merge #8 first, then the step-2 PR.
 
-**Next action:** step 2, "Verifiability". Concretely, in this order:
+**What step 2 delivered:** `experiments/**` metadata JSONs and analysis
+`.npz` are committed (the `.npz` is where the liveness counts live, so the
+plan's "leave .npz ignored" was wrong and was overridden — see the commit);
+`reproduce.py --check` rebuilds all four paper figures and every numeric
+table from that data on a CPU in ~45 s and asserts 125 printed numbers
+against the paper; `docs/REPRODUCE.md` maps each figure/table to its data
+and script. The figures were regenerated at full text width with
+paper-facing titles (no "A2:"/`log_var_init=`), and the four
+`\includegraphics` lines now use `width=\textwidth`. Two stale numbers the
+check surfaced were fixed in the paper: Table 3's −2.0 row used the
+uncorrected `e2_sampling_only` FVE (0.4841) while Table 2 used the
+corrected one (0.4863); and the E2 "total gap" was 0.4410, the arithmetic
+gives 0.4420. Neither changes any downstream number (r stays +0.9993).
 
-1. `git add -f` every `experiments/**/{config.json,experiment_config.json,evaluation_results.json,comprehensive_summary_*.json}`
-   (≈1,949 files, 2.4 MB; `experiments/` is git-ignored so `-f` or a
-   `.gitignore` negation is needed — prefer the negation so future runs are
-   picked up). Leave `ae.pt`, `.npz`, `.png`, `logs/` ignored.
-2. Write `reproduce.py` at the root: regenerates every figure in
-   `workshop/figs/` and every numeric table in the paper from the committed
-   JSONs, CPU only. The existing readers are the starting point —
-   `falsification/read_a2_dose_response.py`, `read_a3_dose_response.py`,
-   `read_a4_dose_response.py`, `read_a4_followup.py`, `compare_arms.py`,
-   `frontier.py`, `workshop/make_fig_beta.py`. Check whether each one reads
-   checkpoints (GPU) or summaries (CPU); the Jaccard numbers in particular
-   were read from checkpoints and are cached in
-   `falsification/a{2,3,4}_dose_response_results.json`, so read the cache.
-3. While regenerating figures, fix what the paper read-through flagged:
-   drop the internal codes ("A2:", "A3:", "A4:") and `log_var_init=`
-   labels from titles/annotations, use paper-facing titles and larger fonts
-   (they are 0.72\textwidth two-panel figures).
-4. Add a row per figure/table → JSON source in `docs/REPRODUCE.md` (create
-   the file; step 3 will fold RUNBOOK into it).
+**Next action:** step 3, "Docs — 11 files → 5". `docs/` now exists with
+`REPRODUCE.md` in it; start with `docs/RESULTS.md` (from
+`falsification/RESULTS_2026-09-03.md` + PROJECT.md's "What is established"),
+then `METHODS.md`, `ERRATA.md`, the notebook move, README, CLAUDE.md.
+`reproduce.py --write docs/reproduced_tables.md` gives you every table as
+Markdown to paste from.
 
 **Environment for the next session:** use `/usr/bin/python3` (torch 2.10
 cu128 + nnsight in `~/.local`), *not* bare `python` (miniforge base, CPU-only,
-no nnsight). `./workshop/build_paper.sh` builds the paper (fetches `tectonic`
-to `~/.local/bin` on first use). `pytest falsification/tests/ -q` → 115 must
-stay green.
+no nnsight). `reproduce.py` itself needs only numpy/scipy/matplotlib.
+`./workshop/build_paper.sh` builds the paper. `pytest falsification/tests/ -q`
+→ 115 must stay green; `python reproduce.py --check` must exit 0.
 
-**Do not** re-audit the repo, re-read the paper, or re-derive the plan — all of
-that is below and in PR #8. Start at step 2 item 1.
+**Do not** re-audit the repo, re-read the paper, or re-derive the plan — all
+of that is below and in PRs #8 and #9. Start at step 3.
 
 ## Why
 
@@ -91,13 +90,13 @@ Everything below serves those three.
   - the abstract is ~370 words — most venues cap at 150–250;
   - the author block is a placeholder (`Zach`, a gmail address) — needs name, affiliation, and a decision on whether the preprint's co-authors are on this one;
   - the naive-comparison gap is described as "d ≈ 16 on reconstruction, d ≈ 13 on liveness" in the abstract/§3.4, but Table 1's first row is d = −5.7 on FVE; the 16.5 is the *unitinit* rung. Either say "up to d ≈ 16 along the ladder" or quote the first-row numbers;
-  - figures: 0.72\textwidth two-panel PNG→PDF with matplotlib-default fonts, and internal experiment codes ("A2:", "A3:", "A4:") and `log_var_init=` labels in the suptitles/annotations — regenerate under step 2 with paper-facing titles and larger fonts.
+  - ~~figures: 0.72\textwidth two-panel PNG→PDF with matplotlib-default fonts, and internal experiment codes ("A2:", "A3:", "A4:") and `log_var_init=` labels in the suptitles/annotations~~ — done in step 2 (full text width, 9 pt fonts, σ and achieved-L0 labels, no suptitle).
 - [x] Commit `workshop/mechanism_paper.pdf` (25 pages, 264 KB; rebuilt by `build_paper.sh`)
 
 ### 2. Verifiability — every number recomputable from the repo, no GPU
-- [ ] Commit every run's `config.json`, `experiment_config.json`, `evaluation_results.json`, `comprehensive_summary_*.json` (≈2.4 MB; leave `ae.pt`, `.npz`, `.png` ignored)
-- [ ] `reproduce.py` (or `make figures`): regenerates every figure in `workshop/figs/` and every table in the paper from committed JSONs; runs in CI
-- [ ] Record which figure/table each result JSON feeds, in `docs/REPRODUCE.md`
+- [x] Commit every run's `config.json`, `experiment_config.json`, `evaluation_results.json`, `comprehensive_summary_*.json` (1,940 files, 2.4 MB) — via a `.gitignore` negation so future runs are picked up; `ae.pt`, `.png`, logs stay ignored. **Also** the 170 `all_histograms_*.npz` (16 MB): `report_summaries.liveness()` reads the per-feature selection counts from the `.npz`, not the JSON, so without them Tables 1, 6 and 8 cannot be recomputed. The three `experiments/VSAEJumpReLU_*` smoke-test dirs stay ignored.
+- [x] `reproduce.py`: every figure in the paper + `beta_sweep.pdf`, every numeric table, `--check` asserts 125 printed numbers against the paper (exit 1 on drift). CPU, ~45 s. Runs-in-CI is step 4's workflow item. The four dose-response figures now share one definition, `falsification/dose_response_figure.py`, used by the readers too. `frontier.pdf` is left as committed (exploratory; `frontier.py` would redraw it over 11 arms, not addendum 6's 8).
+- [x] `docs/REPRODUCE.md` — figure/table → arms → data → function → equivalent script, plus the list of numbers that still need a GPU and a checkpoint.
 
 ### 3. Docs — 11 files → 5, frozen tense
 - [ ] `README.md` — front door: the claim under test, the six findings (one paragraph + figure each), reproduce, cite. Today's status table becomes a *final state* block; the session log goes to the notebook.
@@ -132,3 +131,4 @@ Everything below serves those three.
 | Date | Done |
 |---|---|
 | 2026-09-17 | Audit; this plan written. Branches consolidated to `master` (PRs #6, #7). Paper compiled for the first time (`build_paper.sh`); compiler + read-through fixes, incl. Table 6's stale 6-seed numbers; PDF committed. All on PR #8. |
+| 2026-09-17 (session 2) | Step 2. Run metadata + `.npz` committed (2,110 files, 18 MB). `reproduce.py --check`: 125/125 paper numbers reproduce from committed data, CPU only. Figures regenerated at text width with paper-facing labels; paper's Table 3 (−2.0 row) and E2 gap (0.4410→0.4420) corrected. `docs/REPRODUCE.md`. Branch `finishing-verifiability`, PR #9 (stacked on #8). |
