@@ -1,0 +1,34 @@
+{
+    "trainer": {
+        "dict_class": "AutoEncoderTopK",
+        "trainer_class": "TopKTrainer",
+        "activation_dim": 512,
+        "dict_size": 1474,
+        "k": 256,
+        "dtype": "torch.bfloat16",
+        "device": "cuda",
+        "steps": 10001,
+        "lr": 0.0006667932941703978,
+        "auxk_alpha": 0.03125,
+        "warmup_steps": 200,
+        "decay_start": 8000,
+        "sparsity_warmup_steps": 500,
+        "threshold_beta": 0.999,
+        "threshold_start_step": 500,
+        "gradient_clip_norm": 1.0,
+        "dead_feature_threshold": 1000,
+        "layer": 3,
+        "lm_name": "EleutherAI/pythia-70m-deduped",
+        "wandb_name": "TopK_KL_pythia70m_d1474_k256_auxk0.03125_pen0.0_lr_auto_trainer_0",
+        "submodule_name": "blocks.3.hook_resid_post",
+        "seed": 42
+    },
+    "buffer": {
+        "d_submodule": 512,
+        "n_ctxs": 2500,
+        "ctx_len": 128,
+        "refresh_batch_size": 12,
+        "out_batch_size": 192,
+        "device": "cuda"
+    }
+}

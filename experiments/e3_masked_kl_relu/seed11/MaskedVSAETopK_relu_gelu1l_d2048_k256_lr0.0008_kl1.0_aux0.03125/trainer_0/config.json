@@ -1,0 +1,31 @@
+{
+    "trainer": {
+        "dict_class": "VSAETopKMasked",
+        "trainer_class": "VSAETopKTrainer",
+        "layer": 0,
+        "lm_name": "gelu-1l",
+        "submodule_name": "blocks.0.hook_resid_post",
+        "activation_dim": 512,
+        "dict_size": 2048,
+        "k": 256,
+        "var_flag": 0,
+        "use_april_update_mode": true,
+        "relu_mu": true,
+        "steps": 10000,
+        "lr": 0.0008,
+        "kl_coeff": 1.0,
+        "auxk_alpha": 0.03125,
+        "warmup_steps": 200,
+        "sparsity_warmup_steps": 500,
+        "decay_start": 8000,
+        "wandb_name": "MaskedVSAETopK_relu_gelu1l_d2048_k256_lr0.0008_kl1.0_aux0.03125_trainer_0"
+    },
+    "buffer": {
+        "d_submodule": 512,
+        "n_ctxs": 2500,
+        "ctx_len": 128,
+        "refresh_batch_size": 12,
+        "out_batch_size": 192,
+        "device": "cuda"
+    }
+}

@@ -1,0 +1,14 @@
+{
+  "l2_loss": 22.4314288298289,
+  "l1_loss": 355.4882475535075,
+  "l0": 256.0,
+  "frac_variance_explained": 6.55055046081543e-05,
+  "cossim": 0.5213016582032045,
+  "l2_ratio": 0.25428336144735414,
+  "relative_reconstruction_bias": 0.46080948784947395,
+  "loss_original": 3.9882710029681525,
+  "loss_reconstructed": 11.525655965010325,
+  "loss_zero": 8.348211993773779,
+  "frac_recovered": -0.7183075925956169,
+  "frac_alive": 1.0
+}
