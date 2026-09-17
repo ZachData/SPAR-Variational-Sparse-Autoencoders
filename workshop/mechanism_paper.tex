@@ -299,11 +299,14 @@ verdict --- we read \texttt{top\_k.py} and \texttt{vsae\_topk.py} against each
 other in full, once, and froze the resulting list before running anything
 further. Fifteen differences exist between the two files (Table~\ref{tab:e1diff}
 enumerates them in \S\ref{app:e1diff}): two are matched by configuration
-already, two were static no-ops confirmed by reading (never reachable, or
-algebraically inert given the training configuration), seven are further
-static no-ops of the same kind, one (the RNG consumption order) is treated as
-noise by the seed-permutation design itself, and five had to be run as
-measured factors. \emph{Exactly one} of the fifteen is a difference in the
+already (and appear as the first rung of Table~\ref{tab:e1ladder}), two were
+run as measured factors, two were confirmed to be no-ops by direct
+measurement, seven are static no-ops confirmed by reading (never reachable,
+or algebraically inert given the training configuration), one (the RNG
+consumption order) is treated as noise by the seed-permutation design itself,
+and one --- the initial weight draw --- was run as the closing factor. The
+five that had to be matched behaviourally are the two configuration items,
+the two measured factors, and the closing one. \emph{Exactly one} of the fifteen is a difference in the
 \emph{objective} rather than the optimiser: \texttt{vsae\_topk.py} penalises
 $\mathrm{clamp}(\mathbf{z},-10,10)$ where the null model penalises
 $\mathbf{f}$ unclamped. Measured directly over 20{,}000 activations across all
@@ -747,18 +750,18 @@ holding everything else fixed):
 \toprule
 Threshold & no-ReLU (as in preprint equations) & ReLU (as in released code) \\
 \midrule
-$<0.1\times k/d$ & $0.1309 \pm 0.0060$ & $0.0298 \pm 0.0038$ ($d=+20.8$) \\
-$<0.5\times k/d$ & $0.4654 \pm 0.0060$ & $0.3134 \pm 0.0093$ ($d=+19.8$) \\
+$<0.1\times k/d$ & $0.1315 \pm 0.0074$ & $0.0287 \pm 0.0033$ ($d=+19.3$) \\
+$<0.5\times k/d$ & $0.4655 \pm 0.0113$ & $0.3081 \pm 0.0092$ ($d=+15.3$) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Both thresholds agree in direction, so this is a robust effect, not a shape
 change: adding the ReLU cuts the near-dead-feature population by a factor of
-$\sim4.4$ at the tight threshold. Had either trainer simply been patched to
+$\sim4.6$ at the tight threshold. Had either trainer simply been patched to
 match the other, as is routine practice when reconciling two implementations
 of ``the same'' model, every subsequent number computed from that trainer
-would have silently inherited a $d\approx20$ effect misattributed to whatever
+would have silently inherited a $d\approx15$--$19$ effect misattributed to whatever
 the actual comparison of interest was.
 
 Table~\ref{tab:variance} collects every implementation-level factor measured
@@ -771,7 +774,7 @@ code, and invisible in a state dict or a loss equation.
 \caption{Six one-line implementation details and their individually-measured
 effect sizes, all significant at $5.03$--$5.16\sigma$ (13 seeds/arm). For
 reference, published architectural claims in this literature are typically
-reported without seed variance at all (\S\ref{sec:e4discussion}); a $d>10$
+reported without seed variance at all (\S\ref{sec:seedsurvey}); a $d>10$
 implementation effect is larger than most reported architectural ones.}
 \label{tab:variance}
 \begin{tabular}{lcc}
@@ -782,7 +785,7 @@ KL warmup schedule + bias parameterisation (combined) & liveness (loose) & $13.0
 Initial decoder scale & FVE & $16.5$ \\
 Decoder-gradient-projection omission & FVE & $3.8$--$14.3^{*}$ \\
 Initial decoder-weight distribution (Gaussian vs.\ uniform) & FVE, frac.\ recovered & $4.7$, $7.3$ \\
-\texttt{F.relu(mu)} presence/absence & liveness & $19.8$--$20.8$ \\
+\texttt{F.relu(mu)} presence/absence & liveness & $15.3$--$19.3$ \\
 \bottomrule
 \end{tabular}
 
