@@ -4,7 +4,114 @@ Short by design. Read this first, act from `PROJECT.md`. When this file and
 `PROJECT.md` disagree, `PROJECT.md` wins — it is the living document and this one
 is a table of contents with a heartbeat.
 
-Last touched: 2026-09-12.
+Last touched: 2026-09-13.
+
+## Done 2026-09-13 — the mechanism paper is drafted and strengthened by four experiments (addenda 22–25); every open checklist item is now closed
+
+`workshop/mechanism_paper.tex` (new, standalone LaTeX, not the old superseded
+`workshop/paper.tex`) writes up the three established parts of PROJECT.md
+Deliverables #4 (E1's null decomposition, the A2/A3/A4 selection-churn
+dose-response across three selection mechanisms, and E1/E3's
+implementation-variance lower bound), with E4's SCR/TPP disagreement
+reported as an unresolved case study rather than forced to a verdict. No
+LaTeX toolchain is on this machine, so it's checked by hand (citations
+resolve against `workshop/references.bib`, braces/environments balance, all
+`\ref`s have matching `\label`s) but never compiled — do that before
+submitting anywhere.
+
+Then ran one control experiment to strengthen it: **Claims-worth-opening #4
+is answered (RESULTS addendum 22) — the decoder-gradient-projection effect
+does NOT generalise to a plain, penalty-free TopK SAE.** New arm
+`claim4_baseline_noproj` (`baseline` with a new `project_decoder_grad=False`
+flag, 13 seeds) is null on every metric ($d=0.2$–$0.5$) at the same power
+that detected $d$ up to $-14.3$ for the identical change inside the vSAE
+family — the effect is real but interacts with the penalty term
+specifically, not a generic TopK SAE training factor. Required adding
+`project_decoder_grad` to `top_k_with_feature_penalty.py` and
+`train_topk.py` (default `True`, no existing checkpoint affected). All 115
+tests stayed green.
+
+**Also caught and fixed a factual error in the paper's own first draft**:
+GELU-1L arms train at layer 0, not layer 3 — CLAUDE.md's "layer 3, not layer
+0" landmine is about the recovered Pythia checkpoints only, and the draft
+had conflated the two. Worth remembering if anyone writes about this
+repo's layer configuration again.
+
+**Then ran a second strengthening experiment: A4's n=4 doubt is closed
+(RESULTS addendum 23).** Four new JumpReLU arms
+(`a4_jumprelu_sigma_init_{m3_5,m4_5,m5_5,m6}`, densifying the L0-matched
+sigma region, 5 seeds/arm — deliberately scoped down since coverage, not
+per-point precision, was what needed strengthening) double the L0-matched
+grid to n=8. **Result: the weakened coupling reproduces** — r(FVE,Jaccard)
+= +0.5026 (n=8) vs. the original +0.6297 (n=4), r(FVE,L0) = −0.4704 vs.
+−0.5467 — confirming this isn't a small-sample fluke. New figure
+`workshop/figs/a4_followup_dose_response.pdf`, both figures now in the
+paper. (Caught and fixed a self-inflicted close call along the way: a
+figure-regeneration script briefly overwrote the original 6-point figure
+before renaming — caught via `git status`, restored with `git checkout --`.)
+
+**Then ran a third experiment, this one at the user's specific request:
+extended E4 box (5)'s confound check to the other 7 (dataset, pair) points
+addendum 19 added (RESULTS addendum 24).** Addendum 21 found "masked vs.
+trained-small" wasn't a live confound on the original professor/nurse
+point (6×10⁻⁸ apart on SCR). Generalised `score_e4_size_matched_baseline.py`
+with `--dataset`/`--column1-vals`/`--skip-scr`/`--skip-tpp` (same pattern
+addendum 19 used for the masking-curve runners) and re-scored the SAME
+already-trained `dict_size=1474` checkpoint — no new training — against the
+other 7 SCR points and 1 new TPP point (amazon; TPP has no per-pair
+concept). **Result: the confound is real and often large per pair for
+SCR** (mean absolute reference-curve shift 0.075, up to 0.138, comparable
+to the margins the verdict rests on) **but does not systematically favour
+either verdict** — the mean `vSAE − trained-small` margin (+0.079) is
+essentially the same as the mean `vSAE − masked` margin (+0.072) on the
+same 8 points, and only 1 of 8 points (Software/Electronics) flips which
+side of zero it's on. 6 of 8 (was 7 of 8) still say "not explained by
+size." TPP's two available points both hold their "explained by size"
+verdict. **This nuances addendum 21's reading rather than reversing it**:
+the original point's near-perfect match was somewhat special, not typical,
+but the aggregate SCR/TPP verdicts survive the wider check anyway.
+
+**Then, to finish Claims-worth-opening #5 thoroughly (the user's explicit
+ask — "we are not coming back to this once it is finished"): surveyed all
+10 SAE-methods papers this paper's own bibliography cites for their
+training-seed count (RESULTS addendum 25).** No GPU needed —
+`falsification/seed_count_survey.py` reuses `permutation.py::min_p_floor`
+for the sigma-ceiling table (n=1 → 0.000σ; n=6 → 3.07σ, matching
+CLAUDE.md's own number; n=13 → 5.21σ) and fetched each paper's full text
+searching for multi-seed training of one configuration. **10 of 10 report
+exactly one seed per configuration for every headline result** —
+Cunningham et al. 2023, Bricken et al. 2023, Templeton et al. 2024, Gao et
+al. 2024, both Rajamanoharan et al. 2024 papers, Bussmann et al. 2024,
+Karvonen et al. 2025, Marks et al. 2024, Lu et al. 2025. The lone
+exception anywhere — Bricken et al.'s second, independently-seeded
+transformer — is a qualitative universality check only, n=2, still below
+p<0.05. Two independent seed-sensitivity papers (Paulo & Belrose 2025:
+~30% feature overlap across seeds; Gerasimov et al. 2026) corroborate this
+isn't theoretical. Written into the mechanism paper's §5.2 (new tables,
+four new bib entries). **This closes Claims-worth-opening #5 — every item
+on PROJECT.md's active checklists is now closed.**
+
+**Then a final lit-review pass added four references to the mechanism
+paper**, one substantive: Chanin 2026 ("Are Sparse Autoencoder Benchmarks
+Reliable?", arXiv:2605.18229) independently audits SCR and TPP against
+ground-truth/training-trajectory checks this repo's own E4 work never ran,
+and finds both fail at canonical settings — different, complementary
+evidence to E4's own "the two metrics disagree with each other" finding,
+now discussed in §6.3. Plus three citation-gap fills: Tonolini et al. 2020
+(spike-and-slab VAE), Berthet et al. 2020 (differentiable perturbed
+optimisers, the real precedent for "put noise at the discrete decision"),
+Louizos et al. 2018 (hard-concrete sparsity gates). No experiments, no GPU.
+
+Four experiments' arms, scripts and results this session: see RESULTS
+addenda 22–25, `falsification/read_a4_followup.py`,
+`falsification/score_e4_size_matched_baseline.py`,
+`falsification/seed_count_survey.py`. GPU note for whoever runs training
+next: another Claude Code session's unrelated CPU-heavy job
+(`Mets/p7d_redundancy/*`) was running on this machine for part of this
+session and repeatedly triggered the harness's low-memory kill on
+backgrounded multi-seed training loops (never the GPU itself — it stayed
+idle throughout). Single-seed foreground calls were reliable; long
+backgrounded loops were not, while that other job was running.
 
 ## Done 2026-09-12 — E4 box (5), the size-matched baseline (addendum 21): no confound, E4's checklist is fully closed
 

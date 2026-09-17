@@ -12,7 +12,136 @@ Reading order for a cold start: **Status** → **Where things stand** → **What
 established** → **Next steps**. Everything after that is the design and the
 pre-registration, which change rarely; the sections before it change every session.
 
-Last updated: 2026-09-12. **This session, second thread: E4 box (5), the last
+Last updated: 2026-09-13. **This session: wrote the mechanism paper**
+(`workshop/mechanism_paper.tex`, new — a fresh LaTeX file, longer-form, not
+page-limited, built around the three established parts of PROJECT.md
+Deliverables #4: E1's null decomposition, the A2/A3/A4 selection-churn
+dose-response, and E1/E3's implementation-variance lower bound, with E4
+reported honestly as an unresolved case study rather than forced to a
+verdict), **then ran one more control experiment to strengthen it: Claims-
+worth-opening #4 is now answered (RESULTS addendum 22).** The
+decoder-gradient-projection effect (addendum 2/5, $d$ up to $-14.3$ on FVE
+inside the vSAE family) does **not** generalise to a plain, penalty-free
+TopK SAE — a new arm (`claim4_baseline_noproj`, `baseline` with
+`project_decoder_grad=False`, 13 seeds) is null on every metric, both
+liveness thresholds agreeing ($d=0.2$–$0.5$, $p=0.22$–$0.63$, at the same
+5.16σ-floor power that detected the vSAE-family effect). This narrows the
+claim rather than weakening it: the projection's effect is real and
+undocumented in either paper's equations, but scoped to models carrying an
+activation penalty, not TopK SAE training in general — closing Claims-worth-
+opening #4's open fork in favour of "interacts with the penalty," not
+"generic unreported factor in the field." Required adding a
+`project_decoder_grad` config flag to `top_k_with_feature_penalty.py` and
+`train_topk.py` (default `True`, every existing checkpoint's behaviour
+unchanged); also recorded the previously-unrecorded `activation_penalty`
+field in that trainer's `config` property while in the same spot. All 115
+falsification tests stayed green throughout. Along the way, caught and fixed
+a factual error in the mechanism paper's own first draft before it went
+further: the GELU-1L arms train at **layer 0** (`run_arm.py`'s own `BASE`,
+confirmed against `experiments/baseline/*/config.json`), not layer 3 — the
+"layer 3, not layer 0" CLAUDE.md landmine is about the recovered **Pythia**
+checkpoints only (confirmed `layer: 3` in their own `config.json`), and the
+paper's first draft had conflated the two.
+
+**Then ran a second strengthening experiment: A4's open n=4 doubt is closed
+(RESULTS addendum 23).** Addendum 20's "the L0-matched coupling weakens to
+r=+0.6297" rested on only 4 confound-controlled grid points, too few to
+tell a genuine weakening from a design that simply couldn't see the
+coupling. Four new arms (`a4_jumprelu_sigma_init_{m3_5,m4_5,m5_5,m6}`,
+`log_var_init` ∈ {−3.5,−4.5,−5.5,−6.0}, densifying the gap the original
+1-unit grid spacing left unsampled) ran at 5 seeds/arm — a deliberately
+scoped-down follow-up, since the thing under-powered was grid *coverage*,
+not per-point precision. **Result: doubling the L0-matched region's grid
+density to n=8 reproduces the same qualitative pattern** — r(FVE,Jaccard)
+= +0.5026 (n=8) against the original +0.6297 (n=4), r(FVE,L0) = −0.4704
+against −0.5467, both moving modestly in a direction consistent with
+sampling noise on a still-small n, not a reversal. The full 10-point grid's
+naive coupling is essentially unchanged (+0.9341 vs. +0.9334). This closes
+the specific "is n=4 the whole story" doubt without needing the harder
+alternative (an architectural L0 cap). New figure
+`workshop/figs/a4_followup_dose_response.pdf`; both figures now written
+into the mechanism paper. Also fixed a self-inflicted near-miss along the
+way: the figure-regeneration script initially overwrote the original
+6-point `a4_jumprelu_dose_response.pdf` before being renamed — caught via
+`git status` showing it as deleted, restored with `git checkout --`, no
+data lost.
+
+**Then, at the user's request, extended E4 box (5)'s confound check to the
+other 7 (dataset, pair) points (RESULTS addendum 24).** Addendum 21 found
+"masked vs. trained-small" wasn't a live confound on the original
+professor/nurse point (SCR: 6×10⁻⁸ apart) but explicitly hadn't tested the
+7 other points addendum 19 added. Generalised
+`falsification/score_e4_size_matched_baseline.py` with
+`--dataset`/`--column1-vals`/`--skip-scr`/`--skip-tpp` and re-scored the
+SAME already-trained `dict_size=1474` checkpoint (no new training) against
+the 7 other SCR points and the 1 new TPP point (amazon; TPP has no
+per-pair concept). **Result: the confound is real and often large per pair
+for SCR — but does not systematically favour either verdict.** Mean
+absolute reference-curve shift is 0.075 (up to 0.138 at one point),
+comparable to the margins the verdict rests on, yet the mean `vSAE −
+trained-small` margin across all 8 points (+0.079) is essentially the same
+as the mean `vSAE − masked` margin (+0.072) — only 1 of 8 points
+(Software/Electronics) flips which side of zero it lands on, so 6 of 8
+(was 7 of 8) still say "not explained by size." TPP's two available points
+both hold their "explained by size" verdict unchanged. **This nuances
+addendum 21's finding rather than reversing it**: the original point's
+near-exact match was somewhat special, not typical of the other 7, but the
+aggregate SCR/TPP verdicts both survive the wider check regardless. All
+115 falsification tests stayed green throughout this session.
+
+**Then, at the user's request to finish Claims-worth-opening #5
+thoroughly, surveyed every SAE-methods paper this paper's own
+bibliography cites for its training-seed count (RESULTS addendum 25).**
+`falsification/seed_count_survey.py` reuses `permutation.py::min_p_floor`
+to build the sigma-ceiling table (n=1 → 0.000σ, no significance possible
+at any effect size; n=6 → 3.07σ, matching CLAUDE.md's own number; n=13 →
+5.21σ), then surveys 10 papers by fetching each one's full text and
+searching for multi-seed training of a single configuration. **10 of 10
+report exactly one training seed per configuration for every headline
+result** — Cunningham et al. 2023, Bricken et al. 2023, Templeton et al.
+2024, Gao et al. 2024, Rajamanoharan et al. 2024 (×2: Gated SAE and
+JumpReLU), Bussmann et al. 2024, Karvonen et al. 2025 (SAEBench), Marks et
+al. 2024, Lu et al. 2025. The one exception anywhere in the survey —
+Bricken et al.'s second, independently-seeded transformer — is used only
+for a qualitative feature-universality check, not the paper's main
+quantitative claims, and its own n=2 sits below p<0.05 regardless. Two
+independent papers outside the survey (Paulo & Belrose 2025, Gerasimov et
+al. 2026) corroborate that this gap is not theoretical: both found
+substantial seed-to-seed feature instability in exactly the object a
+single-seed design cannot detect. Written into the mechanism paper's
+strengthened §5.2 (new table, survey table, four new bib entries). No GPU.
+All 115 falsification tests stayed green throughout. **This closes
+Claims-worth-opening #5 — every item on PROJECT.md's active checklist is
+now closed.**
+
+**Finally, a lit-review pass on the mechanism paper found four references
+worth adding, one of them substantive.** `arXiv:2605.18229` (Chanin 2026,
+"Are Sparse Autoencoder Benchmarks Reliable?", found via web search — not
+part of the falsification battery, purely a literature check) independently
+audits SCR and TPP against ground-truth and training-trajectory sanity
+checks (three tests this repo's own E4 work never applied) and finds both
+fail at their canonical settings — SCR/TPP decline during training, TPP
+shows ~zero correlation with synthetic ground-truth quality, SCR goes
+*negative* at large N and ranks a perfect oracle below 11 of 35 trained
+SAEs. This is a different, complementary kind of evidence to E4's own
+finding (SCR/TPP disagreeing with *each other*, not either one audited
+against ground truth) and is now discussed in §6.3 of the mechanism paper —
+it doesn't resolve E4's disagreement, but it means neither verdict should
+be trusted blindly, which reinforces rather than undercuts this paper's own
+stance of reporting the disagreement rather than picking a side. Three
+smaller, more expected additions fill existing citation gaps: Tonolini et
+al. 2020 (spike-and-slab VAE, for the paper's own "spike-and-slab" mention
+that previously had no citation), Berthet et al. 2020 (differentiable
+perturbed optimisers — the actual ML literature for putting noise at a
+top-k-style discrete decision rather than an already-selected value, which
+sharpens the paper's central constructive claim), and Louizos et al. 2018
+(hard-concrete stochastic sparsity gates — structurally close to what
+JumpReLU's gate-then-value architecture could be but isn't). All four
+verified against the papers' actual abstracts/full text before adding, not
+from memory. No experiments, no GPU.
+
+Last updated 2026-09-12 (prior entry, preserved): **That session, second
+thread: E4 box (5), the last
 item in the SCR/TPP disagreement checklist — "masked vs. trained-small" is not
 a live confound (RESULTS addendum 21).** Trained a real TopK SAE from scratch
 at `dict_size=1474` (the vSAE's exact live-feature count), same config as the
@@ -325,10 +454,10 @@ numbers were unaffected.
 | Stage | Battery complete at 13 seeds; **E1, E2 and E3 have all landed**; E2's mechanism was corrected twice (addenda 7, 8) and then officially re-measured (addendum 9) |
 | Framework | `falsification/` implemented, **115 tests green**, Type-I control verified |
 | Newest figure | `workshop/figs/a3_batchtopk_dose_response.pdf` — BatchTopK's own FVE/Jaccard curve and r=+0.9979 scatter (addendum 18), companion to `a2_dose_response.pdf`'s TopK version (r=+0.9993, addendum 17). `workshop/figs/frontier.pdf` (liveness/reconstruction frontier, 8 arms) is older still. |
-| Data | 11 arms, 153 checkpoints, 13 seeds/arm (2 new arms at 5 seeds each), 0 failures |
-| Newest result | **E4 box (5) done (addendum 21): "masked vs. trained-small" is not a live confound.** A TopK SAE trained from scratch at dict_size=1474 (the vSAE's exact live count) scores 0.020127 on SCR — matching the masked-curve reference (0.020127) to 6e-8 — and 0.2025 on TPP, slightly *above* the masked reference (0.1905). Both of E4's headline verdicts (SCR not explained, TPP explained) survive unchanged or marginally reinforced. **PROJECT.md Next steps #0 is now fully closed — all 5 boxes done.** Also this session, A4 done (addendum 20): the naive JumpReLU coupling number (r=+0.9334) is confounded by an 8x swing in achieved sparsity that A2/A3's hard-k arms never had; controlling for it weakens the coupling to r=+0.6297 (n=4) — the real finding is that a soft, gradient-learned threshold isn't noise-robust the way hard top-k is. |
-| In progress | Nothing running. E4 box (5) (addendum 21) and A4 (addendum 20) both done this session, alongside A1/A2/A3 (addenda 15, 17, 18) and E4 box (4) (addendum 19) from the prior one. **Every box in every open checklist is now closed.** Next up is undecided: the mechanism-paper writeup, a follow-up A4 design controlling its L0 confound, extending box (5)'s check to the other 7 (dataset, pair) points, or Claims-worth-opening #4/#5. |
-| Blocking | Nothing blocked on compute or data. E4's SCR/TPP disagreement checklist (5 boxes) and Next steps A (mechanism paper, including its A4 companion) are both fully closed. |
+| Data | Prior battery (11 arms, 153 checkpoints) plus this session's new work: `claim4_baseline_noproj` (13 seeds), 4 new A4 densifying arms (5 seeds each, 20 checkpoints), and 8 new E4 scoring runs against the already-trained size-matched baseline (no new training) — 5 new arms, 33 new checkpoints, 0 failures |
+| Newest result | **Claims-worth-opening #5 answered (addendum 25): a 10-paper survey of the SAE-methods literature finds 10/10 use exactly one training seed per configuration.** Sigma ceiling at n=1 is 0.000 — no architecture-level significance possible at any effect size, by construction. Sampling frame was this paper's own pre-existing bibliography, not curated post hoc. Corroborated by two independent seed-sensitivity studies (Paulo & Belrose 2025: ~30% feature overlap across seeds; Gerasimov et al. 2026). Also this session: E4 box (5) extended to all 8 (dataset, pair) points (addendum 24, nuances but doesn't reverse addendum 21), A4's n=4 doubt closed (addendum 23), and Claims-worth-opening #4 answered (addendum 22). All four written into the new mechanism paper (`workshop/mechanism_paper.tex`) alongside its three already-established parts, with E4 reported as an unresolved case study. |
+| In progress | Nothing running. The mechanism paper is drafted and all four strengthening experiments this session identified (Claims-worth-opening #4, A4's n=4 follow-up, E4 box (5) extended to all 8 points, Claims-worth-opening #5) are closed. Every item on PROJECT.md's active checklists — the confirmatory battery, Next steps A, E4's 5-box checklist, and Claims-worth-opening #1-#5 — is now closed. What remains is compiling the LaTeX (no toolchain on this machine) and deciding on a venue/next step for the paper itself. |
+| Blocking | Nothing blocked on compute or data. No LaTeX toolchain is installed on this machine, so `workshop/mechanism_paper.tex` has been checked by hand (citations resolve, braces/environments balance, all `\ref`s have matching `\label`s) but never compiled to PDF. |
 | Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
 
 ## Where things stand
@@ -588,13 +717,20 @@ says anything about CLAUDE.md landmine 3: the baseline still has
 the explanation (or not) does not rule AuxK in or out — the two confounds are
 independent and this design controls only the first.
 
-**The reference curve itself is now confound-checked too (addendum 21).** A
-TopK SAE trained from scratch at `dict_size=1474` — the vSAE's exact live
-count, no masking involved — scores 0.020127 on SCR against the masked
-curve's 0.020127 at the same N (a 6×10⁻⁸ difference) and 0.2025 on TPP against
-the masked curve's 0.1905 (trained-from-scratch scores slightly *higher*).
-"Masked vs. trained-small" — the last open item in this design — is not a
-live confound in either verdict on the pair these addenda are built on.
+**The reference curve itself is now confound-checked too, on all 8 (dataset,
+pair) points (addenda 21, 24).** A TopK SAE trained from scratch at
+`dict_size=1474` — the vSAE's exact live count, no masking involved —
+scores 0.020127 on SCR against the masked curve's 0.020127 on the original
+professor/nurse point (a 6×10⁻⁸ difference) and 0.2025 on TPP against the
+masked curve's 0.1905 (trained-from-scratch scores slightly *higher*). That
+near-exact match turned out to be somewhat special to this one point, not
+typical: extended to the other 7 (dataset, pair) points box (4) added
+(addendum 24), the SCR reference-curve shift averages 0.075 (up to 0.138)
+and flips 1 of 8 points' sign — but the shifts don't systematically favour
+either verdict, so the *aggregate* verdict survives (mean margin +0.079 vs.
++0.072; 6 of 8, was 7/8, still "not explained"). TPP's 2 available points
+both hold. "Masked vs. trained-small" is a real per-pair effect but not a
+confound that would flip either headline verdict.
 
 ### The method earned its keep twice
 
@@ -956,7 +1092,17 @@ has been:
   keeps 65.5% of its 1474 entries alive — matching a count doesn't guarantee
   matching how efficiently a plain TopK network uses it.
 
-**All 5 boxes in this checklist are now done (addenda 12–15, 19, 21).** Box
+  **Extended to the other 7 (dataset, pair) points box (4) added — done
+  2026-09-13, RESULTS addendum 24.** The near-exact match above turned out
+  to be somewhat special to the professor/nurse point, not typical: across
+  all 8 points the SCR reference-curve shift averages 0.075 (up to 0.138),
+  comparable to the margins the verdict rests on, and it flips 1 of 8
+  points' sign (Software/Electronics). But it doesn't systematically favour
+  either verdict — the mean margin barely moves (+0.079 vs. +0.072) and 6
+  of 8 (was 7/8) still say "not explained." TPP's 2 available points both
+  hold. This nuances, not reverses, the "not a live confound" reading.
+
+**All 5 boxes in this checklist are now done (addenda 12–15, 19, 21, 24).** Box
 (2) confirmed the prediction from (1): TPP's N=20 margin is a knife-edge
 (−0.009 [−0.017, −0.000]), so the "explained by size" reading rests on N≤10;
 SCR's per-threshold margins straddle zero at N=5/10/20 (both bootstraps) and
@@ -1155,43 +1301,85 @@ gap, with the FVE and Jaccard curves kneeing together. That is **Next steps A2**
 and does not touch `vsae_jump_relu.py`. Together the two axes are the mechanism
 section of the second paper: noise scale × selection hardness.
 
-### 4. "A one-line optimiser detail moves reconstruction more than the architecture
-under study" — ~30 min, converts a local finding into a general one
+### 4. ~~"A one-line optimiser detail moves reconstruction more than the architecture
+under study"~~ — ANSWERED 2026-09-13, RESULTS addendum 22
 
-The decoder-gradient projection is worth d = −14.3 on FVE in the vSAE. That is
-larger than most published architectural interventions, and it appears in no
-equations. Right now it reads as a bug in one file. One arm makes it general:
-**turn the projection off in `top_k.py` and train the baseline** — a plain TopK SAE
-with no penalty and no KL.
+**The projection's effect does not generalise; it interacts with the penalty.**
+`falsification/run_arm.py`'s `claim4_baseline_noproj` arm (13 seeds) is
+`baseline` — the clean, penalty-free TopK SAE — with
+`project_decoder_grad=False` (a new config flag on
+`top_k_with_feature_penalty.py`, default `True`, no existing checkpoint's
+behaviour changed). Turning the projection off in this penalty-free setting
+moves nothing: FVE $d=+0.3$ ($p=0.50$), `frac_recovered` $d=+0.5$
+($p=0.22$), both liveness thresholds $d=0.2$–$0.3$ ($p=0.53$/$0.63$), all at
+the same 13-seed/5.16σ-floor power that detected $d$ up to $-14.3$ for the
+identical one-line change inside the vSAE family (addendum 2/5). Both
+liveness thresholds agree (both null), so this is a robust null under F8b,
+not a shape change hiding behind one threshold.
 
-* Same magnitude there → the projection is a **generic and unreported factor in
-  TopK SAE training**, and any comparison between codebases that differ on it is
-  confounded. That is a claim about the field, not about this repo.
-* **The closing arm strengthened this claim's premise (2026-09-04).** The
-  projection is no longer the only such detail: the *initial weight draw* —
-  normalised Gaussian versus normalised uniform, identical in every summary
-  statistic anyone reports — is worth d = −4.7 on FVE and d = −7.3 on
-  `frac_recovered` on its own (RESULTS addendum 5). Two one-line details, neither
-  in any equations, each larger than many published architectural interventions.
-* Different magnitude → it **interacts with the penalty**, which is already the
-  leading interpretation given that the projection moved the vSAE *away* from
-  `e1_penalty` on liveness (0.1816 → 0.2197 against 0.1836). An interaction between
-  an optimiser detail and a loss term is a subtler and more interesting result.
+The second, not the first, of this entry's two original branches is what
+happened: **the projection is not a generic, unreported factor in TopK SAE
+training** — a comparison between two independently-implemented plain TopK
+SAEs that differ only on this line would not, on this evidence, be expected
+to differ measurably. It **interacts specifically with the penalty term**,
+consistent with the original observation that the projection moved the vSAE
+*away from*, not toward, `e1_penalty` on liveness (0.1816 → 0.2197 against
+0.1836) even though `e1_penalty` has had the projection on all along. This
+narrows what can honestly be claimed about the effect rather than weakening
+it, and is now written into the mechanism paper (`workshop/mechanism_paper.tex`,
+the subsection following the implementation-variance table in its
+"reported effect sizes" section).
 
-Either way the E1 decomposition gets a control arm it currently lacks.
+*Original framing, preserved for context:* the decoder-gradient projection
+was worth d = −14.3 on FVE in the vSAE — larger than most published
+architectural interventions, and it appears in no equations. The projection
+is no longer the only such one-line detail found this way: the *initial
+weight draw* — normalised Gaussian versus normalised uniform, identical in
+every summary statistic anyone reports — is worth d = −4.7 on FVE and
+d = −7.3 on `frac_recovered` on its own (RESULTS addendum 5). Three one-line
+details now measured this precisely, none in any equations, none reported
+in the literature that trains models with them.
 
-### 5. "Most published SAE comparisons cannot reach the significance they imply" —
-desk work
+### 5. ~~"Most published SAE comparisons cannot reach the significance they imply"~~
+— ANSWERED 2026-09-13, RESULTS addendum 25
 
-The combinatorial floor is not a subtlety, it is arithmetic: 6 seeds per group
-cannot beat 3.07 sigma however large the effect, and 5 cannot beat 2.6. Survey how
-many training seeds recent SAE papers actually use — the modal answer appears to be
-one — and state the ceiling that implies for each.
+**The modal answer is exactly one, not "appears to be one."** Surveyed all
+ten SAE-methods papers `workshop/references.bib` already cited — the
+sampling frame was fixed by an earlier session's bibliography, not curated
+for this survey — by fetching each paper's own full text and searching for
+any mention of training multiple SAEs at different seeds for the SAME
+configuration. **10 of 10 report exactly one training seed per
+configuration for every headline result**: Cunningham et al. 2023, Bricken
+et al. 2023 ("Towards Monosemanticity"), Templeton et al. 2024 ("Scaling
+Monosemanticity"), Gao et al. 2024 (OpenAI TopK), Rajamanoharan et al. 2024
+(Gated SAE and JumpReLU, two papers), Bussmann et al. 2024 (BatchTopK),
+Karvonen et al. 2025 (SAEBench), Marks et al. 2024 (Sparse Feature
+Circuits), Lu et al. 2025. The one exception found anywhere — Bricken et
+al.'s second, independently-seeded transformer — is used only for a
+qualitative feature-universality check, not the paper's main quantitative
+claims, and its own n=2 sits below p<0.05 regardless.
 
-This is the empirical hook the methods paper currently lacks: it turns "you should
-pre-register and use permutation tests" from advice into a measured gap. Handle it
-carefully — the point is that the field's *design conventions* cap what its results
-can say, not that particular authors erred.
+`falsification/seed_count_survey.py` reuses `permutation.py::min_p_floor`
+(not a reimplementation) to compute the sigma ceiling table: n=1 → 0.000σ
+(no significance possible at any effect size, by construction), n=2 →
+0.967σ, n=6 → 3.07σ (reproducing CLAUDE.md's own number), n=13 → 5.21σ
+(first n past 5σ). **Since the field's own core references are
+overwhelmingly n=1, none of them could have supported a properly-powered
+architecture-level claim even if they had wanted to** — not a criticism of
+any author's point estimate, but a statement about what the design itself
+can and cannot express.
+
+Two independent papers outside the survey (they measure seed
+*sensitivity*, not the field's reporting practice) make the gap concrete:
+Paulo & Belrose 2025 found only ~30% feature overlap between two
+otherwise-identical SAEs differing only in seed; Gerasimov et al. 2026
+found individual features vary substantially across seeds in a large-scale
+study. Written into the mechanism paper's §5.2/§5.3
+(`workshop/mechanism_paper.tex`, new table + survey table + four new bib
+entries), which now grounds "the literature's effect sizes are
+implementation-variance-sized" in an actual measured design gap instead of
+an informal observation. No GPU, no training. All 115 falsification tests
+stayed green.
 
 ### 6. Why do SCR and TPP disagree on E4? — four diagnostics, cheapest first
 

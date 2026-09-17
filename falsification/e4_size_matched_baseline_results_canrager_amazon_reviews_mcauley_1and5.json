@@ -1,0 +1,19 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "canrager/amazon_reviews_mcauley_1and5",
+  "tpp": {
+    "score": 0.1355375126004219,
+    "per_threshold": {
+      "tpp_threshold_2_total_metric": 0.03025001287460327,
+      "tpp_threshold_5_total_metric": 0.1269500136375427,
+      "tpp_threshold_10_total_metric": 0.2149500072002411,
+      "tpp_threshold_20_total_metric": 0.17000001668930054
+    },
+    "vsae_score": 0.10312500819563866,
+    "masked_top_usage_at_n": 0.1644125074148178,
+    "masked_random_at_n": 0.10274125441908837,
+    "vsae_minus_trained_small": -0.03241250440478324,
+    "trained_small_minus_masked_top_usage": -0.0288749948143959
+  }
+}

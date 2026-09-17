@@ -1,0 +1,23 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "canrager/amazon_reviews_mcauley_1and5",
+  "column1_vals": [
+    "Software",
+    "Electronics"
+  ],
+  "scr": {
+    "score": 0.01273897380546791,
+    "per_threshold": {
+      "scr_metric_threshold_2": -0.03184710232218929,
+      "scr_metric_threshold_5": 0.05095551557446537,
+      "scr_metric_threshold_10": -0.0509551359270591,
+      "scr_metric_threshold_20": 0.08280261789665466
+    },
+    "vsae_score": -0.014331120115503929,
+    "masked_top_usage_at_n": -0.12420373702127886,
+    "masked_random_at_n": -0.030095447154409823,
+    "vsae_minus_trained_small": -0.027070093920971837,
+    "trained_small_minus_masked_top_usage": 0.13694271082674678
+  }
+}

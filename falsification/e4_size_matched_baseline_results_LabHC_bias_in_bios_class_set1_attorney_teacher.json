@@ -1,0 +1,23 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "LabHC/bias_in_bios_class_set1",
+  "column1_vals": [
+    "attorney",
+    "teacher"
+  ],
+  "scr": {
+    "score": 0.07636879403142796,
+    "per_threshold": {
+      "scr_metric_threshold_2": 0.1613832674819391,
+      "scr_metric_threshold_5": -0.005763786279388783,
+      "scr_metric_threshold_10": -0.02881858785432556,
+      "scr_metric_threshold_20": 0.1786742827774871
+    },
+    "vsae_score": 0.2550432056373969,
+    "masked_top_usage_at_n": 0.126080613306024,
+    "masked_random_at_n": 0.09697399073190724,
+    "vsae_minus_trained_small": 0.17867441160596895,
+    "trained_small_minus_masked_top_usage": -0.04971181927459603
+  }
+}

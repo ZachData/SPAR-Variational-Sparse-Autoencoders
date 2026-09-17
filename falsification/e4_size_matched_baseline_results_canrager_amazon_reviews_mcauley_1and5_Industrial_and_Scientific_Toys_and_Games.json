@@ -1,0 +1,23 @@
+{
+  "dict_size": 1474,
+  "k": 256,
+  "dataset": "canrager/amazon_reviews_mcauley_1and5",
+  "column1_vals": [
+    "Industrial_and_Scientific",
+    "Toys_and_Games"
+  ],
+  "scr": {
+    "score": -0.13224639089586637,
+    "per_threshold": {
+      "scr_metric_threshold_2": 0.0942029736668429,
+      "scr_metric_threshold_5": 0.04347812941635828,
+      "scr_metric_threshold_10": -0.007246282916446389,
+      "scr_metric_threshold_20": -0.6594203837502203
+    },
+    "vsae_score": 0.04710137885400146,
+    "masked_top_usage_at_n": 0.005434712187334793,
+    "masked_random_at_n": -0.07952900240837298,
+    "vsae_minus_trained_small": 0.17934776974986782,
+    "trained_small_minus_masked_top_usage": -0.13768110308320117
+  }
+}
