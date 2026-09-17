@@ -432,8 +432,8 @@ The four things that landed across the prior two sessions, in order:
    **Nothing in that checklist has been started** — it is queued for the next
    session with GPU time.
 
-Branch `claude/falsification-framework`, GPU idle, pushed to origin and merged to
-`master`. 11 arms in the confirmatory battery (153 checkpoints) plus the 2
+All work is on `master` (the `claude/falsification-framework` branch was merged
+via PR #5 and deleted 2026-09-17; the repo is single-branch now). GPU idle. 11 arms in the confirmatory battery (153 checkpoints) plus the 2
 single-seed Pythia checkpoints for E4.
 
 Prior session (2026-09-04, second session), for context: (1) the sigma-annealing
@@ -458,7 +458,7 @@ numbers were unaffected.
 | Newest result | **Claims-worth-opening #5 answered (addendum 25): a 10-paper survey of the SAE-methods literature finds 10/10 use exactly one training seed per configuration.** Sigma ceiling at n=1 is 0.000 — no architecture-level significance possible at any effect size, by construction. Sampling frame was this paper's own pre-existing bibliography, not curated post hoc. Corroborated by two independent seed-sensitivity studies (Paulo & Belrose 2025: ~30% feature overlap across seeds; Gerasimov et al. 2026). Also this session: E4 box (5) extended to all 8 (dataset, pair) points (addendum 24, nuances but doesn't reverse addendum 21), A4's n=4 doubt closed (addendum 23), and Claims-worth-opening #4 answered (addendum 22). All four written into the new mechanism paper (`workshop/mechanism_paper.tex`) alongside its three already-established parts, with E4 reported as an unresolved case study. |
 | In progress | Nothing running. The mechanism paper is drafted and all four strengthening experiments this session identified (Claims-worth-opening #4, A4's n=4 follow-up, E4 box (5) extended to all 8 points, Claims-worth-opening #5) are closed. Every item on PROJECT.md's active checklists — the confirmatory battery, Next steps A, E4's 5-box checklist, and Claims-worth-opening #1-#5 — is now closed. What remains is compiling the LaTeX (no toolchain on this machine) and deciding on a venue/next step for the paper itself. |
 | Blocking | Nothing blocked on compute or data. No LaTeX toolchain is installed on this machine, so `workshop/mechanism_paper.tex` has been checked by hand (citations resolve, braces/environments balance, all `\ref`s have matching `\label`s) but never compiled to PDF. |
-| Prior artifact | arXiv preprint; workshop draft on `claude/vae-workshop-paper-condensing-zumu6b` |
+| Prior artifact | arXiv preprint; superseded workshop draft at `workshop/paper.tex` (its branch was merged and deleted 2026-09-17) |
 
 ## Where things stand
 
