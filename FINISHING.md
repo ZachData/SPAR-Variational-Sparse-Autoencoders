@@ -46,10 +46,10 @@ Everything below serves those three.
 ## Plan, in order
 
 ### 1. The paper — compile, fix, ship
-- [ ] Install a LaTeX toolchain (`tectonic`, standalone) and compile `workshop/mechanism_paper.tex`
-- [ ] Fix every compiler error/warning that matters (undefined refs, missing figures, bib)
-- [ ] Read the compiled PDF once end to end for things hand-checking missed
-- [ ] Commit `workshop/mechanism_paper.pdf` (or attach to the `v1.0` release — decide)
+- [x] Install a LaTeX toolchain (`tectonic`, standalone) and compile `workshop/mechanism_paper.tex` — `workshop/build_paper.sh`
+- [x] Fix every compiler error/warning that matters — 1 hard error (9-column table in an 8-column spec), 2 wrong roundings in the seed-ceiling table (1.65→1.64, 2.66→2.65 per the committed survey JSON), 15 overfull boxes (3 tables running into the margin, unbreakable identifiers), a Unicode quote the font couldn't render, hyperref link boxes → coloured text, and two internal-doc leaks ("CLAUDE.md's two-threshold rule", "addendum 20") in the prose
+- [ ] Read the compiled PDF once end to end for things hand-checking missed. Seen so far: the abstract is ~370 words (too long for any venue); author block is a placeholder (`Zach`, gmail); figures are 0.72\textwidth two-panel PNG→PDF with matplotlib-default fonts and internal codes ("A2: …") in their suptitles — regenerate under step 2
+- [x] Commit `workshop/mechanism_paper.pdf` (25 pages, 264 KB; rebuilt by `build_paper.sh`)
 
 ### 2. Verifiability — every number recomputable from the repo, no GPU
 - [ ] Commit every run's `config.json`, `experiment_config.json`, `evaluation_results.json`, `comprehensive_summary_*.json` (≈2.4 MB; leave `ae.pt`, `.npz`, `.png` ignored)
@@ -88,4 +88,4 @@ Everything below serves those three.
 
 | Date | Done |
 |---|---|
-| 2026-09-17 | Audit; this plan written. Branches consolidated to `master`. |
+| 2026-09-17 | Audit; this plan written. Branches consolidated to `master`. Paper compiled for the first time; fixes above; PDF committed. |
