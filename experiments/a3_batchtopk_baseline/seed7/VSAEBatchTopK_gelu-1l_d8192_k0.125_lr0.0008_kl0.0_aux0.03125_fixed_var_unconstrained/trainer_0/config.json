@@ -1,0 +1,40 @@
+{
+    "trainer": {
+        "dict_class": "VSAEBatchTopK",
+        "trainer_class": "VSAEBatchTopKTrainer",
+        "activation_dim": 512,
+        "dict_size": 2048,
+        "k": 256,
+        "var_flag": 0,
+        "constrain_decoder": false,
+        "use_april_update_mode": true,
+        "architecture_mode": "vae_first",
+        "apply_topk_to_samples": true,
+        "preserve_gradient_flow": true,
+        "dtype": "torch.bfloat16",
+        "steps": 10000,
+        "lr": 0.0008,
+        "kl_coeff": 0.0,
+        "kl_warmup_steps": 1000,
+        "auxk_alpha": 0.03125,
+        "warmup_steps": 200,
+        "sparsity_warmup_steps": 500,
+        "decay_start": 8000,
+        "gradient_clip_norm": 1.0,
+        "layer": 0,
+        "lm_name": "gelu-1l",
+        "wandb_name": "VSAEBatchTopK_gelu-1l_d8192_k0.125_lr0.0008_kl0.0_aux0.03125_fixed_var_unconstrained_trainer_0",
+        "submodule_name": "blocks.0.hook_resid_post",
+        "seed": 7,
+        "architectural_tensions_acknowledged": true,
+        "vae_topk_conflict_handling": "vae_first"
+    },
+    "buffer": {
+        "d_submodule": 512,
+        "n_ctxs": 2500,
+        "ctx_len": 128,
+        "refresh_batch_size": 12,
+        "out_batch_size": 192,
+        "device": "cuda"
+    }
+}

@@ -91,7 +91,7 @@ MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*")
 def family_of(arm: str) -> str:
     if arm.startswith("e1"):
         return "e1"
-    if arm.startswith("e2"):
+    if arm.startswith(("e2", "a2")):      # a2_*: the sampling-on sigma sweep
         return "e2"
     if arm.startswith("e3"):
         return "e3"
@@ -380,7 +380,7 @@ def figure(rows: list[dict], split: float) -> None:
     handles = [Line2D([], [], marker="o", color=c, ls="", ms=7, label=lab)
                for c, lab in FAMILIES.values()]
     handles.append(Line2D([], [], marker="o", color="#52514e", ls="", ms=5,
-                          alpha=0.45, label="1 seed (E2 beta pilot, context only)"))
+                          alpha=0.45, label=f"< {MIN_SEEDS_FOR_STATS} seeds (context only)"))
     fig.legend(handles=handles, loc="lower center", ncol=5, frameon=False,
                fontsize=8, bbox_to_anchor=(0.5, -0.03))
     fig.suptitle("No single liveness–reconstruction frontier: the relationship "

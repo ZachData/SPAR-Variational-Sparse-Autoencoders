@@ -1,0 +1,47 @@
+{
+    "trainer": {
+        "dict_class": "VSAETopK",
+        "trainer_class": "VSAETopKTrainer",
+        "activation_dim": 512,
+        "dict_size": 2048,
+        "k": 256,
+        "var_flag": 0,
+        "use_april_update_mode": false,
+        "decoder_init_scale": 0.1,
+        "log_var_init": -2.0,
+        "dtype": "torch.bfloat16",
+        "device": "cuda",
+        "steps": 10000,
+        "lr": 0.0008,
+        "kl_coeff": 1.0,
+        "kl_warmup_steps": 0,
+        "auxk_alpha": 0.03125,
+        "warmup_steps": 200,
+        "sparsity_warmup_steps": 500,
+        "decay_start": 8000,
+        "dead_feature_threshold": 1000,
+        "gradient_clip_norm": 1.0,
+        "layer": 0,
+        "lm_name": "gelu-1l",
+        "wandb_name": "VSAETopK_gelu1l_d2048_k256_lr0.0008_kl1.0_aux0.03125_fixed_var_trainer_0",
+        "submodule_name": "blocks.0.hook_resid_post",
+        "seed": 13,
+        "architecture_version": "vae_topk_v2",
+        "key_features": [
+            "unconstrained_latent_space",
+            "topk_on_absolute_values",
+            "proper_kl_computation",
+            "clean_vae_sparsity_separation",
+            "auxiliary_loss_mechanism",
+            "enhanced_gradient_flow"
+        ]
+    },
+    "buffer": {
+        "d_submodule": 512,
+        "n_ctxs": 2500,
+        "ctx_len": 128,
+        "refresh_batch_size": 12,
+        "out_batch_size": 192,
+        "device": "cuda"
+    }
+}

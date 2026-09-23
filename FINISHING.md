@@ -4,43 +4,121 @@ Started 2026-09-17. The science is done; this file tracks the work of making the
 repository read as finished. Check boxes as they land; every step is a PR onto
 `master`. When everything is checked, this file moves to `docs/notebook/`.
 
-## STATUS — read this first (updated 2026-09-17, end of session 1)
+## STATUS — read this first (updated 2026-09-17, end of session 4; handoff)
 
-**Where we are:** Step 1 (the paper) is done except for four editorial calls
-listed under it. Steps 2–5 are untouched. Branch `finishing-plan` holds
-everything so far as open **PR #8** onto `master`; merge it (or keep working
-on the branch) before starting step 2.
+### Where the work is
 
-**Next action:** step 2, "Verifiability". Concretely, in this order:
+Steps 1–4 are done. **`master` only has step 1.** The four step PRs were
+merged into each other rather than into `master`: #8 (`finishing-plan`) →
+`master`, then #9 → `finishing-plan`, #10 → `finishing-verifiability`, #11
+→ `finishing-docs`. So the complete stack (steps 2, 3, 4 and this handoff)
+lives on **`finishing-docs`**, and **PR #12 `finishing-docs` → `master`** is
+the one merge that remains. After it lands:
 
-1. `git add -f` every `experiments/**/{config.json,experiment_config.json,evaluation_results.json,comprehensive_summary_*.json}`
-   (≈1,949 files, 2.4 MB; `experiments/` is git-ignored so `-f` or a
-   `.gitignore` negation is needed — prefer the negation so future runs are
-   picked up). Leave `ae.pt`, `.npz`, `.png`, `logs/` ignored.
-2. Write `reproduce.py` at the root: regenerates every figure in
-   `workshop/figs/` and every numeric table in the paper from the committed
-   JSONs, CPU only. The existing readers are the starting point —
-   `falsification/read_a2_dose_response.py`, `read_a3_dose_response.py`,
-   `read_a4_dose_response.py`, `read_a4_followup.py`, `compare_arms.py`,
-   `frontier.py`, `workshop/make_fig_beta.py`. Check whether each one reads
-   checkpoints (GPU) or summaries (CPU); the Jaccard numbers in particular
-   were read from checkpoints and are cached in
-   `falsification/a{2,3,4}_dose_response_results.json`, so read the cache.
-3. While regenerating figures, fix what the paper read-through flagged:
-   drop the internal codes ("A2:", "A3:", "A4:") and `log_var_init=`
-   labels from titles/annotations, use paper-facing titles and larger fonts
-   (they are 0.72\textwidth two-panel figures).
-4. Add a row per figure/table → JSON source in `docs/REPRODUCE.md` (create
-   the file; step 3 will fold RUNBOOK into it).
+```bash
+git checkout master && git pull
+git branch -d finishing-plan finishing-verifiability finishing-docs finishing-hygiene
+git push origin --delete finishing-plan finishing-verifiability finishing-docs finishing-hygiene
+```
 
-**Environment for the next session:** use `/usr/bin/python3` (torch 2.10
-cu128 + nnsight in `~/.local`), *not* bare `python` (miniforge base, CPU-only,
-no nnsight). `./workshop/build_paper.sh` builds the paper (fetches `tectonic`
-to `~/.local/bin` on first use). `pytest falsification/tests/ -q` → 115 must
-stay green.
+CI (`.github/workflows/ci.yml`) runs for the first time on that merge. It
+has been verified locally in a fresh venv (install, 115 tests with CPU
+torch, `reproduce.py --check`) but never on a GitHub runner; if it fails,
+the likely causes are the CPU-torch index URL line or the pip cache key,
+not the tests.
 
-**Do not** re-audit the repo, re-read the paper, or re-derive the plan — all of
-that is below and in PR #8. Start at step 2 item 1.
+### What each step produced (one line each; the checklists below have the detail)
+
+| Step | Deliverable | Verify with |
+|---|---|---|
+| 1 | `workshop/mechanism_paper.pdf` compiles from `.tex` via `workshop/build_paper.sh`; compiler and read-through fixes | `./workshop/build_paper.sh` |
+| 2 | `experiments/**` metadata + `.npz` committed (18 MB); `reproduce.py` rebuilds every paper figure and table, `--check` asserts 125 numbers; `docs/REPRODUCE.md` | `python reproduce.py --check` → exit 0 |
+| 3 | `docs/{RESULTS,METHODS,ERRATA,REPRODUCE}.md`; `docs/notebook/` (frozen record + index); `README.md` front door; `CLAUDE.md` pointer | read `README.md` |
+| 4 | `pyproject.toml`, `requirements-lock.txt`, `LICENSE`, `CITATION.cff`, `ci.yml`, dead code removed | `pip install -e ".[dev]" && pytest` → 115 |
+
+### Tabled by the author (2026-09-17) — do not start unasked
+
+The paper rewrite: step 1's editorial calls (abstract ~370 words vs a
+150–250 cap; the author block placeholder; "d ≈ 16 on reconstruction" in
+the abstract/§3.4 where Table 1's first row is −5.7 and 16.5 is the
+*unitinit* rung) and any fuller revision of `workshop/mechanism_paper.tex`.
+When it resumes: `reproduce.py`'s `CHECKS` (the `check(...)` calls) are the
+paper's printed numbers — change both together and keep `--check` green.
+The author placeholder is in three places that change together:
+`mechanism_paper.tex`'s author block, `README.md`'s BibTeX, `CITATION.cff`.
+
+### Next action: step 5, archive and release — needs the author
+
+1. **Checkpoint archive to HuggingFace.** What to upload: the 434 final
+   `experiments/<arm>/seed<n>/<run>/trainer_0/ae.pt` (2.47 GB; exclude the
+   three top-level `experiments/VSAEJumpReLU_*` smoke-test dirs). Of the
+   3,347 intermediate `ae_<step>.pt` (21 GB, the dense-schedule arms), the
+   only ones a reported number depends on are `e2_sampling_only_early` and
+   `e2_sigma_low_init_early` (2 x 70 files, 0.88 GB):
+   `falsification/read_selection_jaccard.py` reads them for the step-wise
+   Jaccard trajectory in RESULTS §3 (0.069 → 0.811), which is tabulated in
+   notebook addendum 8 and cached nowhere else. Upload those two arms'
+   intermediates too; skip the rest (the A2/A3/A4 arms' dense schedules
+   were never read). Preserve the `experiments/...` path structure so
+   `docs/REPRODUCE.md`'s GPU readers work on top of a download:
+   ```bash
+   pip install -U huggingface_hub && huggingface-cli login
+   huggingface-cli upload <user>/<repo> experiments experiments --repo-type model \
+       --include "*/seed*/*/trainer_0/ae.pt" "e2_*_early/seed*/*/trainer_0/ae_*.pt" \
+       --exclude "VSAEJumpReLU_*/**"
+   ```
+   (~3.4 GB total. Check the `--include` globs against `huggingface-cli
+   upload --help` for the installed version before trusting them.)
+   Decisions that are the author's: the HF account/repo name; whether to
+   also upload the 3 Pythia checkpoints under `experiments/e4_pythia_*`
+   (they are in the glob above; keep them — E4 depends on them).
+2. Link it: `README.md` → Reproduce ("the 2.3 GB of weights are not"),
+   `docs/REPRODUCE.md` → "What is committed, and what is not".
+3. `git tag v1.0 && git push origin v1.0`; GitHub release with
+   `workshop/mechanism_paper.pdf` attached — **after** the paper rewrite
+   lands, so the release PDF is the final one. `CITATION.cff` has
+   `version: 1.0.0` and `date-released: 2026-09-17`; bump the date to the
+   release day.
+4. Zenodo DOI (optional; enable the GitHub integration before tagging if
+   wanted, so the tag mints the DOI).
+5. `git mv FINISHING.md docs/notebook/FINISHING.md` with the frozen header
+   the other notebook files carry, and add its row to
+   `docs/notebook/README.md`; drop the `FINISHING.md` bullet from
+   `CLAUDE.md`.
+
+### Known loose ends (not blocking; recorded so they are not rediscovered)
+
+- `workshop/figs/frontier.pdf` is the 8-arm addendum-6 figure; running
+  `falsification/frontier.py` now draws 11 arms with overlapping labels.
+  Left as committed on purpose (`docs/REPRODUCE.md` says so). Fix the label
+  placement if the figure is ever needed again.
+- `reproduce.py` regenerates figures but CI does not byte-diff them
+  (matplotlib stamps its version into the files). Locally, regenerated
+  PDFs were byte-identical to the committed ones under matplotlib 3.10.8.
+- Docstrings in `falsification/` and the trainers still cite "PROJECT.md",
+  "RESULTS addendum N", "REMEDIATION F6" by their old names;
+  `docs/notebook/README.md` resolves them. Deliberate.
+- `experiments/e2_learned_var` has 6 seeds (the 13-seed battery superseded
+  it); `a2_sigma_init_m1` has analysis `.npz` for 3 seeds only — those were
+  a frontier side-check, not part of any table.
+- The `VSAEBatchTopK` `frac_recovered` bug (ERRATA §2) is documented, not
+  fixed; nothing in the paper uses that number.
+- E0 (the pipeline negative control) was never run; RESULTS §9 says so.
+- The wandb sweep plumbing in the training scripts is dormant and kept
+  (step 4 checklist explains why).
+
+### Environment
+
+`/usr/bin/python3` (Python 3.14, torch 2.10 cu128, nnsight 0.7) for
+anything with torch; bare `python`/`python3` on this machine is a CPU-only
+conda base — fine for `reproduce.py` and the paper, not for training.
+`pip install -e ".[dev]"` covers `reproduce.py` and the tests anywhere.
+Must stay green: `pytest` → 115 (109 + 6 torch-only), `python reproduce.py
+--check` → exit 0. `./workshop/build_paper.sh` builds the PDF (`tectonic`
+in `~/.local/bin`).
+
+**Do not** re-audit the repo, re-read the paper, or re-derive the plan.
+Start by merging #12, then step 5 item 1 with the author.
 
 ## Why
 
@@ -91,38 +169,38 @@ Everything below serves those three.
   - the abstract is ~370 words — most venues cap at 150–250;
   - the author block is a placeholder (`Zach`, a gmail address) — needs name, affiliation, and a decision on whether the preprint's co-authors are on this one;
   - the naive-comparison gap is described as "d ≈ 16 on reconstruction, d ≈ 13 on liveness" in the abstract/§3.4, but Table 1's first row is d = −5.7 on FVE; the 16.5 is the *unitinit* rung. Either say "up to d ≈ 16 along the ladder" or quote the first-row numbers;
-  - figures: 0.72\textwidth two-panel PNG→PDF with matplotlib-default fonts, and internal experiment codes ("A2:", "A3:", "A4:") and `log_var_init=` labels in the suptitles/annotations — regenerate under step 2 with paper-facing titles and larger fonts.
+  - ~~figures: 0.72\textwidth two-panel PNG→PDF with matplotlib-default fonts, and internal experiment codes ("A2:", "A3:", "A4:") and `log_var_init=` labels in the suptitles/annotations~~ — done in step 2 (full text width, 9 pt fonts, σ and achieved-L0 labels, no suptitle).
 - [x] Commit `workshop/mechanism_paper.pdf` (25 pages, 264 KB; rebuilt by `build_paper.sh`)
 
 ### 2. Verifiability — every number recomputable from the repo, no GPU
-- [ ] Commit every run's `config.json`, `experiment_config.json`, `evaluation_results.json`, `comprehensive_summary_*.json` (≈2.4 MB; leave `ae.pt`, `.npz`, `.png` ignored)
-- [ ] `reproduce.py` (or `make figures`): regenerates every figure in `workshop/figs/` and every table in the paper from committed JSONs; runs in CI
-- [ ] Record which figure/table each result JSON feeds, in `docs/REPRODUCE.md`
+- [x] Commit every run's `config.json`, `experiment_config.json`, `evaluation_results.json`, `comprehensive_summary_*.json` (1,940 files, 2.4 MB) — via a `.gitignore` negation so future runs are picked up; `ae.pt`, `.png`, logs stay ignored. **Also** the 170 `all_histograms_*.npz` (16 MB): `report_summaries.liveness()` reads the per-feature selection counts from the `.npz`, not the JSON, so without them Tables 1, 6 and 8 cannot be recomputed. The three `experiments/VSAEJumpReLU_*` smoke-test dirs stay ignored.
+- [x] `reproduce.py`: every figure in the paper + `beta_sweep.pdf`, every numeric table, `--check` asserts 125 printed numbers against the paper (exit 1 on drift). CPU, ~45 s. Runs-in-CI is step 4's workflow item. The four dose-response figures now share one definition, `falsification/dose_response_figure.py`, used by the readers too. `frontier.pdf` is left as committed (exploratory; `frontier.py` would redraw it over 11 arms, not addendum 6's 8).
+- [x] `docs/REPRODUCE.md` — figure/table → arms → data → function → equivalent script, plus the list of numbers that still need a GPU and a checkpoint.
 
 ### 3. Docs — 11 files → 5, frozen tense
-- [ ] `README.md` — front door: the claim under test, the six findings (one paragraph + figure each), reproduce, cite. Today's status table becomes a *final state* block; the session log goes to the notebook.
-- [ ] `docs/RESULTS.md` — findings in final form, past tense, no addendum numbering (from `RESULTS_2026-09-03.md` + PROJECT's "What is established")
-- [ ] `docs/METHODS.md` — pre-registration, statistical design, power analysis (PROJECT.md's frozen lower half)
-- [ ] `docs/ERRATA.md` — CLAUDE.md's landmines + corrections to the preprint, rewritten for a human reader
-- [ ] `docs/REPRODUCE.md` — RUNBOOK cleaned: environment (`/usr/bin/python3`, pinned versions), one command per figure/table
-- [ ] `docs/notebook/` — `PROJECT.md`, `HANDOFF.md`, `RESULTS_2026-09-03.md`, `FINDINGS_2026-09-02.md`, `REMEDIATION.md`, `OVERVIEW.md`, `workshop/00–02_*.md`, `workshop/paper.tex` moved **verbatim**, each with a one-line "frozen <date>; historical record" header
-- [ ] `CLAUDE.md` shrinks to a pointer at `docs/ERRATA.md` + the working conventions
+- [x] `README.md` — front door: the claim under test, the six findings (one paragraph each, the A2 figure inline), reproduce, layout, framework quick start, cite. No status table; the session log went to `docs/notebook/README.md`.
+- [x] `docs/RESULTS.md` — findings in final form, past tense; each section ends with a one-line pointer to the notebook addenda it rests on (a reviewer needs the trail), and a "predicted and wrong" section keeps the falsified predictions
+- [x] `docs/METHODS.md` — thesis, framework, combinatorial floors, the three simulation results, κ/α, measurement conventions, training config, the pre-registration verbatim with outcomes beside it
+- [x] `docs/ERRATA.md` — preprint corrections, every code bug (what / what it touched / status), replaced metrics, retracted results, SAEBench modifications (verified against `git log -- SAEBench-main`)
+- [x] `docs/REPRODUCE.md` — RUNBOOK folded in (GPU commands, framework snippet); pinned versions are step 4's `requirements-lock.txt`
+- [x] `docs/notebook/` — all eleven files moved with `git mv`, verbatim under a frozen header; `README.md` index explains the old names code comments still cite
+- [x] `CLAUDE.md` → pointer at `docs/` + conventions (added: the paper's numbers are checked by `reproduce.py`, not typed)
 
 ### 4. Hygiene — one PR
-- [ ] `pyproject.toml` so `pip install -e .` is true
-- [ ] `requirements-lock.txt` frozen from the working env (torch 2.10.0+cu128, nnsight 0.7.0, …)
-- [ ] `LICENSE` (MIT, matching upstream `dictionary_learning`)
-- [ ] `CITATION.cff`
-- [ ] Replace `.github/workflows/build.yml` with a workflow that runs `pytest falsification/tests/` (and `reproduce.py`) on push/PR to `master`; badge in README
-- [ ] `git rm` tracked `__pycache__/*.pyc`
-- [ ] Remove root `train_jumprelu.py`, `train_vsae_jump_relu.py`, `sweep.out`
-- [ ] Remove `sae_vis/` and the four unreferenced `analysis_scripts/` (history keeps them)
-- [ ] Root `tests/`: fix or remove (not both)
-- [ ] `wandb` sweep plumbing in `training_scripts/`: check whether any finished result depends on it before cutting
-- [ ] `SAEBench-main/`: note the vendored version and the modified files in `docs/REPRODUCE.md`
+- [x] `pyproject.toml` so `pip install -e .` is true — setuptools, packages `dictionary_learning`, `dictionary_learning.trainers`, `falsification`; base deps numpy/scipy/matplotlib; extras `train`, `e4`, `interp`, `dev`. Verified in a fresh venv: install, 109 tests + 1 skip without torch, 115 with CPU torch + einops, `reproduce.py --check` green.
+- [x] `requirements-lock.txt` frozen from the working env (`pip freeze` of `/usr/bin/python3`, 294 lines, header says what it is); `requirements.txt` is now `-e .[train,e4,dev]`
+- [x] `LICENSE` (MIT; upstream `dictionary_learning`'s copyright line kept, SAEBench's MIT noted — the vendored copy predates upstream's LICENSE file)
+- [x] `CITATION.cff` (author placeholder, same as the paper — changes with the rewrite)
+- [x] `.github/workflows/ci.yml` replaces upstream's Poetry/PyPI workflow: `pip install -e .[dev]` + CPU torch, `pytest falsification/tests/`, `python reproduce.py --check`, on push/PR to `master`. Figures are regenerated but not diffed (matplotlib stamps its version into the files). Badge in README.
+- [x] `git rm` 43 tracked `__pycache__/*.pyc`
+- [x] Removed root `train_jumprelu.py`, `train_vsae_jump_relu.py`, `sweep.out`
+- [x] Removed `sae_vis/` and the four unreferenced `analysis_scripts/` (history keeps them); `analysis_scripts/` un-ignored so `online_histogram_analyzer.py` is a normal tracked file
+- [x] Root `tests/`: removed. They were upstream `dictionary_learning`'s and import classes this fork does not have (`AutoEncoderNew`); the end-to-end one needs a GPU. `falsification/tests/` is the suite (`pytest` now defaults to it via `pyproject.toml`).
+- [x] `wandb` sweep plumbing: **kept, deliberately.** `--sweep` mode / `BaseSweepRunner` is dormant and no result depends on it, but `train_vsae_topk.py`, `train_vsae_batchtopk.py` and `train_vsae_topk_masked_kl.py` import `dictionary_learning.base_sweep` at module scope and every result was produced through those scripts; cutting it means editing the trainers that produced the data for no gain. `training.py` also imports `wandb` at top level, so `wandb` stays in the `train` extra.
+- [x] `SAEBench-main/`: version and modified files in `docs/ERRATA.md` §5, pointer in `docs/REPRODUCE.md`
 
 ### 5. Archive and release
-- [ ] Upload the 437 checkpoints (2.3 GB) to a HuggingFace repo; link from README
+- [ ] Upload the 434 final checkpoints (2.47 GB) + the two `*_early` arms' intermediates (0.88 GB) to a HuggingFace repo; link from README (STATUS has the command)
 - [ ] Tag `v1.0`; GitHub release with the PDF attached
 - [ ] Zenodo DOI (optional)
 - [ ] Move this file to `docs/notebook/`
@@ -132,3 +210,7 @@ Everything below serves those three.
 | Date | Done |
 |---|---|
 | 2026-09-17 | Audit; this plan written. Branches consolidated to `master` (PRs #6, #7). Paper compiled for the first time (`build_paper.sh`); compiler + read-through fixes, incl. Table 6's stale 6-seed numbers; PDF committed. All on PR #8. |
+| 2026-09-17 (session 4, handoff) | PRs #9–#11 were merged into each other, not `master`; full stack is on `finishing-docs`; PR #12 `finishing-docs` → `master` opened. STATUS rewritten as a cold-start handoff: PR state, per-step deliverables, the tabled rewrite, step 5 with commands, loose ends. |
+| 2026-09-17 (session 4) | Step 4. `pyproject.toml` (+ extras), `requirements-lock.txt`, `LICENSE`, `CITATION.cff`, `ci.yml` (tests + `reproduce.py --check`), 43 `.pyc` untracked, `sae_vis/`, four analysis scripts, root train scripts and root `tests/` removed; wandb sweep plumbing kept with reason. Branch `finishing-hygiene`, PR #11 (stacked on #10). |
+| 2026-09-17 (session 3) | Step 3. Paper rewrite tabled by the author. `docs/{RESULTS,METHODS,ERRATA}.md` written; RUNBOOK folded into `docs/REPRODUCE.md`; eleven notebook files moved verbatim to `docs/notebook/`; README and CLAUDE.md rewritten. Branch `finishing-docs`, PR #10 (stacked on #9). |
+| 2026-09-17 (session 2) | Step 2. Run metadata + `.npz` committed (2,110 files, 18 MB). `reproduce.py --check`: 125/125 paper numbers reproduce from committed data, CPU only. Figures regenerated at text width with paper-facing labels; paper's Table 3 (−2.0 row) and E2 gap (0.4410→0.4420) corrected. `docs/REPRODUCE.md`. Branch `finishing-verifiability`, PR #9 (stacked on #8). |

@@ -46,6 +46,8 @@ from statistics import mean, stdev
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from falsification.dose_response_figure import dose_response_figure, pearson  # noqa: E402
+
 NORM_FACTOR = 25.75  # falsification/read_selection_jaccard.py
 
 # (log_var_init, arm, needs_bias_correction). Ordered by log_var_init descending
@@ -60,6 +62,7 @@ ARMS = [
     (-8.0, "e2_sigma_low_init", True),
 ]
 
+BASELINE_ARM = "baseline"  # the deterministic reference the dose-response is measured against
 D, K = 2048, 256
 CHANCE_JACCARD = K / (2 * D - K)
 
@@ -77,6 +80,13 @@ def fve_for(arm: str, seed: int) -> float | None:
     if not p.exists():
         return None
     return json.loads(p.read_text())["results"]["frac_variance_explained"]
+
+
+def baseline_fve() -> float | None:
+    """Mean FVE of the deterministic TopK baseline (var_flag=0, no penalty)."""
+    vals = [json.loads(p.read_text())["results"]["frac_variance_explained"]
+            for p in (REPO / "experiments" / BASELINE_ARM).glob("seed*/RUN_COMPLETE.json")]
+    return mean(vals) if vals else None
 
 
 def draw_activations(n_tokens: int, device: str):
@@ -139,69 +149,13 @@ def mean_jaccard(ckpt: Path, acts, needs_correction: bool, device: str) -> float
     return float(torch.cat(overlaps).mean())
 
 
-def pearson(xs: list[float], ys: list[float]) -> float:
-    n = len(xs)
-    mx, my = mean(xs), mean(ys)
-    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / n
-    sx = (sum((x - mx) ** 2 for x in xs) / n) ** 0.5
-    sy = (sum((y - my) ** 2 for y in ys) / n) ** 0.5
-    return cov / (sx * sy)
 
 
 def figure(rows: list[dict]) -> None:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    rows = sorted(rows, key=lambda r: -r["sigma"])
-    sigma = [r["sigma"] for r in rows]
-    fve = [r["fve_mean"] for r in rows]
-    fve_sd = [r["fve_std"] for r in rows]
-    jac = [r["jaccard_mean"] for r in rows]
-    jac_sd = [r["jaccard_std"] for r in rows]
-    r_fj = pearson(fve, jac)
-
-    fig, axes = plt.subplots(1, 2, figsize=(9.6, 4.0))
-
-    ax = axes[0]
-    ax.errorbar(sigma, fve, yerr=fve_sd, fmt="o-", color="#c0392b", label="FVE", ms=6)
-    ax.errorbar(sigma, jac, yerr=jac_sd, fmt="s-", color="#2471a3", label="Jaccard", ms=6)
-    ax.axhline(0.900159, color="#52514e", lw=0.8, ls=":")
-    ax.annotate("baseline FVE", (sigma[0], 0.900159), xytext=(4, 3),
-                textcoords="offset points", fontsize=7.5, color="#52514e")
-    ax.set_xscale("log")
-    ax.invert_xaxis()
-    ax.set_xlabel("sigma at convergence (log scale, decreasing noise -->)")
-    ax.set_ylabel("value")
-    ax.set_title("Smooth, no knee: both rise together\nas sigma falls", fontsize=10)
-    ax.legend(fontsize=8, frameon=False)
-    ax.grid(alpha=0.25, lw=0.6)
-    ax.spines[["top", "right"]].set_visible(False)
-
-    ax = axes[1]
-    ax.errorbar(jac, fve, xerr=jac_sd, yerr=fve_sd, fmt="o", color="#6c3483", ms=7)
-    for r in rows:
-        ax.annotate(f"log_var_init={r['log_var_init']:.0f}", (r["jaccard_mean"], r["fve_mean"]),
-                    xytext=(5, -3), textcoords="offset points", fontsize=7, color="#52514e")
-    ax.axhline(0.900159, color="#52514e", lw=0.8, ls=":")
-    ax.set_xlabel("selection Jaccard at convergence")
-    ax.set_ylabel("fraction of variance explained")
-    ax.annotate(f"Pearson r = {r_fj:+.4f}  (n = 6 grid points)", (0.03, 0.93),
-                xycoords="axes fraction", fontsize=8.5, color="#0b0b0b")
-    ax.set_title("FVE tracks selection stability almost\nlinearly across the whole grid", fontsize=10)
-    ax.grid(alpha=0.25, lw=0.6)
-    ax.spines[["top", "right"]].set_visible(False)
-
-    fig.suptitle("A2: the sigma_init dose-response is smooth, not a threshold —\n"
-                  "but FVE damage tracks TopK selection churn almost exactly",
-                  fontsize=11, y=1.04)
-    fig.tight_layout()
-    out = REPO / "workshop" / "figs"
-    out.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out / "a2_dose_response.pdf", bbox_inches="tight",
-                metadata={"CreationDate": None})
-    fig.savefig(out / "a2_dose_response.png", dpi=180, bbox_inches="tight")
-    print(f"\nWrote {out / 'a2_dose_response.pdf'} and {out / 'a2_dose_response.png'}")
+    """Plot via the shared paper figure (falsification/dose_response_figure.py)."""
+    out = REPO / "workshop" / "figs" / "a2_dose_response"
+    dose_response_figure(rows, baseline_fve(), arch="TopK", out_stem=out)
+    print(f"\nWrote {out}.pdf and {out}.png")
 
 
 def main() -> int:

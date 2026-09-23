@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: "If you use this repository, please cite it as below."
+title: "What a KL term actually does to a TopK sparse autoencoder: implementation variance, selection churn, and a falsification framework for SAE claims"
+authors:
+  - given-names: Zach
+    family-names: ""
+version: 1.0.0
+date-released: 2026-09-17
+repository-code: "https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders"
+license: MIT
+keywords:
+  - sparse autoencoders
+  - mechanistic interpretability
+  - variational autoencoders
+  - e-values
+  - permutation tests
+abstract: >-
+  A fork of dictionary_learning extended with variational sparse autoencoders,
+  together with a sequential-falsification framework (e-values and
+  permutation tests over training seeds) used to check which claims from the
+  vSAE preprint survive contact with the code and the data. Contains the
+  fixed trainers, the metadata of 434 training runs at up to 13 seeds per
+  arm, a script that recomputes every number in the accompanying paper from
+  that data, and the paper.
+references:
+  - type: software
+    title: dictionary_learning
+    authors:
+      - family-names: Marks
+        given-names: Samuel
+      - family-names: Karvonen
+        given-names: Adam
+      - family-names: Mueller
+        given-names: Aaron
+    year: 2024
+    repository-code: "https://github.com/saprmarks/dictionary_learning"
+  - type: software
+    title: SAEBench
+    version: 0.4.2
+    authors:
+      - family-names: Karvonen
+        given-names: Adam
+      - family-names: Rager
+        given-names: Can
+    year: 2025
+    repository-code: "https://github.com/adamkarvonen/SAEBench"

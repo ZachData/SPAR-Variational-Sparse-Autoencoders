@@ -4,278 +4,61 @@ Guidance for Claude Code sessions in this repository.
 
 ## What this repository is
 
-A fork of [`dictionary_learning`](https://github.com/saprmarks/dictionary_learning)
-extended with variational sparse autoencoders (vSAEs), plus a vendored copy of
-SAEBench and a falsification framework for validating claims about SAEs.
+A fork of `dictionary_learning` extended with variational sparse autoencoders
+(vSAEs), a vendored SAEBench, and a falsification framework for validating
+claims about SAEs. The science is finished; the repository is being made to
+read as finished. `README.md` is the front door and `docs/` is the account:
 
-Two lines of work live here:
-
-1. **`dictionary_learning/`, `training_scripts/`, `analysis_scripts/`** — vSAE
-   architectures and the experiments behind the arXiv preprint.
-2. **`falsification/`** — sequential falsification with e-values, used to decide
-   what the experiments in (1) actually license. See `PROJECT.md`.
-
-## Landmines — read before touching the vSAE code
-
-These have already caused incorrect claims in a written paper. Verify against the
-code before repeating any of them.
-
-**`var_flag=0` means there is no sampling at all.** In
-`dictionary_learning/trainers/vsae_topk.py::encode`, the reparameterisation is
-gated on `var_flag == 1`; otherwise `z = mu`. Every checkpoint in
-`comprehensive_histogram_analysis/` is named `_fixed_var`, which
-`train_vsae_topk.py:275` emits exactly when `var_flag == 0`. So every evaluated
-"variational" model is deterministic. With `sigma = 1` fixed the KL also reduces
-to `0.5 * ||mu||^2`, i.e. a plain L2 penalty on the activations. **The evaluated
-vSAE is a TopK SAE with an L2 activation penalty.** Do not describe these runs as
-variational, stochastic, or as testing a posterior.
-
-**`vsae_topk.py` applies `F.relu(mu)`; `vsae_topk_masked_kl.py` does not.** The
-two trainers therefore differ by more than the KL mask. Any comparison between
-them confounds the mask with the ReLU. The preprint's equations show no ReLU.
-The masked trainer now carries a `relu_mu` flag (default `False`, so every
-existing checkpoint is unchanged), and E3 runs as two arms — `e3_masked_kl`
-(no ReLU, matching the preprint) and `e3_masked_kl_relu` (ReLU, matching the
-released code) — so the ReLU's contribution is measured rather than assumed.
-`relu_mu` changes no parameter shape and so **cannot be recovered from a state
-dict**; `config.json` is the only record of which arm a checkpoint belongs to.
-
-**The baseline had AuxK on and the vSAE had it off.** The headline Pythia
-comparison is `auxk0.03125` (baseline) against `aux0` (vSAE). AuxK is the standard
-dead-feature revival mechanism, so that comparison confounds the KL term with the
-absence of the standard remedy. The gelu-1l beta sweep holds AuxK fixed at 1/32 and
-is not affected.
-
-**Config values in the preprint do not match the code.** Code is authoritative:
-layer 3 (`blocks.3.hook_resid_post`), not layer 0; `total_steps = 10000`, not
-20,000; Pythia dictionaries are `d=8192` (16x `d_model=512`) while gelu-1l is
-`d=2048` (4x). The preprint's SAE loss equation includes an L1 term that
-`top_k.py` does not have — TopK enforces sparsity architecturally.
-
-**Metric names are not self-explanatory.** `features_used` in the
-`comprehensive_summary_*.json` files counts dictionary entries selected at least
-once over the streamed sample; it is sample-size dependent. The preprint quotes
-two different dead-feature numbers from two different measurements (1,227/6,970
-from sae_vis histograms; 1,474/7,379 from the 1M-sample analysis). Prefer the
-1M-sample numbers and say which measurement you used.
-
-**Two p-value floors are combinatorial, and both have bitten.** `min_p_floor` /
-`min_attainable_p` once had their one-sided and two-sided branches swapped; that is
-**fixed** (F1), and the `xfail` that pinned it is now a positive test. What remains
-is not a bug but a property to plan around:
-
-* The **seed** floor is `2/C(2n,n)` two-sided. 6 seeds/group cannot beat 3.07 sigma
-  however large the effect; 13 seeds/group is the first n reaching 5 sigma.
-* Above `_EXACT_ENUMERATION_LIMIT` (200k assignments) the test silently falls back
-  to **Monte Carlo**, whose floor is `1/(n_perm+1)`. The 100k default caps evidence
-  at 4.42 sigma *regardless of effect size*. Pass a larger `n_perm` (it is
-  vectorised; 4M draws take ~1s) whenever n > 8 per group.
-
-A p-value sitting exactly at one of these floors means **the design ran out, not the
-evidence**. Check `result["exact"]` and `result["p_floor"]` before reporting.
-
-**`norm_factor` is not recorded in any checkpoint's `config.json`.** Training
-normalises activations to unit mean squared norm (`trainSAE(normalize_activations=
-True)`) and scales the biases back up by `norm_factor` before saving, so a saved
-model is correct on raw activations. But `trainSAE` records it with
-`trainer.config["norm_factor"] = norm_factor` (`training.py:212`) and every
-trainer's `config` is a `@property` that builds a fresh dict — the write lands on
-a temporary and is discarded. It affects every arm identically, so it confounds
-nothing, but **any analysis that reasons about a quantity in training space has to
-re-estimate it** as `sqrt(mean ||x||^2)`, the estimator `get_norm_factor` uses
-(≈ 25.54 for gelu-1l layer 0). Skipping that step rescales every activation by 25x;
-`falsification/read_penalty_clamp.py` does it correctly and says why.
-
-**`var_encoder.bias` (`b_enc_var` for JumpReLU) was corrupted by `scale_biases` in
-every checkpoint saved before 2026-09-04 (second session).** The same save-time
-rescaling that correctly converts `encoder.bias`/`decoder.bias` to raw-activation
-space was, until fixed, ALSO applied to the log-variance bias — mathematically
-wrong (log_var isn't on the additive x/mu axis; clamp+exp aren't scale-homogeneous)
-and it drives every saved `var_flag=1` checkpoint's `log_var` to appear fully
-clamp-collapsed regardless of what was actually learned (RESULTS addendum 8:
-`log_var_init=-2.0` saved as `-51.5`). This is why addendum 3's "the posterior
-collapses completely" and "sampling noise is harmless at eval time" both turned
-out to be measurement artifacts, not findings — read addendum 8 before trusting
-either claim. Now fixed (weight is rescaled instead of bias, preserving log_var's
-true value on raw activations for anything trained after the fix), but **every
-checkpoint already on disk still needs the correction applied by hand** when its
-`log_var` is read: divide both `var_encoder.bias` and `var_encoder.weight` by
-`norm_factor` before calling `encode()` — see `read_selection_jaccard.py`'s
-`mean_jaccard` for the pattern. `e2_sigma_low_init` is the one arm this doesn't
-change: `log_var_init=-8.0` already sits below the clamp floor, so it saturates
-identically whether or not the bug's multiplication is applied.
-
-**`frac_recovered = 0.0` in a summary file usually means an OOM, not a result.**
-`loss_recovered()` OOMs at the default eval batch size on a 10GB card, the failure
-is swallowed by an `except ... continue`, and the run reports success with the
-cross-entropy metrics written as NaN. Every committed checkpoint shows that
-signature. `falsification/run_arm.py` now evaluates at batch 2 x 48, which fixes it.
-
-**`vsae_batch_topk.py::scale_biases` carried the SAME `var_encoder.bias`
-corruption bug vsae_topk.py had — found and fixed 2026-09-11 (RESULTS addendum
-18).** It multiplied `var_encoder.bias` by `norm_factor` at save time, exactly
-the mistake addendum 8 describes for `vsae_topk.py`: wrong for a log-variance
-bias, and it drives any saved `var_flag=1` BatchTopK checkpoint's `log_var` to
-read as clamp-collapsed regardless of what was learned. Now fixed the same way
-(rescale `var_encoder.weight` instead, bias untouched) — every
-`a3_batchtopk_*` checkpoint (`falsification/run_arm.py`) was trained after the
-fix and needs no correction. `vsae_jump_relu.py` already carried the fix
-proactively (never exercised by an actual run before this).
-
-**`vsae_batch_topk.py::_apply_topk_sparsity`'s global budget breaks under
-`loss_recovered()`'s 3D activations — found 2026-09-11, NOT fixed (out of
-scope for A3; use FVE and Jaccard, not `frac_recovered`, for this trainer).**
-The global top-`(k * batch_size)` selection uses `z.size(0)` as `batch_size`.
-During training `z` is pre-flattened to `[n_tokens, d]`, so that's correct.
-But `dictionary_learning/evaluation.py`'s `loss_recovered_transformer_lens`
-calls this model directly inside a transformer_lens hook on UNFLATTENED
-`[batch, seq_len, d]` activations, where `z.size(0)` is the sequence-batch
-size, not the token count — undershooting the active-feature budget by
-`~ctx_len` (e.g. 256×2 instead of 256×2×128). The reconstruction this produces
-is nowhere near training-time sparsity, so `frac_recovered` comes out
-catastrophically negative (worse than zero-ablation) even when
-`frac_variance_explained` — computed on the buffer's own flattened 2D batches,
-a different code path — looks fine. Any `a3_batchtopk_*` (or other
-`VSAEBatchTopK`) checkpoint's `frac_recovered`/`loss_reconstructed` is
-unreliable; `frac_variance_explained` is not.
-
-**`training_scripts/train_vsae_batchtopk.py`'s `ExperimentConfig.__post_init__`
-computes `warmup_steps`/`sparsity_warmup_steps`/`decay_start_step` from
-`total_steps` AT CONSTRUCTION TIME — found 2026-09-11.** `create_full_config()`
-defaults `total_steps=25000`; `falsification/run_arm.py`'s override loop then
-sets `total_steps=10000` via `setattr` without re-running `__post_init__`, so
-those three derived fields silently stay computed from 25000 (e.g.
-`decay_start_step=20000`, past the entire 10000-step run) unless overridden
-explicitly alongside `total_steps`. `run_arm.py`'s `a3_batchtopk_*` arms pin
-all three to the values `train_vsae_topk.py`'s own `__post_init__` produces at
-`total_steps=10000` (200 / 500 / 8000). This is specific to
-`train_vsae_batchtopk.py` — `train_vsae_topk.py`'s own `create_full_config()`
-default already happens to be `total_steps=10000`, so the mismatch never
-triggers there, which is luck, not a property of `run_arm.py`'s override
-mechanism. Check any trainer's own `total_steps` default before trusting
-BASE's override of it.
-
-**`run_e4_scr.py` / `run_e4_tpp.py`'s activation cache is loaded if the file
-exists at all — it does not check the config that built it.** Found
-2026-09-11: running `--smoke` (test_set_size=50) on a new dataset/class pair
-and then the full run (test_set_size=1000) on the same one silently reuses the
-tiny smoke-sized cache for the "full" run, with no warning — visible only as
-suspiciously exact small-fraction accuracy values (e.g. 0.9583333730697632 =
-23/24) and an undersized `e4_scr_artifacts/*_activations.pt` (~200MB instead
-of ~4GB). Never `--smoke` a pair/dataset you're about to run for real; if you
-need a pipeline sanity check, use a scratch `--out` and delete the resulting
-`e4_scr_artifacts/<dataset>_<pair>_*` files before the real run.
-
-**`vsae_jump_relu.py` had three compounding bugs — found and fixed 2026-09-12,
-before any A4 (JumpReLU discreteness) arm ran, so nothing on disk is
-affected.** No training script had ever exercised this trainer end to end;
-`training_scripts/train_vsae_jumprelu.py` (new) is the first.
-
-1. **`threshold` received zero gradient.** `VSAEJumpReLU.jump_relu()` computed
-   `F.relu(x) * (x > threshold).float()`: numerically identical to a real
-   JumpReLU forward pass (threshold is clamped positive, so `x > threshold`
-   already implies `x > 0`), but `>` is non-differentiable, so the boolean mask
-   carries no gradient back to `threshold` — despite being an `nn.Parameter`
-   registered with the optimizer, it could never move from its init value.
-   Fixed by routing through `JumpReLUFunction`, the straight-through estimator
-   this repo's own non-variational `jumprelu.py` already defines for exactly
-   this reason (import it from there rather than duplicating it).
-2. **No L0-target sparsity term.** Even with a working gradient, nothing was
-   pushing `threshold` toward any particular sparsity level.
-   `VSAEJumpReLUTrainer.loss()` now has one, mirroring `JumpReluTrainer`'s
-   `sparsity_penalty * ((l0/target_l0) - 1)^2` via the matching `StepFunction`
-   STE. Unlike TopK/BatchTopK's architectural hard-k, `target_l0` is a SOFT
-   target reached by gradient descent — check achieved `l0` against
-   `target_l0` in a run's results before trusting any sparsity-matched
-   comparison against the hard-k arms, and note noise can push the achieved
-   L0 well below target when sigma is large relative to the margin the
-   threshold has adapted to (observed directly: l0 dropped from ~270 to ~71
-   at `log_var_init=-2.0` after only 2000 steps in a smoke test).
-3. **The gate was applied BEFORE sampling, not after — this one changes what
-   the model tests, not just whether it trains.** `encode()` used to compute
-   `mu = jump_relu(pre_jump, threshold)` (a deterministic gate) and only then
-   `reparameterize(mu, log_var)` added noise. That makes noise perturb the
-   VALUE of already-selected features but structurally unable to change the
-   selected SET — it can never produce the selection churn that is the entire
-   point of comparing this trainer against A2/A3 (TopK, BatchTopK), where
-   `vsae_topk.py`'s own docstring states the order as `encoder → μ,σ² →
-   reparameterize → z → Top-K(|z|)`, noise strictly before selection. Fixed by
-   moving the gate after the noise: `encode()` now returns the raw, ungated
-   pre-activation as `mu`; a new `VSAEJumpReLU.select(z)` applies the gate, and
-   the trainer calls it on the noisy `z = reparameterize(mu, log_var)`, not on
-   `mu` directly. Verified directly: repeated forward passes on the same token
-   at `log_var_init=1.0` now show mean Jaccard 0.35 between the selected sets
-   (was 1.0 — no churn possible — before the fix). A side effect, not a new
-   bug: KL is now computed on the dense, ungated `mu` over the full
-   dictionary, matching `vsae_topk.py`'s convention (KL on the pre-selection
-   mean) rather than the previous behavior of computing it on an
-   already-mostly-zero gated code.
+- `docs/RESULTS.md` — what was established, in final form
+- `docs/METHODS.md` — the statistical design and the pre-registration
+- `docs/ERRATA.md` — **read before touching `dictionary_learning/` or describing
+  any checkpoint.** Every bug and mismatch that has already produced a false
+  claim is there: `var_flag=0` means no sampling; the two trainers differ by
+  a ReLU as well as the KL mask; the save-time bias rescaling corrupted
+  `log_var` in pre-2026-09-04 checkpoints; `norm_factor` is not saved;
+  `frac_recovered` is wrong for `VSAEBatchTopK`; the E4 cache ignores its
+  config; the p-value floors are combinatorial.
+- `docs/REPRODUCE.md` — environment, `reproduce.py`, and the GPU commands
+- `docs/notebook/` — the dated working record (PROJECT.md, the RESULTS
+  addenda, REMEDIATION), frozen. Code comments that cite "PROJECT.md",
+  "RESULTS addendum N" or "REMEDIATION F6" mean these files.
+- `FINISHING.md` — the plan for finishing the repository; read its STATUS
+  block first in any session that continues that work.
 
 ## Environment
 
-- **Two environments, and it matters which you are in.** Run
-  `python falsification/preflight.py` to find out.
-  - *Remote/web sessions* have no GPU and no torch; `nvidia-smi` and
-    `import torch` both fail. Available work: reading code, the `falsification/`
-    package, analysis of committed `comprehensive_summary_*.json` files, figure
-    generation, writing.
-  - *Local sessions* on the RTX 3080 (10GB) can train. Use `./run_overnight.sh`
-    for sweeps and `falsification/run_arm.py` for single runs; never hand-edit
-    `create_full_config()`, because `get_experiment_name()` omits the seed and
-    seeds will silently overwrite one another.
-- `numpy`, `scipy`, `matplotlib`, `pytest` install cleanly with pip when needed.
-- Training targets bfloat16 on 10GB; buffer settings in the training scripts are
-  tuned for that and are easy to OOM if raised.
+- Two environments, and it matters which you are in: `python
+  falsification/preflight.py` tells you. Remote/web sessions have no GPU and
+  no torch. Local sessions on the RTX 3080 (10 GB) train with
+  `/usr/bin/python3` (torch 2.10 cu128 + nnsight in `~/.local`); bare
+  `python` there is a CPU-only conda base and will not work.
+- `reproduce.py` needs only numpy, scipy, matplotlib.
 
 ## Commands
 
 ```bash
-# Falsification framework tests (no GPU needed; these must stay green)
-python -m pytest falsification/tests/ -q
-
-# Apply the framework to the data already committed here
-python falsification/worked_example.py
-
-# Regenerate the beta dose-response figure from committed JSONs
-python workshop/make_fig_beta.py     # if the workshop/ docs are present
-
-# Training (LOCAL GPU ONLY). Use run_arm.py -- do NOT hand-edit
-# create_full_config(); get_experiment_name() omits the seed, so seeds
-# written that way silently overwrite one another.
-python falsification/run_arm.py --check              # validate all arms, no torch
-python falsification/run_arm.py --arm baseline --seed 1
-./run_overnight.sh --hours 10                        # the seeded arms
-./run_e2_pilot.sh                                    # E2 stage 1 + selection rule
-
-# Feature-usage measurement. run_analysis.sh handles the per-seed output dir
-# (the analyzer names outputs after the checkpoint dir, which omits the seed)
-# and re-analyses only checkpoints whose summary is older than their ae.pt.
-./run_analysis.sh
-./run_analysis.sh --force                            # ~1.2 min x every run on disk
-
-# Read a checkpoint's own internals (no training, needs the GPU for activations)
-python falsification/read_learned_sigma.py     # E2's learned posterior sigma
-python falsification/read_penalty_clamp.py     # E1's +/-10 penalty clamp: does it ever bind?
-
-# The liveness/reconstruction frontier across every analysed arm (+ figure)
-python falsification/frontier.py
-
-# Cross-arm tables and the E1 comparison across its confound generations
-python falsification/report_summaries.py --table
-python falsification/compare_e1.py --ref current|aprilmode|klwarmup
+python -m pytest falsification/tests/ -q        # 115 tests, CPU; must stay green
+python reproduce.py --check                     # every paper number from committed data; must exit 0
+./workshop/build_paper.sh                       # rebuild workshop/mechanism_paper.pdf
+python falsification/run_arm.py --check         # validate all arms, no torch
+python falsification/run_arm.py --arm <arm> --seed <n>   # LOCAL GPU ONLY
+./run_analysis.sh                               # feature-usage measurement, per-seed output dirs
+python falsification/compare_arms.py <a> <b>    # any two arms, 4M-draw permutation test
 ```
 
-**Read `PROJECT.md` first.** It is the living document: current state, what is
-established, the prioritised next steps, the pre-registration and the open
-decisions. It absorbed the former `HANDOFF.md` on 2026-09-03.
+Never hand-edit `create_full_config()` in a training script to change a seed:
+`get_experiment_name()` omits the seed and runs written that way overwrite
+one another. Use `run_arm.py`.
 
 ## Conventions
 
 - **Statistics.** Any new statistical test goes in `falsification/permutation.py`
   with a test in `falsification/tests/`. Monte Carlo permutation p-values must use
   `(count + 1) / (n_perm + 1)`; the naive form is anti-conservative and can emit
-  `p = 0`, which maps to an infinite e-value. Every test returns `p_floor` — report
-  it, because an underpowered design cannot be rescued by its result.
+  `p = 0`, which maps to an infinite e-value. Every test returns `p_floor` and
+  `exact` — report them, because a p sitting at its floor means the design ran
+  out, not the evidence. At 13 seeds/group pass `n_perm=4_000_000`; the 100k
+  default caps evidence at 4.42σ.
 - **Unit of analysis.** A claim about an *architecture* requires a permutation test
   over *training seeds*. Token-level tests answer questions about two specific
   checkpoints only; `paired_token_test` refuses architecture-level use unless the
@@ -283,12 +66,22 @@ decisions. It absorbed the former `HANDOFF.md` on 2026-09-03.
 - **Confounders.** Record them on `FalsificationTest`. A test with
   `confounders_uncontrolled` is excluded from the evidence product rather than
   down-weighted, because the implication assumption it violates is binary.
-- Checkpoint directory names encode the config and are parsed by the analysis
-  scripts — keep the existing naming scheme when adding runs.
+- **Liveness.** Both pre-registered thresholds (`below_0.1x`, `below_0.5x`) are
+  always reported; a result counts only if they agree in direction.
+- **Checkpoints.** Directory names encode the config and are parsed by the
+  analysis scripts — keep the naming scheme. `relu_mu` and
+  `project_decoder_grad` change no parameter shape; `config.json` is the only
+  record of which arm a checkpoint belongs to. Prefer
+  `evaluation_results_corrected.json` where it exists (`compare_arms.py` does).
+- **The paper's numbers are checked, not typed.** If a number in
+  `workshop/mechanism_paper.tex` changes, change the matching expectation in
+  `reproduce.py` and make `--check` pass; if `--check` fails, the paper is
+  wrong until shown otherwise.
 
-## Working style for this repo
+## Working style
 
-Claims here are checked against code and data, not against the preprint. When the
-preprint and the code disagree, the code wins and the discrepancy gets written
-down. Several conclusions in the published version did not survive that check, and
-the value of the current work comes from having caught them.
+Claims here are checked against code and data, not against the preprint. When
+the preprint and the code disagree, the code wins and the discrepancy gets
+written down in `docs/ERRATA.md`. Several conclusions in the published version
+did not survive that check, and the value of the work comes from having caught
+them.

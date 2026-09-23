@@ -51,17 +51,6 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-tests/
-# ...but NOT the falsification suite. `tests/` above came from the stock Python
-# .gitignore, where it means a coverage artefact directory. It also matched
-# falsification/tests/, so the 104 contracts CLAUDE.md calls "must stay green"
-# were never committed -- they existed on one machine only, and the CI workflow
-# had nothing to run.
-!falsification/tests/
-!falsification/tests/**
-# The re-include above out-ranks the earlier __pycache__ rule for these
-# paths, because last matching pattern wins. Put it back.
-falsification/tests/**/__pycache__/
 
 # Translations
 *.mo
@@ -174,22 +163,35 @@ cython_debug/
 #.idea/
 dictionaries
 wandb
-experiment*
 run_experiment.sh
 nohup.out
 *.zip
 
 # trained model folders
 trained*/
-analysis_scripts/
+# (comprehensive_histogram_analysis/ was force-added in full and stays tracked;
+# the ignore only stops NEW files there.)
 comprehensive_histogram_analysis/
-experiments/
+# Run outputs. Every run's metadata (config.json, experiment_config.json,
+# evaluation_results.json, comprehensive_summary_*.json, RUN_COMPLETE.json)
+# and its analysis .npz (the exact per-feature selection counts the
+# pre-registered liveness thresholds are computed from -- ~96 KB each) are
+# committed so every number in the paper is recomputable from the repo
+# without a GPU (`reproduce.py`); the weights (ae.pt), figures and logs stay
+# local. A directory excluded outright can't have children re-included,
+# hence the `**` form plus the directory negation. The three
+# `experiments/VSAEJumpReLU_*` dirs are 2000-step smoke tests of the A4
+# trainer fix (2026-09-12), not experiments, and stay ignored.
+experiments/**
+!experiments/**/
+!experiments/**/*.json
+!experiments/**/all_histograms_*.npz
+experiments/VSAEJumpReLU_*/
 feature_degeneracy_analysis/
 gaussianity_analysis/
 latent_analysis/
 logs/
 online_gaussianity_analysis/
-sae_vis/__pycache__/
 SAEBench-main/sae_bench/custom_saes/eval_results/
 SAEBench-main/sae_bench/custom_saes/saebench_plots/
 similarity_analysis/

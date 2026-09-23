@@ -1,147 +1,156 @@
-# SPAR — Variational Sparse Autoencoders, and what the experiments actually license
+# What a KL term actually does to a TopK sparse autoencoder
+
+[![ci](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/actions/workflows/ci.yml/badge.svg)](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/actions/workflows/ci.yml)
 
 A fork of [`dictionary_learning`](https://github.com/saprmarks/dictionary_learning)
-extended with variational sparse autoencoders (vSAEs), a vendored copy of
-[SAEBench](https://github.com/adamkarvonen/SAEBench), and a sequential
-falsification framework (e-values + permutation tests over training seeds)
-built to decide which claims from the vSAE preprint survive contact with the
-code and the data. Several did not; catching that is the point of the current work.
+extended with variational sparse autoencoders (vSAEs), plus a falsification
+framework — e-values and permutation tests over training seeds — built to
+decide which claims from the vSAE arXiv preprint survive contact with the
+code and the data. Several did not. This repository contains the fixed
+trainers, 434 training runs across 45 arms at up to 13 seeds each, the
+framework, every number behind the paper, and the paper.
 
-**This file is the short, dated status page.** It is meant to be bumped every
-session. It does not replace `PROJECT.md` (the living document) — when the two
-disagree, `PROJECT.md` wins.
+**Paper:** `workshop/mechanism_paper.pdf` (source `workshop/mechanism_paper.tex`).
+**Findings in full:** [`docs/RESULTS.md`](docs/RESULTS.md).
+**Design:** [`docs/METHODS.md`](docs/METHODS.md).
+**What was wrong, and what was retracted:** [`docs/ERRATA.md`](docs/ERRATA.md).
+**Recompute every number:** [`docs/REPRODUCE.md`](docs/REPRODUCE.md) — `python reproduce.py --check`, CPU only.
 
----
+## The claim under test
 
-## Status — 2026-09-17
+The preprint added a posterior mean and log-variance to a TopK SAE's
+encoder, a KL term to a standard-normal prior, and a reparameterisation
+step, and concluded from a Pythia-70M comparison and a β sweep that the KL
+term disperses features and improves downstream interpretability. Checking
+that against the code and re-running the comparisons at 13 seeds per arm
+gave six findings.
 
-| | |
-|---|---|
-| **Branch** | Single-branch repo since 2026-09-17: everything lives on `master`. Work on short-lived feature branches and PR them in; delete on merge. |
-| **PR** | [#5](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/pull/5) (mechanism paper + addenda 22–25) merged 2026-09-17; [#6](https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders/pull/6) is this README. |
-| **Tests** | `python -m pytest falsification/tests/ -q` → **115 passed** (CPU only, ~6 s). |
-| **Battery** | Complete at 13 seeds/arm, 5σ on every comparison. 48 arm directories under `experiments/`, 0 failed runs. |
-| **Paper** | `workshop/mechanism_paper.tex` drafted; every item on its checklist is closed. **Never compiled** — no LaTeX toolchain on this machine. Checked by hand only (citations resolve, braces balance, all `\ref` have `\label`). |
-| **Running** | Nothing. |
-| **Blocked on** | Nothing (compute or data). Open question is venue / what to do with the paper next. |
-| **Environment** | Training runs on the **system `/usr/bin/python3` (3.14)** — torch 2.10.0+cu128, nnsight 0.7.0 in `~/.local`. If `python` resolves to miniforge `base` (CPU-only torch, no nnsight), `preflight.py` fails on `CUDA available`; none of the conda envs (`mets`, `sltdiff`, `vibevoice`) has nnsight either. `preflight.py` was fully green on 2026-09-17 with the system python. |
+## The six findings
 
-### What is established (one line each; detail in `PROJECT.md` → *What is established*, and `falsification/RESULTS_2026-09-03.md`)
+**1. The evaluated vSAE was never variational, and two implementations of
+the same objective differed by *d* ≈ 16.** With `var_flag = 0` there is no
+sampling and the KL reduces to ½‖μ‖²: every checkpoint the preprint
+evaluated is a TopK SAE with an L2 activation penalty. Trained against
+exactly that null model, the vSAE code still differed by *d* = −5.7 to
++16.5 on reconstruction and up to +13.0 on liveness. The code diff between
+the two trainers was enumerated and frozen at fifteen items; matching them
+one at a time, each factor traded against the last, and only at the final
+rung — with the diff exhausted — were the arms null on every metric, at the
+power that had detected every earlier rung at 5σ. None of the five
+load-bearing factors appears in either paper's equations.
 
-- **E1** — a fixed-variance vSAE *is* a TopK SAE with an L2 activation penalty (identity verified to 6 decimals). The measured d≈13–16 gap between the two implementations decomposes entirely into 5 optimiser/init details; with all 5 matched the arms are null everywhere.
-- **E2** — it is the *sampling*, not the KL: removing the KL entirely recovers only 6.4 % of the FVE gap to baseline; the remaining 93.6 % is the reparameterisation.
-- **E3** — the `F.relu(mu)` that only one trainer applies is itself a d≈15–19 effect.
-- **A2/A3 (Claim #3)** — sampling-induced FVE damage tracks selection-Jaccard instability almost exactly for hard top-k: TopK r = +0.9993, BatchTopK r = +0.9979, across a 6-point, 13-seed σ-init sweep. Smooth dose-response, no knee.
-- **A4 (JumpReLU)** — *not* a clean third point: the naive r = +0.93 is confounded by an 8× swing in achieved L0. L0-matched, r ≈ +0.50 (n=8, addendum 23). The real finding: a soft learned threshold's sparsity *level* isn't noise-robust, a failure hard top-k can't exhibit.
-- **E4** — SCR says the vSAE's advantage is *not* explained by dictionary size; TPP says it *is*. Same checkpoints, same grid. Threshold-uniform, survives both bootstraps, replicates across 8 (dataset, pair) points; the size-matched trained-from-scratch baseline confirms "masked vs. trained-small" doesn't flip the aggregate verdict (addenda 21, 24). **The disagreement itself is still unexplained.**
-- **Claims #4, #5** — the decoder-gradient projection effect is real but scoped to penalised models (null on plain TopK, addendum 22); 10/10 SAE-methods papers in our bibliography train one seed per config, so none can reach architecture-level significance (addendum 25).
+**2. With sampling on, the damage is the reparameterisation, not the KL.**
+No β in {10⁻⁴ … 1} gives a working model (FVE 0.458 → 0.0001 against a
+baseline of 0.900). Turning the KL off entirely with sampling still on
+recovers 6.4 % of the gap; the other 93.6 % is sampling itself. The learned
+σ does not collapse (σ ≈ 0.27), so the deterministic SAE is not the
+variational SAE's optimum.
 
-### Next (nothing pre-selected — read `PROJECT.md` → *Next steps* fresh)
+**3. The mechanism is selection churn, and it needs hard-*k* selection.**
+The gap between the *k*-th and (*k*+1)-th pre-activation is ~10⁻⁴, far below
+any achievable noise scale, so noise flips the selected set. Across a
+six-point noise sweep at 13 seeds per point, reconstruction tracks the
+Jaccard overlap between two stochastic selections of the same token at
+*r* = +0.9993 for TopK and +0.9979 for BatchTopK. For JumpReLU's soft learned
+threshold the naive *r* = +0.93 is confounded by an 8× swing in achieved L0;
+held roughly fixed, the coupling falls to *r* ≈ +0.5 — and the more basic
+finding is that a gradient-learned sparsity level is not itself noise-robust.
 
-1. Compile `workshop/mechanism_paper.tex` somewhere with a LaTeX toolchain and fix whatever the compiler finds.
-2. Decide venue / next step for the mechanism paper; the methods paper (Deliverable #1) is still only scoped.
-3. Optional, new pre-registration: extend the E2 β grid downward (1e-5, 1e-6) — see `PROJECT.md` Next steps #2 for why it's low priority.
+![TopK dose-response](workshop/figs/a2_dose_response.png)
 
----
+**4. One-line implementation details are effects of *d* = 4–19.** A
+`F.relu(mu)` that one trainer applies and another does not: *d* = +19.3 /
++15.3 on liveness. A decoder-gradient projection imported and never called:
+up to *d* = 14.3 on reconstruction — inside models with an activation
+penalty; null in a plain TopK SAE. The decoder's initial scale: *d* = 16.5.
+Whether the initial weights were drawn Gaussian or uniform: *d* = 4.7 / 7.3.
+None is a hyperparameter anyone reports.
 
-## Which document for what
+**5. The field's designs cannot see effects of that size.** A two-sided
+seed-permutation test with *n* seeds per group cannot express more than
+2/C(2n, n): 3.07σ at six seeds, 0σ at one. All ten SAE-methods papers in
+the bibliography train one seed per configuration.
 
-| File | Read it for |
-|---|---|
-| **`README.md`** (this) | Dated status, what's established, what's next. Bump every session. |
-| **`PROJECT.md`** | The living document: Status → Where things stand → What is established → Next steps → pre-registration → open decisions → deliverables. Authoritative. |
-| **`CLAUDE.md`** | **Landmines in the vSAE code** — bugs and mismatches that have already produced false claims. Read before touching `dictionary_learning/` or describing any checkpoint. |
-| `falsification/RESULTS_2026-09-03.md` | Numbered addenda (currently through **#25**). Every result lands here in full before `PROJECT.md` summarises it. |
-| `HANDOFF.md` | Cold-start table of contents with a session-by-session "Done" log. |
-| `RUNBOOK.md` | Copy-pasteable commands for when GPU access returns, ordered so failures surface cheaply. |
-| `OVERVIEW.md` | Plain-language "what is this project" for a non-specialist. |
-| `workshop/` | `mechanism_paper.tex` (current), `paper.tex` (superseded workshop draft), `references.bib`, `figs/`. |
+**6. On the preprint's own Pythia checkpoints, SCR and TPP disagree.**
+Size-matching the baseline to the vSAE's 1,474 live features, SCR says the
+vSAE's advantage is not explained by dictionary size (+0.082) and TPP says
+it is (−0.085) — same checkpoints, same grid. The disagreement is
+threshold-uniform, survives a conditional and a full bootstrap, replicates
+across eight dataset/pair points, and is not "masked versus trained small".
+It is reported as unresolved: the preprint's own Global and Conclusion
+sections reached opposite verdicts on the same hypothesis for the same
+reason.
+
+## Reproduce
+
+```bash
+pip install -e ".[dev]"              # numpy, scipy, matplotlib, pytest
+python reproduce.py --check          # every table and figure in the paper from committed data; ~45 s
+python -m pytest falsification/tests/ -q   # 115 tests (6 need torch; CPU torch is enough)
+./workshop/build_paper.sh            # rebuild the PDF (fetches tectonic on first use)
+```
+
+CI runs exactly that on every push. `--check` asserts 125 printed numbers
+against the paper and exits non-zero on drift. Run metadata for all 434 runs (`config.json`,
+`evaluation_results.json`, the per-feature selection counts) is committed
+under `experiments/`; the 2.3 GB of weights are not. Training needs a GPU;
+`docs/REPRODUCE.md` has the commands and the environment.
 
 ## Repository layout
 
 ```
-dictionary_learning/     fork of saprmarks/dictionary_learning + vSAE trainers
-  trainers/vsae_topk.py            TopK vSAE (applies F.relu(mu) — see CLAUDE.md)
-  trainers/vsae_topk_masked_kl.py  masked-KL variant (relu_mu flag, default False)
-  trainers/vsae_batch_topk.py      BatchTopK vSAE (frac_recovered unreliable — CLAUDE.md)
-  trainers/vsae_jump_relu.py       JumpReLU vSAE (4 bugs fixed 2026-09-12, before any run)
-training_scripts/        train_vsae_topk.py, train_vsae_batchtopk.py, train_vsae_jumprelu.py, train_topk.py
-analysis_scripts/        feature-usage / histogram analysers (driven by run_analysis.sh)
-falsification/           the framework: evalues.py, permutation.py, simulate.py, run_arm.py,
-                         the E1–E4 / A1–A4 readers and scorers, tests/, RESULTS_2026-09-03.md
-experiments/             one directory per arm, one subdirectory per seed (48 arms)
-comprehensive_histogram_analysis/  the preprint's recovered Pythia checkpoints + summaries
-SAEBench-main/           vendored SAEBench (SCR / TPP scorers live here)
-sae_vis/                 feature visualisation
-workshop/                papers, bib, figures
-archive/, logs/          old runs and run logs
+reproduce.py             every figure and table in the paper, from committed data
+docs/                    RESULTS, METHODS, ERRATA, REPRODUCE; notebook/ is the frozen working record
+workshop/                mechanism_paper.{tex,pdf}, references.bib, figs/, build_paper.sh
+falsification/           the framework (evalues.py, permutation.py, simulate.py), run_arm.py,
+                         the arm readers and E4 scorers, cached *_results.json, tests/
+dictionary_learning/     fork of saprmarks/dictionary_learning + the vSAE trainers
+  trainers/vsae_topk.py            TopK vSAE (applies F.relu(mu); project_decoder_grad flag)
+  trainers/vsae_topk_masked_kl.py  masked-KL variant (relu_mu flag)
+  trainers/vsae_batch_topk.py      BatchTopK vSAE (frac_recovered unreliable -- ERRATA)
+  trainers/vsae_jump_relu.py       JumpReLU vSAE (three bugs fixed before any run -- ERRATA)
+training_scripts/        one script per trainer; run_arm.py drives them
+analysis_scripts/        online_histogram_analyzer.py, the 1M-token feature-usage measurement (run_analysis.sh)
+experiments/             one directory per arm, one per seed; metadata committed, weights not
+comprehensive_histogram_analysis/  the preprint's original checkpoints' analysis
+SAEBench-main/           vendored SAEBench v0.4.2 (modifications listed in ERRATA §5)
+pyproject.toml           pip install -e .   (.[train] for the GPU stack, .[e4] for SAEBench)
 ```
 
-## Commands
+## Using `falsification/` on your own comparison
 
-```bash
-# Which environment am I in? (remote/web sessions have no GPU and no torch)
-# Locally: use the system python, not miniforge base — see the Environment row above
-python falsification/preflight.py
+```python
+from falsification.evalues import FalsificationTest, SequentialFalsifier
+from falsification.permutation import seed_permutation_test
 
-# Framework tests — CPU only, must stay green
-python -m pytest falsification/tests/ -q
-
-# Apply the framework to the committed data
-python falsification/worked_example.py
-
-# Training — LOCAL GPU ONLY. Always via run_arm.py; never hand-edit
-# create_full_config() (get_experiment_name() omits the seed → seeds overwrite each other)
-python falsification/run_arm.py --check            # validate all arms, no torch
-python falsification/run_arm.py --arm baseline --seed 1
-./run_overnight.sh --hours 10
-
-# Feature-usage measurement (serial: two analysers OOM the 10 GB card)
-./run_analysis.sh            # only re-analyses checkpoints whose summary is stale
-./run_analysis.sh --force
-
-# Cross-arm tables, frontier, figures
-python falsification/report_summaries.py --table
-python falsification/frontier.py
-python falsification/read_a2_dose_response.py      # (and read_a3_/read_a4_followup)
+f = SequentialFalsifier(main_hypothesis="A yields better features than B", alpha=0.1, kappa=0.3)
+res = seed_permutation_test(a_metric_per_seed, b_metric_per_seed, n_perm=4_000_000)
+f.add(FalsificationTest(
+    name="near-dead fraction, size-matched",
+    null_hypothesis="A is no better than B", alt_hypothesis="A is better than B",
+    p_value=res["p_value"], unit_of_analysis=res["unit_of_analysis"], n_units=res["n_units"],
+    confounders_controlled=("live feature count", "L0"),
+))
+print(f.report())
 ```
 
-Environment: Python ≥ 3.10, `pip install -r requirements.txt`. Training targets
-bfloat16 on a 10 GB RTX 3080; buffer settings are tuned for that and OOM easily
-if raised.
+Two rules do the work: a claim about an *architecture* needs a permutation
+test over *training seeds* (token-level tests describe two checkpoints); and
+a test whose sub-null is not implied by the main null is excluded from the
+evidence, not down-weighted. Read `p_floor` before quoting `p_value`.
+`falsification/README.md` has the details.
 
-## The five landmines you will hit first
+## Citation
 
-Full list, with the evidence, in `CLAUDE.md`. The ones that bite most often:
+```bibtex
+@misc{vsae-falsification-2026,
+  title   = {What a KL term actually does to a TopK sparse autoencoder: implementation variance, selection churn, and a falsification framework for SAE claims},
+  author  = {Zach},
+  year    = {2026},
+  note    = {\url{https://github.com/ZachData/SPAR-Variational-Sparse-Autoencoders}},
+}
+```
 
-1. **`var_flag=0` means no sampling at all.** Every `_fixed_var` checkpoint is a deterministic TopK SAE with an L2 penalty. Do not call them variational.
-2. **`vsae_topk.py` applies `F.relu(mu)`; the masked-KL trainer does not.** Comparing them confounds the mask with the ReLU; `relu_mu` can't be recovered from a state dict — only `config.json` knows.
-3. **Pre-2026-09-04 checkpoints have a corrupted `var_encoder.bias`** (`scale_biases` rescaled the log-variance bias). Divide `var_encoder.{weight,bias}` by `norm_factor` before reading `log_var`; `norm_factor` itself isn't saved and must be re-estimated.
-4. **P-value floors are combinatorial.** 6 seeds/group caps at 3.07σ; 13 is the first n reaching 5σ; Monte Carlo fallback caps at `1/(n_perm+1)`. A p at the floor means the design ran out, not the evidence — check `result["p_floor"]`.
-5. **`frac_recovered = 0.0` is usually an OOM, not a result**, and `VSAEBatchTopK`'s `frac_recovered` is wrong by construction under `loss_recovered()`'s 3D activations — use `frac_variance_explained` for it.
-
-## Conventions
-
-- New statistical tests go in `falsification/permutation.py` with a test in `falsification/tests/`; Monte Carlo p-values are `(count+1)/(n_perm+1)`; every test returns `p_floor`.
-- A claim about an *architecture* needs a permutation test over *training seeds*; token-level tests only compare two specific checkpoints.
-- Confounders are recorded on `FalsificationTest`; an uncontrolled one excludes the test from the evidence product, it does not down-weight it.
-- Checkpoint directory names encode the config and are parsed by the analysers — keep the naming scheme.
-- Code beats preprint. When they disagree, the code wins and the discrepancy gets written down.
-
-## Session log
-
-One line per session, newest first. Detail belongs in `HANDOFF.md` / `RESULTS`.
-
-| Date | What changed |
-|---|---|
-| 2026-09-17 | PR #5 merged. Branches consolidated to `master` only (`main`, `claude/falsification-framework`, `claude/vae-workshop-paper-condensing-zumu6b`, `claude/fix-decoder-weight-normalization-…` deleted — the last was already superseded by `_normalize_decoder_weights()` in the SAEBench wrapper). 115 tests green, preflight green with `/usr/bin/python3`. This README rewritten as the status page; the 2025-08-22 README repeated claims `CLAUDE.md` refutes. |
-| 2026-09-13 | Mechanism paper drafted (`workshop/mechanism_paper.tex`); addenda 22–25: Claim #4 (projection null on plain TopK), A4 n=4 doubt closed, E4 box (5) extended to 8 points, Claim #5 seed-count survey; lit-review pass (Chanin 2026 et al.). |
-| 2026-09-12 | A4 JumpReLU run (addendum 20, confounded); 4 bugs fixed in `vsae_jump_relu.py` first. E4 box (5) size-matched baseline (addendum 21) — checklist fully closed. |
-| 2026-09-11 | A1 falsified (15), A2 σ-init dose-response (16–17, r=+0.9993), A3 BatchTopK (18, r=+0.9979), E4 box (4) coverage widened (19). |
-| 2026-09-09/10 | E4 bootstraps (13–14): the SCR/TPP disagreement is not test-set noise. |
-| 2026-09-03/04 | E1 decomposition closed (4–5); `scale_biases` bug found and fixed (8); E2 mechanism corrected and re-measured (7–9). |
-
-## Provenance
-
-Built on `dictionary_learning` (Marks, Karvonen & Mueller, 2024) and SAEBench
-(Karvonen et al., 2025). MIT licence, as upstream.
+`CITATION.cff` carries the same entry. Built on `dictionary_learning`
+(Marks, Karvonen & Mueller, 2024) and SAEBench (Karvonen et al., 2025). MIT
+licence (`LICENSE`), as upstream.

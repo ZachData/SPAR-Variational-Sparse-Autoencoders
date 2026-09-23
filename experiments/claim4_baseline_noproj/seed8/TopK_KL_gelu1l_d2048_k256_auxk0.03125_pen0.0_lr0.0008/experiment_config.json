@@ -1,0 +1,33 @@
+{
+  "model_name": "gelu-1l",
+  "layer": 0,
+  "hook_name": "blocks.0.hook_resid_post",
+  "dict_size_multiple": 4.0,
+  "k": 256,
+  "total_steps": 10000,
+  "lr": 0.0008,
+  "warmup_steps": null,
+  "auxk_alpha": 0.03125,
+  "activation_penalty": 0.0,
+  "project_decoder_grad": false,
+  "threshold_beta": 0.999,
+  "threshold_start_step": 500,
+  "n_ctxs": 2500,
+  "ctx_len": 128,
+  "refresh_batch_size": 12,
+  "out_batch_size": 192,
+  "checkpoint_steps": [
+    10000
+  ],
+  "log_steps": 1000,
+  "save_dir": "/var/home/iron/Desktop/vsae/SPAR-Variational-Sparse-Autoencoders/experiments/claim4_baseline_noproj/seed8",
+  "use_wandb": false,
+  "wandb_entity": "zachdata",
+  "wandb_project": "top_k_with_kl_penalty",
+  "device": "cuda",
+  "dtype": "bfloat16",
+  "autocast_dtype": "bfloat16",
+  "seed": 8,
+  "eval_batch_size": 2,
+  "eval_n_batches": 48
+}
