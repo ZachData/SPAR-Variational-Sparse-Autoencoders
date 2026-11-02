@@ -1,0 +1,60 @@
+% The study at a glance: each question, what it is compared against, and the
+% answer. \input by mechanism_paper.tex; the numbers are the ones the tables print.
+\begin{tikzpicture}[
+    font=\scriptsize,
+    head/.style={fill=#1, text=white, font=\footnotesize\bfseries, minimum width=3.72cm,
+                 minimum height=6mm, align=center, rounded corners=2pt},
+    rowlab/.style={font=\scriptsize\bfseries, text=inkmuted, rotate=90, anchor=south},
+  ]
+  \def\colw{3.92}
+  \foreach \i/\c/\t in {0/vizblue/{\S\ref*{sec:e1} \;KL at fixed $\sigma$},
+                        1/vizorange/{\S\ref*{sec:mechanism} \;Sampling on},
+                        2/vizaqua/{\S\ref*{sec:variance} \;Unstated details},
+                        3/inkmuted/{\S\ref*{sec:e4} \;SCR vs.\ TPP}} {
+    \node[head=\c] (h\i) at (\i*\colw, 0) {\t};
+  }
+  \node[rowlab] at (-1.95, -1.25) {question};
+  \node[rowlab] at (-1.95, -3.17) {comparison};
+  \node[rowlab] at (-1.95, -5.02) {finding};
+
+  % Row 1: question
+  \foreach \i/\c/\b in {
+      0/vizblue/{Is the released vSAE different from a Top-K SAE with an $L_2$ penalty, the
+                 objective it reduces to?},
+      1/vizorange/{What does reparameterisation noise damage, and does it depend on how
+                   features are selected?},
+      2/vizaqua/{How large are implementation choices no equation shows, and could a
+                 typical study see them?},
+      3/inkmuted/{Do two standard downstream metrics agree on the same two checkpoints?}} {
+    \node[draw=\c!70, line width=0.5pt, rounded corners=2pt, text width=3.48cm,
+          minimum height=1.6cm, inner sep=4pt, align=left, anchor=north]
+         at (\i*\colw, -0.45) {\b};
+  }
+  % Row 2: comparison
+  \foreach \i/\c/\b in {
+      0/vizblue/{Top-K\,+\,$L_2$ null model vs.\ the vSAE, with the 15-item code diff
+                 matched one factor per rung. 5 arms $\times$ 13 seeds.},
+      1/vizorange/{Deterministic baseline vs.\ a 6-point sweep of noise scale $\sigma$, run
+                   on TopK, BatchTopK and JumpReLU. 13 seeds/point.},
+      2/vizaqua/{Each one-line detail on vs.\ off, 13 seeds/arm; and the seed counts of the
+                 10 SAE-methods papers we cite.},
+      3/inkmuted/{Pythia-70M vSAE vs.\ its Top-K baseline masked to the vSAE's 1,474
+                  live features; then five diagnostics.}} {
+    \node[draw=\c!70, line width=0.5pt, rounded corners=2pt, text width=3.48cm,
+          minimum height=1.95cm, inner sep=4pt, align=left, anchor=north]
+         at (\i*\colw, -2.2) {\b};
+  }
+  % Row 3: finding
+  \foreach \i/\c/\b in {
+      0/vizblue/{As released, $|d|=37$--$183$; the gap closes completely once five
+                 implementation details are matched.},
+      1/vizorange/{Hard-$k$ selection is near random at training noise; lost FVE tracks
+                   churn ($\rho=1$). JumpReLU instead loses sparsity.},
+      2/vizaqua/{Six one-line details, each moving a metric by $|d|\ge7.3$ (up to
+                 175). All 10 papers train one seed: 0$\sigma$ expressible.},
+      3/inkmuted/{Opposite signs: SCR $+0.082$, TPP $-0.085$. No diagnostic explains it.}} {
+    \node[draw=\c!70, fill=\c!8, line width=0.5pt, rounded corners=2pt, text width=3.48cm,
+          minimum height=1.45cm, inner sep=4pt, align=left, anchor=north]
+         at (\i*\colw, -4.3) {\b};
+  }
+\end{tikzpicture}

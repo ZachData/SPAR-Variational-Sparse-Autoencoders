@@ -84,9 +84,9 @@ def dose_response_figure(rows: list[dict], baseline_fve: float | None, *,
     ax.minorticks_off()
     ax.set_xlabel("noise scale $\\sigma$ (log; noise decreases $\\rightarrow$)")
     ax.set_ylabel("value")
-    ax.set_ylim(0.3, 1.0)
+    ax.set_ylim(0.0, 1.0)
     ax.set_title(f"{arch}: FVE and Jaccard vs. $\\sigma$")
-    ax.legend(frameon=False, loc="lower right")
+    ax.legend(frameon=False, **({"loc": "lower right"} if show_l0 else {"loc": "upper left", "bbox_to_anchor": (0.0, 0.9)}))
     ax.grid(alpha=0.25, lw=0.6)
     ax.spines[["top", "right"]].set_visible(False)
 
@@ -108,7 +108,7 @@ def dose_response_figure(rows: list[dict], baseline_fve: float | None, *,
         # JumpReLU's points bunch within a few thousandths of Jaccard, so
         # in-place labels collide. Stack them in a column at the left of the
         # panel, in FVE order, with a leader line to each point.
-        y_lo, y_hi = 0.3, 1.0
+        y_lo, y_hi = 0.0, 1.0
         gap = 0.052 * (y_hi - y_lo)
         order = sorted(range(len(rows)), key=lambda i: rows[i]["fve_mean"])
         ys = []
@@ -120,7 +120,7 @@ def dose_response_figure(rows: list[dict], baseline_fve: float | None, *,
         overflow = ys[-1] - (y_hi - 0.03)
         if overflow > 0:
             ys = [y - overflow for y in ys]
-        x_col = min(jac) + 0.12 * (max(jac) - min(jac))
+        x_col = min(jac) + 0.2 * (max(jac) - min(jac))
         for i, y in zip(order, ys):
             bx.annotate(labels[i], (rows[i]["jaccard_mean"], rows[i]["fve_mean"]),
                         xytext=(x_col, y), textcoords="data", ha="left", va="center",
@@ -130,17 +130,17 @@ def dose_response_figure(rows: list[dict], baseline_fve: float | None, *,
     else:
         # Alternate label sides so near-coincident low-noise points stay legible.
         for i, r in enumerate(rows):
-            side = (5, -3, "left") if i % 2 == 0 else (-5, 4, "right")
+            side = (-6, 3, "right") if i == len(rows) - 1 else (6, -3, "left")
             bx.annotate(labels[i], (r["jaccard_mean"], r["fve_mean"]), xytext=side[:2],
                         ha=side[2], textcoords="offset points", fontsize=7, color=INK_SECONDARY)
     if baseline_fve is not None:
         bx.axhline(baseline_fve, color=INK_SECONDARY, lw=0.8, ls=":")
     bx.set_xlabel("selection Jaccard at convergence")
     bx.set_ylabel("fraction of variance explained")
-    bx.set_ylim(0.3, 1.0)
+    bx.set_ylim(0.0, 1.0)
     # The r annotation goes wherever the points are not: top-left for the
     # hard-k architectures, bottom-right for JumpReLU's column-labelled panel.
-    pos, ha = ((0.97, 0.40), "right") if show_l0 else ((0.03, 0.93), "left")
+    pos, ha = ((0.97, 0.05), "right") if show_l0 else ((0.03, 0.93), "left")
     bx.annotate(f"Pearson $r$ = {r_fj:+.4f}  ($n$ = {len(rows)} grid points)",
                 pos, xycoords="axes fraction", fontsize=8, color=INK, ha=ha)
     if highlight:

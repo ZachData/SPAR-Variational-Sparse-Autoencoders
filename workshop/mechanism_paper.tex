@@ -16,7 +16,23 @@
 \usepackage{natbib}
 \usepackage{caption}
 \usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
 \emergencystretch=2em
+
+% Figure palette: the same hex values workshop/make_paper_figs.py uses.
+\definecolor{vizblue}{HTML}{2A78D6}
+\definecolor{vizorange}{HTML}{EB6834}
+\definecolor{vizaqua}{HTML}{1BAF7A}
+\definecolor{inkmuted}{HTML}{52514E}
+
+% Many figures sit next to the tables they explain; let a page hold more floats.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.8}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.75}
+\setcounter{topnumber}{3}
+\setcounter{totalnumber}{5}
 
 \graphicspath{{figs/}}
 
@@ -41,36 +57,40 @@ organises features into a better dictionary. We decompose this idea into three
 independently testable claims and test each with a pre-registered permutation
 battery (5$\sigma$ per comparison, 13 seeds/arm) plus three targeted
 dose-response sweeps. \textbf{First}, at the fixed unit variance every public
-implementation trains with, the KL term is algebraically an $L_2$ penalty and
-no sample is ever drawn; comparing a released vSAE implementation against a
-plain Top-K-with-$L_2$-penalty baseline shows a large apparent gap ($d\approx
-16$ on reconstruction, $d\approx 13$ on feature liveness), but the gap
-decomposes \emph{completely} into five optimiser- and initialisation-side
-implementation details --- none of which appears in either the vSAE or the
+implementation we examined trains with, the KL term is algebraically an $L_2$
+penalty and no sample is ever drawn; a released vSAE implementation
+nonetheless differs from a plain Top-K-with-$L_2$-penalty baseline by
+$|d|=37$--$183$ across the pre-registered metrics, but the gap decomposes
+\emph{completely} into five implementation details (a bias
+parameterisation, a warmup schedule, two initialisation choices and a
+gradient projection) --- none of which appears in either the vSAE or the
 original Top-K paper's equations --- and vanishes once all five are matched
 (all metrics null at the power where every earlier generation of the
 comparison was significant at $5\sigma$). \textbf{Second}, once sampling is
-switched on, damage is real and large, but it is not a size-of-noise effect on
-representation quality: a six-point, 13-seed-per-point dose-response sweep over
-the initial noise scale shows reconstruction quality tracking Top-K
-\emph{selection instability} almost exactly (Pearson $r=+0.9993$) across a
-$12\times$ range of noise. The same near-perfect coupling holds for BatchTopK's
-globally-shared selection budget ($r=+0.9979$), ruling out per-token
-selection as the cause. It does \emph{not} hold cleanly for JumpReLU's
-soft, gradient-learned threshold: an apparently similar naive coupling
-($r=+0.9334$) is confounded by an $8\times$ swing in achieved sparsity that
-the two hard-$k$ mechanisms cannot exhibit by construction, and controlling
-for it weakens the coupling to $r=+0.6297$ ($n=4$), confirmed not to be a
-small-sample artifact by doubling the grid density in the confound-controlled
-region ($r=+0.5026$, $n=8$). The general lesson is
+switched on, damage is real and large, and it works through selection: at
+the noise scales these models train with, Top-K's selected set is close to
+random (two sampled passes share Jaccard $0.075$--$0.29$, chance $0.067$), and
+a six-point, 13-seed-per-point dose-response sweep over the initial noise
+scale shows reconstruction quality rising monotonically with
+\emph{selection stability} across a $12\times$ range of noise (Spearman
+$\rho=1$, Pearson $r=+0.952$). The same holds for BatchTopK's
+globally-shared selection budget ($r=+0.945$), ruling out per-token
+selection as the cause. It does \emph{not} hold for JumpReLU's soft,
+gradient-learned threshold: an apparently similar naive coupling
+($r=+0.977$) is confounded by a $2.7\times$ swing in achieved sparsity that
+the two hard-$k$ mechanisms cannot exhibit by construction, and among the
+seven grid points where sparsity is held near its target the coupling
+reverses ($r=-0.55$). (These numbers correct an earlier measurement of the
+saved checkpoints, which by a save-time rescaling run at $1/25$ of their
+training noise.) The general lesson is
 sharper than ``noise hurts'': the reparameterisation trick is specifically
 incompatible with \emph{hard, discrete} selection, and the failure mode of a
 \emph{soft} selection mechanism under the same noise is a different one ---
-sparsity collapse, not selection churn. \textbf{Third}, every one of the
-implementation details in the first claim, run individually as a factor, moves
-metrics by $d\approx 5$--$19$ at $5\sigma$ --- the same order of magnitude as,
-or larger than, published architectural claims in this literature, none of
-them stated in any equation, and a design-level survey of ten SAE-methods
+sparsity collapse, not selection churn. \textbf{Third}, each of six one-line
+implementation details --- the five above and a ReLU on the posterior mean ---
+measured as a one-factor contrast, moves at least one pre-registered metric by
+$|d|\ge7.3$ (up to $175$), none of them stated in any equation, and a
+design-level survey of ten SAE-methods
 papers (every one cited in our own related work) finds \emph{ten of ten}
 report a single training seed per configuration for their headline
 results --- a design that cannot express statistical significance for an
@@ -106,10 +126,8 @@ could plausibly help, or does it only interact with it in a way that hurts?}
 This paper answers that question, and two adjacent ones, with a controlled
 experimental decomposition rather than a single end-to-end comparison. We ran
 a pre-registered confirmatory battery (13 seeds per arm, permutation tests
-with an explicit $p$-value floor reported alongside every result, following
-the design discipline of
-\citealp{gao2024scalingevaluatingsparseautoencoders}'s own recommendation that
-SAE comparisons report seed variance) on a public vSAE
+with an explicit $p$-value floor reported alongside every result) on a
+public vSAE
 implementation~\citep{marks2024dictionary_learning} against three questions:
 
 \begin{enumerate}
@@ -160,29 +178,42 @@ an implementation detail (\S\ref{sec:e1}, \S\ref{sec:variance}), a noise scale
 (\S\ref{sec:mechanism}), or a selection mechanism
 (\S\ref{sec:mechanism}). The cost is that each individual claim is narrower
 than ``vSAEs are/aren't good''; the benefit is that each one is a claim we can
-actually stand behind.
+actually stand behind. Figure~\ref{fig:studymap} lays the four sections out
+side by side: the question each asks, what it compares against what, and what
+it found.
+
+\begin{figure}[t]
+\centering
+\input{figs/fig_studymap.tex}
+\caption{The study at a glance. Each column is one section: the question it
+asks, the comparison that answers it (always one thing varied, everything else
+held fixed, with the replication stated), and the finding. The numbers are
+those of the sections they summarise.}
+\label{fig:studymap}
+\end{figure}
 
 \subsection{Contributions}
 \begin{itemize}
 \item A code-level enumeration of every difference between a released vSAE
   trainer and its Top-K-with-$L_2$-penalty null model (15 items, frozen before
   any closing run), and a demonstration that the entire measured gap between
-  them is optimiser-side: matching all five behaviourally-relevant items makes
+  them is implementation detail: matching all five behaviourally-relevant items makes
   the two implementations statistically indistinguishable at the power where
   every earlier generation of the same comparison was significant at
   $5\sigma$ (\S\ref{sec:e1}).
 \item A three-architecture dose-response study (TopK, BatchTopK, JumpReLU)
   showing that reparameterisation noise costs reconstruction quality in
-  almost exact proportion to how much it perturbs \emph{which} features a
-  hard-$k$ mechanism selects ($r=0.9993$ and $r=0.9979$), and that this
+  step with how much it perturbs \emph{which} features a hard-$k$ mechanism
+  selects (rank order identical at every point; $r=0.952$ and $r=0.945$), and
+  that this
   relationship is specifically a property of \emph{hard} cardinality
   constraints: a soft, gradient-learned threshold exhibits a qualitatively
   different failure mode (sparsity-level collapse) that confounds the naive
   version of the same measurement (\S\ref{sec:mechanism}).
-\item A lower bound on implementation variance in this literature: five
+\item A lower bound on implementation variance in this literature: six
   one-line, unremarked implementation choices --- none in any stated
-  loss equation --- each move a standard liveness metric by $d\ge 4.7$, up to
-  $d=19.3$ for the single largest, at $5\sigma$
+  loss equation --- each, as a one-factor contrast, moves at least one
+  pre-registered metric by $|d|\ge7.3$, up to $|d|=175$
   (\S\ref{sec:variance}), and a ten-paper design-level survey
   (\S\ref{sec:seedsurvey}) showing the field's own core references
   overwhelmingly use a single-seed design that cannot detect effects of
@@ -230,12 +261,27 @@ strength of the prior. The trainer's own docstring states the encode order as
 encoder $\to$ $\boldsymbol{\mu},\boldsymbol{\sigma}^2$ $\to$
 reparameterise $\to$ $\mathbf{z}$ $\to$ Top-$K(|\mathbf{z}|)$ --- noise is
 applied \emph{before} the selection step, not after, which is the fact
-\S\ref{sec:mechanism} builds on.
+\S\ref{sec:mechanism} builds on. Figure~\ref{fig:pipeline} draws the two
+models side by side and marks where each section of this paper intervenes.
+
+\begin{figure}[t]
+\centering
+\input{figs/fig_pipeline.tex}
+\caption{A Top-K SAE (top) and a variational SAE (bottom) as implemented. The
+vSAE adds a variance head, a sampling step (orange) and a KL term. The sampling
+step comes \emph{before} the Top-$k$ selection (blue), so noise can change which
+features are selected, not just their values. The numbered markers are where
+each part of this paper intervenes: (1) the KL term at fixed variance,
+(2) the noise-before-selection step, (3) implementation details inside the
+encoder and decoder boxes that appear in no stated loss.}
+\label{fig:pipeline}
+\end{figure}
 
 \paragraph{The fixed-variance degeneracy.} Every implementation of this
-objective we examined defaults to (or, for a long stretch of this codebase's
-history, effectively forces via a saved-checkpoint bug corrected in
-\S\ref{sec:mechanism}) $\boldsymbol{\sigma}=\mathbf{1}$. Two things follow.
+objective we examined defaults to a fixed $\boldsymbol{\sigma}=\mathbf{1}$
+(in this codebase, \texttt{var\_flag}$\,=0$), and every checkpoint the
+preprint this codebase extends evaluated was trained that way. Two things
+follow.
 First, the KL loses its variance terms:
 \begin{equation}
 \mathrm{KL}\!\left[\mathcal{N}(\boldsymbol{\mu},\mathbf{I})\,\|\,\mathcal{N}(\mathbf{0},\mathbf{I})\right]
@@ -243,16 +289,14 @@ First, the KL loses its variance terms:
 = \tfrac{1}{2}\|\boldsymbol{\mu}\|_2^2 ,
 \label{eq:kl}
 \end{equation}
-an $L_2$ penalty on the pre-selection activation. Second, with $\sigma=1$
-fixed and never sampled from in the relevant sense (variance is not learned,
-so the only randomness is a draw that is either absent, when the
-reparameterisation gate itself is off, or present but from a distribution that
-carries no information from the data), the model that results is
-deterministic at the resolution that matters for its behaviour: $\mathbf{z}$
-is a fixed function of $\mathbf{x}$. \emph{The evaluated fixed-variance vSAE
+an $L_2$ penalty on the pre-selection activation. Second, with the variance
+fixed the encoder never samples: the code sets $\mathbf{z}=\boldsymbol{\mu}$,
+so $\mathbf{z}$ is a fixed function of $\mathbf{x}$. \emph{The evaluated fixed-variance vSAE
 is a Top-K SAE with an $L_2$ activation penalty}, algebraically, and we
-verified this directly by evaluating both trainers' loss functions on an
-identical batch: they agree to six decimal places (511.895264 both). Whether
+verified this directly: loaded with identical weights and evaluated on the
+same batch, the two trainers' own loss functions agree term by term to float32
+precision (relative difference $\le3\times10^{-7}$, both at initialisation and
+at a trained checkpoint; \texttt{check\_loss\_identity.py}). Whether
 trained \emph{checkpoints} of the two agree is the empirical question
 \S\ref{sec:e1} answers.
 
@@ -260,7 +304,8 @@ trained \emph{checkpoints} of the two agree is the empirical question
 train on GELU-1L (TransformerLens' one-layer toy language model) residual
 stream activations at layer 0 ($d_{\mathrm{model}}=512$), dictionary size
 $d=2048$ ($4\times$), $k=256$, 10{,}000 steps, bfloat16, AuxK$=1/32$ unless
-stated otherwise. \S\ref{sec:e4}'s headline comparison additionally uses two
+stated otherwise (the JumpReLU arms of \S\ref{sec:mechanism} replace $k$ with
+an $L_0$ target of 256 and use their own auxiliary loss, weight $0.1$). \S\ref{sec:e4}'s headline comparison additionally uses two
 recovered Pythia-70M checkpoints ($d=8192$, $16\times$, layer 3) from the
 original preprint this codebase extends; that comparison's own AuxK
 asymmetry is disclosed in \S\ref{sec:e4}. Statistical design follows one rule
@@ -268,20 +313,25 @@ throughout:
 every comparison is a permutation test over \emph{training seeds}, not tokens
 or checkpoints, because the claim under test is about an architecture, not
 two specific runs of it. \S\ref{app:stats} gives the exact test, its
-combinatorial $p$-value floor, and why every reported significance level in
-this paper is $5.03$--$5.16\sigma$ rather than an arbitrarily large number.
+combinatorial $p$-value floor, and why the confirmatory results in this
+paper sit at $5.03$--$5.16\sigma$ rather than an arbitrarily large number.
 
 \section{The KL term at fixed variance: an $L_2$ penalty, and nothing else}
 \label{sec:e1}
 
-\subsection{The naive comparison is confounded, badly}
+\subsection{The as-released comparison is confounded, badly}
 
-A na\"ive comparison of the released vSAE trainer
-(\texttt{vsae\_topk.py}, $\beta=1$, fixed variance) against a purpose-built
-Top-K-plus-$L_2$-penalty null model (Eq.~\ref{eq:sae} with an added
-$\tfrac{1}{2}\lambda\|\mathbf{f}\|_2^2$ term, $\lambda$ matched to $\beta$)
-finds a large, statistically decisive gap: $d\approx -5.7$ on the fraction of
-variance explained (FVE) and, more strikingly, feature liveness disagreeing
+As released (\texttt{vsae\_topk.py}, $\beta=1$, fixed variance, a 1{,}000-step
+KL warmup and no pre-encoder bias), the vSAE trainer differs from a
+purpose-built Top-K-plus-$L_2$-penalty null model (Eq.~\ref{eq:sae} with an
+added $\tfrac{1}{2}\lambda\|\mathbf{f}\|_2^2$ term, $\lambda$ matched to
+$\beta$) by $|d|=51$ on the fraction of variance explained (FVE), $37$ on
+\texttt{frac\_recovered} and $57$--$183$ on liveness (six seeds from the
+project's pilot against 13, every metric at that design's $4.13\sigma$
+ceiling). Matching the two configuration-level differences, the warmup and
+the bias form (Table~\ref{tab:variance} measures each), leaves the first row
+of Table~\ref{tab:e1ladder}: still a statistically decisive gap,
+$d\approx -5.7$ on FVE and, more strikingly, feature liveness disagreeing
 \emph{in direction} between two pre-registered thresholds
 ($d=-2.8$ at $<0.1\times k/d$, $d=+13.0$ at $<0.5\times k/d$). The
 two-threshold liveness design was pre-registered for exactly this failure
@@ -307,13 +357,16 @@ consumption order) is treated as noise by the seed-permutation design itself,
 and one --- the initial weight draw --- was run as the closing factor. The
 five that had to be matched behaviourally are the two configuration items,
 the two measured factors, and the closing one. \emph{Exactly one} of the fifteen is a difference in the
-\emph{objective} rather than the optimiser: \texttt{vsae\_topk.py} penalises
+\emph{objective} rather than in the parameterisation, initialisation or
+update rule: \texttt{vsae\_topk.py} penalises
 $\mathrm{clamp}(\mathbf{z},-10,10)$ where the null model penalises
-$\mathbf{f}$ unclamped. Measured directly over 20{,}000 activations across all
-three arms, the largest pre-clamp activation observed anywhere is $0.194$
-against a clamp at $10$ --- $51\times$ headroom, never binding. The clamp is
+$\mathbf{f}$ unclamped. Measured directly in training space over 20{,}000
+activations and all 13 seeds of all five E1 arms, the largest pre-clamp
+activation observed anywhere is $0.215$ against a clamp at $10$ ---
+$46\times$ headroom, never binding (\texttt{read\_penalty\_clamp.py}). The clamp is
 therefore also a no-op in practice, and the entire measured gap between the
-two implementations is optimiser- and initialisation-side.
+two implementations lies in parameterisation, initialisation and the update
+rule, not in the objective.
 
 \subsection{The decomposition, run as a ladder of five factors}
 
@@ -349,8 +402,26 @@ reconstruction ($d=16.5$); matching the decoder gradient projection closes
 most of the reconstruction gap but re-opens liveness. Only the final row,
 where the frozen code diff is exhausted, is null on every metric
 simultaneously, at the same statistical power that detected every earlier
-generation at $5\sigma$. The two non-obvious factors are worth naming
-individually:
+generation at $5\sigma$. Figure~\ref{fig:e1ladder} shows the same ladder
+seed by seed: each rung pushes the vSAE across the null model's band and out
+the other side, until the last one lands inside it on both metrics. The two
+non-obvious factors are worth naming individually:
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_e1_ladder.pdf}
+\caption{The decomposition ladder of Table~\ref{tab:e1ladder}, per seed. Rungs:
+R0 is the vSAE as released (KL warmup and bias form already matched by
+configuration); R1 adds the decoder init scale; R2 the decoder-gradient
+projection; R3 the initial weight draw, which exhausts the frozen code diff.
+(a,~b) Each dot is one training seed (13 per arm), the bar is the arm mean,
+and the grey band is the null model's range over seeds. R1 closes the liveness
+gap and opens a larger FVE gap; R2 closes most of the FVE gap and pushes
+liveness out of the band the other way; only R3 sits inside the band on both.
+(c) Cohen's $d$ of each rung against the null model on all four
+pre-registered metrics; open markers are $p>0.05$. Only R3 is null on all four.}
+\label{fig:e1ladder}
+\end{figure}
 
 \begin{description}
 \item[Decoder-gradient projection.] \texttt{vsae\_topk.py} imports the
@@ -382,8 +453,8 @@ by $-0.0004$ ($d=-0.8$, $p=0.07$), \texttt{frac\_alive} is identical to six
 decimals, and both liveness thresholds are non-significant and agree. The
 claim this licenses is the decomposition, not a bare equivalence verdict:
 \emph{two implementations of an algebraically identical objective differ by
-$d\approx16$ on reconstruction and $d\approx13$ on liveness; the entire
-difference decomposes into five optimiser- and initialisation-side details,
+$|d|$ up to $51$ on reconstruction and $183$ on liveness as released; the
+entire difference decomposes into five implementation details,
 none of which appears in either the vSAE's or the original Top-K paper's
 stated equations; with all five matched, the implementations become
 statistically indistinguishable at the power that detected every earlier
@@ -398,55 +469,119 @@ opened and closed at every intermediate step of the ladder.
 \section{With sampling on: selection churn, and only for hard-$k$ mechanisms}
 \label{sec:mechanism}
 
+\paragraph{Where these measurements are taken.} Training runs on activations
+divided by a normalising constant ($\mathrm{norm\_factor}\approx25.5$ for this
+hook point). At save time the trainers multiply the encoder and decoder biases
+(and JumpReLU's threshold) by that constant, so that a saved checkpoint runs
+on raw activations, but deliberately leave $\log\boldsymbol{\sigma}^2$
+unchanged. A saved sampled checkpoint fed raw activations therefore has
+$\boldsymbol{\mu}$ $25.5\times$ larger and the same $\boldsymbol{\sigma}$: it
+runs at an effective noise of $\sigma/25.5$ relative to $\boldsymbol{\mu}$,
+not the $\sigma$ it was trained with. Every number in this section is measured
+in the regime the models were trained in: each checkpoint is converted back by
+the inverse rescaling and fed activations divided by the re-estimated
+constant ($25.47$; \texttt{read\_training\_regime.py}). An earlier version of
+this paper measured the saved checkpoints on raw activations;
+\S\ref{app:regime} gives those numbers beside these. The qualitative
+conclusions hold in both regimes. How tightly reconstruction tracks selection
+churn, and how far JumpReLU's sparsity moves, do not.
+
 \subsection{Sampling, not the KL, does the damage}
 
 Section~\ref{sec:e1} establishes that at fixed variance the model never
 samples. Turning sampling on (a learned or fixed non-unit $\sigma$) while
 holding $\beta$ at every value tested in $\{10^{-4},\ldots,1\}$ finds no
-setting that recovers a healthy model: FVE falls monotonically from $0.458$
-to $0.0001$ and never approaches the deterministic baseline's $0.900$. The
-decisive control separates ``the KL destroys reconstruction'' from ``the
-reparameterisation does'': sampling on, $\beta=0$, so the KL contributes
-exactly zero to the loss.
+setting that recovers a healthy model: FVE falls monotonically from $0.329$
+at $\beta=10^{-4}$ to zero by $\beta=10^{-2}$, against the deterministic
+baseline's $0.900$. The decisive control separates ``the KL destroys
+reconstruction'' from ``the reparameterisation does'': sampling on,
+$\beta=0$, so the KL contributes exactly zero to the loss.
 
 \begin{table}[h]
 \centering
 \caption{Removing the KL entirely recovers a small fraction of the gap to
-baseline; the rest is the reparameterisation itself. 13 seeds/arm.}
+baseline; the rest is the reparameterisation itself. FVE in the training
+regime, 13 seeds/arm.}
 \label{tab:e2split}
 \begin{tabular}{lc}
 \toprule
 Configuration & FVE \\
 \midrule
-Baseline (deterministic) & $0.900159 \pm 0.0006$ \\
-$\sigma$ learned, $\beta=10^{-4}$ (\texttt{e2\_confirm}) & $0.458146 \pm 0.0040$ \\
-$\sigma$ learned, $\beta=0$ (\texttt{e2\_sampling\_only}) & $0.486276 \pm 0.0068$ \\
+Baseline (deterministic) & $0.900239 \pm 0.0006$ \\
+$\sigma$ learned, $\beta=10^{-4}$ (\texttt{e2\_confirm}) & $0.329065 \pm 0.0007$ \\
+$\sigma$ learned, $\beta=0$ (\texttt{e2\_sampling\_only}) & $0.351120 \pm 0.0006$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Of the $0.4420$ total gap, removing the KL recovers only $6.4\%$; the
-remaining $93.6\%$ is attributable to the reparameterisation itself, not the
-regulariser --- a claim about the architecture, not a hyperparameter, and
-considerably stronger than the $\beta$-tuning story this test was originally
-designed to answer. (A saved-checkpoint bug that briefly reversed part of
-this story, and its correction, is documented in \S\ref{app:bugs}; the
-93.6\%/6.4\% split itself moved by about one percentage point under
-correction, well inside this design's noise floor.)
+Of the $0.5712$ total gap, removing the KL recovers only $3.9\%$; the
+remaining $96.1\%$ is attributable to the reparameterisation itself, not the
+regulariser (Figure~\ref{fig:e2split}) --- a claim about the architecture, not
+a hyperparameter, and considerably stronger than the $\beta$-tuning story this
+test was originally designed to answer. (Measured on the saved checkpoints,
+the split was $93.6\%/6.4\%$ of a $0.4420$ gap; \S\ref{app:regime}.)
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_e2_split.pdf}
+\caption{Sampling, not the KL, costs the reconstruction (training regime).
+(a)~With sampling on, FVE at every KL coefficient tested (open circles:
+single-seed pilot runs; dots: the 13 seeds of each confirmatory arm). FVE falls
+monotonically with $\beta$, and even at $\beta=0$, where the KL contributes
+nothing to the loss, it stays near 40\% of the deterministic baseline
+(dotted). (b)~The three configurations of Table~\ref{tab:e2split}, per seed:
+of the 0.571 FVE gap between the baseline and $\beta=10^{-4}$, removing the KL
+recovers 0.022 (3.9\%); the other 0.549 (96.1\%) is the cost of sampling
+itself.}
+\label{fig:e2split}
+\end{figure}
 
 \subsection{Mechanism: selection instability, measured directly}
 
-\emph{Why} does sampling cost almost half of reconstruction quality
-regardless of $\beta$? Top-K selection is an argmax over pre-activations;
-noise of scale $\sigma$ flips the selected set whenever the gap between the
-$k$-th and $(k{+}1)$-th largest pre-activation is smaller than the noise. We
-measured this gap directly on a converged deterministic checkpoint before
-choosing a noise-scale grid: median $0.0001$, 99th percentile $0.0006$ (in
-training space). Even the reparameterisation clamp's own floor sigma
-($0.0498$) sits $80$--$550\times$ above this gap, so no achievable noise
-scale on this architecture keeps sampling below the boundary gap everywhere
---- there is no ``safe'' regime in which a sharp knee could mark the edge of
-damage.
+\emph{Why} does sampling cost most of the reconstruction regardless of
+$\beta$? Top-K selection is an argmax over pre-activations; noise of scale
+$\sigma$ changes the selected set whenever it exceeds the gap between the
+$k$-th and $(k{+}1)$-th largest pre-activation. We measured this gap directly
+on a converged deterministic checkpoint before choosing a noise-scale grid:
+median $0.0001$, 99th percentile $0.0006$ (in training space). Even the
+reparameterisation clamp's own floor sigma ($0.0498$) sits $80$--$540\times$
+above this gap, so no achievable noise scale on this architecture keeps
+sampling below the boundary gap --- there is no ``safe'' regime in which a
+sharp knee could mark the edge of damage.
+
+The noise is large not only against that gap but against
+$\boldsymbol{\mu}$ itself. Figure~\ref{fig:churn} follows one trained
+checkpoint ($\log\sigma^2_{\mathrm{init}}=-3$). Of the 256 features a sampled
+forward pass selects, $71\%$ lie outside $\boldsymbol{\mu}$'s own top 256, and
+$24\%$ have $\mu=0$: the encoder's ReLU has switched them off, and they are
+selected on noise alone (selection is Top-$k$ of $|\mathbf{z}|$). Two passes on
+the same token keep largely different sets, mean Jaccard $0.109$ against a
+chance level of $0.067$, and the churn reaches the top of the ranking, not
+only the $k$-th place.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_selection_churn.pdf}
+\caption{What noise before Top-$k$ does to the selected set, on real data: the
+\texttt{a2\_sigma\_init\_m3} seed-1 checkpoint
+($\log\sigma^2_{\mathrm{init}}=-3$) in the regime it was trained in, 8{,}192
+tokens (\texttt{read\_selection\_example.py}). (a)~One token, chosen as the
+token whose Jaccard is closest to the batch mean. Dashes are the deterministic
+pre-activation $\boldsymbol{\mu}$ of the features ranked 241--272 by
+$\boldsymbol{\mu}$; markers are their values $\mathbf{z}$ in two independent
+sampled passes (filled: selected; open: not). The noise is several times
+larger than $\boldsymbol{\mu}$, so $\boldsymbol{\mu}$'s ranking barely decides
+which features are kept. (b)~For each rank by $\boldsymbol{\mu}$, the
+probability that the feature there is selected by exactly one of the two
+passes. In the training regime (solid) churn spreads across the whole
+ranking; the same checkpoint as saved, on raw activations (dashed; effective
+noise $\sigma/25.5$), churns only near the $k$-th place. (c)~Measured scales
+on one log axis: the gap between the $k$-th and $(k{+}1)$-th pre-activation on
+a converged deterministic TopK SAE (median $0.0001$, 99th percentile $0.0006$,
+maximum $0.0014$; \texttt{read\_preact\_gap.py}) against the sweep's
+$\sigma$ values.}
+\label{fig:churn}
+\end{figure}
 
 We then ran a six-point, 13-seed-per-point sweep over the initial noise scale
 ($\log\sigma^2_{\mathrm{init}} \in \{-1,\allowbreak -2,\allowbreak -3,\allowbreak -4,\allowbreak -5,\allowbreak -8\}$, the last clamped to
@@ -457,47 +592,45 @@ over 8{,}192 tokens at the converged checkpoint.
 
 \begin{table}[h]
 \centering
-\caption{TopK: the noise-scale dose-response, 13 seeds/point. Deterministic
-baseline FVE $=0.900159\pm0.0006$.}
+\caption{TopK: the noise-scale dose-response in the training regime, 13
+seeds/point. Deterministic baseline FVE $=0.9002\pm0.0006$; chance Jaccard
+for $k=256$ of $2048$ is $0.0667$.}
 \label{tab:a2}
 \begin{tabular}{lcccc}
 \toprule
 $\log\sigma^2_{\mathrm{init}}$ & $\sigma$ (effective) & FVE & Jaccard \\
 \midrule
-$-1.0$ & $0.6065$ & $0.3766 \pm 0.0028$ & $0.7657 \pm 0.0022$ \\
-$-2.0$ & $0.3679$ & $0.4863 \pm 0.0068$ & $0.8117 \pm 0.0013$ \\
-$-3.0$ & $0.2231$ & $0.6140 \pm 0.0020$ & $0.8700 \pm 0.0008$ \\
-$-4.0$ & $0.1353$ & $0.7427 \pm 0.0015$ & $0.9180 \pm 0.0006$ \\
-$-5.0$ & $0.0821$ & $0.8169 \pm 0.0010$ & $0.9453 \pm 0.0002$ \\
-$-8.0$ (clamped) & $0.0498$ & $0.8338 \pm 0.0007$ & $0.9523 \pm 0.0002$ \\
+$-1.0$ & $0.6065$ & $0.2517 \pm 0.0006$ & $0.0750 \pm 0.0001$ \\
+$-2.0$ & $0.3679$ & $0.3511 \pm 0.0006$ & $0.0862 \pm 0.0002$ \\
+$-3.0$ & $0.2231$ & $0.4708 \pm 0.0005$ & $0.1094 \pm 0.0004$ \\
+$-4.0$ & $0.1353$ & $0.6107 \pm 0.0005$ & $0.1686 \pm 0.0005$ \\
+$-5.0$ & $0.0821$ & $0.7200 \pm 0.0004$ & $0.2624 \pm 0.0005$ \\
+$-8.0$ (clamped) & $0.0498$ & $0.7494 \pm 0.0003$ & $0.2919 \pm 0.0006$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Two things follow from Table~\ref{tab:a2} (Figure~\ref{fig:a2}). First, the
 curve is smooth, not kneed: FVE and Jaccard rise monotonically and
-continuously across every point tested, exactly as the pre-flight
-measurement predicted (no reachable ``safe'' region exists on this
-architecture for a knee to mark). Second, and this is the sharper result: FVE
-tracks selection Jaccard almost exactly across the entire $12\times$ range of
-noise scale, Pearson $r = +0.9993$ over the six arm-level means. This is a
-more specific confirmation of the mechanism than a threshold would have been
---- not merely that noise and damage are both present and move together at
-one or two operating points, but that the \emph{same} two-parameter
-relationship holds continuously across six well-separated points, each
-independently powered at 13 seeds. Even at the achievable noise floor, a real
-residual gap remains against baseline (FVE $0.066$, Jaccard $0.952$, not
-$1.0$) that the clamp mechanically prevents probing further; this residual is
-exactly the size the clamp's own floor sigma predicts, not smaller.
+continuously across every point tested, as the pre-flight measurement
+predicted. Second, FVE and selection Jaccard move together across the whole
+$12\times$ range of noise scale: their rank order agrees at every point
+(Spearman $\rho=1$) and Pearson $r=+0.9521$ over the six arm-level means. The
+relationship is monotone rather than linear. At the three noisiest points
+Jaccard sits close to chance ($0.075$--$0.109$) while FVE still climbs from
+$0.25$ to $0.47$, so selection overlap runs out of range before reconstruction
+does. Even at the achievable noise floor selection is far from stable: two
+passes share Jaccard $0.292$, and FVE is $0.151$ below the deterministic
+baseline.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{a2_dose_response.pdf}
 \caption{TopK: reconstruction quality (FVE) and selection stability
-(Jaccard) as a function of the reparameterisation noise scale, 13 seeds/point
-(left; both are fractions, so they share one axis), and FVE against Jaccard
-across the six grid points (right), $r=+0.9993$. Error bars are $\pm1$
-SD across seeds and are mostly smaller than the markers.}
+(Jaccard) as a function of the reparameterisation noise scale in the training
+regime, 13 seeds/point (left; both are fractions, so they share one axis), and
+FVE against Jaccard across the six grid points (right), $r=+0.9521$. Error
+bars are $\pm1$ SD across seeds and are smaller than the markers.}
 \label{fig:a2}
 \end{figure}
 
@@ -512,31 +645,34 @@ correspondingly demoted one --- the natural candidate for ``more
 noise-robust,'' since the selection budget is more elastic.
 
 Repeating the identical six-point sweep on \texttt{VSAEBatchTopK} (matched
-$d$, $k$, hook point, and training schedule; two pre-existing
-saved-checkpoint bugs found and fixed en route, \S\ref{app:bugs}) gives an
-essentially identical coupling: $r(\mathrm{FVE},\mathrm{Jaccard}) = +0.9979$
-(Table~\ref{tab:a3}, Figure~\ref{fig:a3}), against TopK's $+0.9993$. If
-anything the more flexible selection rule is \emph{slightly more} exposed to
-noise at matched sigma, not less: comparing each architecture's own FVE as a
-fraction of its own (higher) deterministic baseline, BatchTopK recovers a
-consistently smaller fraction than TopK at every one of the six matched noise
-scales (e.g., $90.3\%$ vs.\ $92.6\%$ of baseline at the clamp floor), the
-opposite of the ``elastic budget'' intuition's prediction.
+$d$, $k$, hook point, and training schedule; two pre-existing bugs found
+en route: the save-time log-variance bug of \S\ref{app:bugs}, fixed, and an
+evaluation-harness bug that makes this trainer's \texttt{frac\_recovered}
+meaningless, not fixed, so only FVE and Jaccard are reported) gives the
+same picture: $r(\mathrm{FVE},\mathrm{Jaccard}) = +0.9455$, again with the rank
+order agreeing at every point (Table~\ref{tab:a3}, Figure~\ref{fig:a3}),
+against TopK's $+0.9521$. If anything the more flexible selection rule is
+\emph{slightly more} exposed to noise at matched sigma, not less: comparing
+each architecture's own FVE as a fraction of its own (higher) deterministic
+baseline, BatchTopK recovers a smaller fraction than TopK at every one of the
+six matched noise scales (e.g., $80.9\%$ vs.\ $83.2\%$ of baseline at the
+clamp floor), the opposite of the ``elastic budget'' intuition's prediction.
 
 \begin{table}[h]
 \centering
-\caption{BatchTopK: the same sweep. Deterministic baseline FVE $=0.9509\pm0.0004$.}
+\caption{BatchTopK: the same sweep, training regime. Deterministic baseline
+FVE $=0.9508\pm0.0003$.}
 \label{tab:a3}
 \begin{tabular}{lcccc}
 \toprule
 $\log\sigma^2_{\mathrm{init}}$ & $\sigma$ (effective) & FVE & Jaccard \\
 \midrule
-$-1.0$ & $0.6065$ & $0.3434 \pm 0.0035$ & $0.6969 \pm 0.0042$ \\
-$-2.0$ & $0.3679$ & $0.4787 \pm 0.0074$ & $0.7546 \pm 0.0078$ \\
-$-3.0$ & $0.2231$ & $0.6179 \pm 0.0046$ & $0.8348 \pm 0.0030$ \\
-$-4.0$ & $0.1353$ & $0.7553 \pm 0.0015$ & $0.8912 \pm 0.0004$ \\
-$-5.0$ & $0.0821$ & $0.8391 \pm 0.0010$ & $0.9222 \pm 0.0003$ \\
-$-8.0$ (clamped) & $0.0498$ & $0.8588 \pm 0.0007$ & $0.9311 \pm 0.0003$ \\
+$-1.0$ & $0.6065$ & $0.2459 \pm 0.0005$ & $0.0758 \pm 0.0004$ \\
+$-2.0$ & $0.3679$ & $0.3599 \pm 0.0026$ & $0.0826 \pm 0.0011$ \\
+$-3.0$ & $0.2231$ & $0.4833 \pm 0.0022$ & $0.0968 \pm 0.0011$ \\
+$-4.0$ & $0.1353$ & $0.6232 \pm 0.0008$ & $0.1311 \pm 0.0005$ \\
+$-5.0$ & $0.0821$ & $0.7366 \pm 0.0006$ & $0.1881 \pm 0.0005$ \\
+$-8.0$ (clamped) & $0.0498$ & $0.7692 \pm 0.0004$ & $0.2101 \pm 0.0006$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -544,7 +680,7 @@ $-8.0$ (clamped) & $0.0498$ & $0.8588 \pm 0.0007$ & $0.9311 \pm 0.0003$ \\
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{a3_batchtopk_dose_response.pdf}
-\caption{BatchTopK: the same dose-response, $r=+0.9979$.}
+\caption{BatchTopK: the same dose-response, training regime, $r=+0.9455$.}
 \label{fig:a3}
 \end{figure}
 
@@ -575,25 +711,26 @@ this experiment structurally impossible to run at all --- a gate that was
 applied \emph{before} sampling rather than after, meaning noise could only
 perturb the value of an already-selected feature and could never change the
 selected set; \S\ref{app:bugs} gives the full account). With all three fixed
-and verified (repeated forward passes on one token show real selection churn,
-mean Jaccard $0.35$, after the fix, versus $1.0$ --- no churn possible ---
-before it), the same six-point sweep gives Table~\ref{tab:a4}.
+and verified (repeated forward passes on one token, at
+$\log\sigma^2_{\mathrm{init}}=+1$, show real selection churn, mean Jaccard
+$0.35$, after the fix, versus $1.0$ --- no churn possible --- before it), the same six-point sweep gives Table~\ref{tab:a4}.
 
 \begin{table}[h]
 \centering
-\caption{JumpReLU: the same sweep, plus achieved $L_0$ (target: 256, matching
-$k$). Deterministic baseline FVE $=0.9210\pm0.0003$, $L_0=269.4$.}
+\caption{JumpReLU: the same sweep in the training regime, plus achieved $L_0$
+(target: 256, matching $k$). Deterministic baseline FVE $=0.9213\pm0.0002$,
+$L_0=269.5$.}
 \label{tab:a4}
 \begin{tabular}{lccccc}
 \toprule
 $\log\sigma^2_{\mathrm{init}}$ & $\sigma$ & $L_0$ & FVE & Jaccard \\
 \midrule
-$-1.0$ & $0.6065$ & $36.8$ & $0.3967 \pm 0.0022$ & $0.9637 \pm 0.0009$ \\
-$-2.0$ & $0.3679$ & $98.2$ & $0.5346 \pm 0.0022$ & $0.9635 \pm 0.0004$ \\
-$-3.0$ & $0.2231$ & $290.8$ & $0.7461 \pm 0.0016$ & $0.9779 \pm 0.0002$ \\
-$-4.0$ & $0.1353$ & $247.2$ & $0.7979 \pm 0.0008$ & $0.9913 \pm 0.0006$ \\
-$-5.0$ & $0.0821$ & $261.2$ & $0.8522 \pm 0.0008$ & $0.9883 \pm 0.0003$ \\
-$-8.0$ & $0.0498$ & $265.0$ & $0.8632 \pm 0.0006$ & $0.9867 \pm 0.0003$ \\
+$-1.0$ & $0.6065$ & $121.7$ & $0.3401 \pm 0.0012$ & $0.2628 \pm 0.0030$ \\
+$-2.0$ & $0.3679$ & $202.7$ & $0.4671 \pm 0.0015$ & $0.3199 \pm 0.0020$ \\
+$-3.0$ & $0.2231$ & $331.4$ & $0.6349 \pm 0.0011$ & $0.5526 \pm 0.0029$ \\
+$-4.0$ & $0.1353$ & $268.1$ & $0.7073 \pm 0.0008$ & $0.7186 \pm 0.0102$ \\
+$-5.0$ & $0.0821$ & $269.0$ & $0.7707 \pm 0.0006$ & $0.7216 \pm 0.0047$ \\
+$-8.0$ & $0.0498$ & $270.3$ & $0.7848 \pm 0.0005$ & $0.7090 \pm 0.0041$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -601,125 +738,125 @@ $-8.0$ & $0.0498$ & $265.0$ & $0.8632 \pm 0.0006$ & $0.9867 \pm 0.0003$ \\
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{a4_jumprelu_dose_response.pdf}
-\caption{JumpReLU: the same sweep, with each point's achieved $L_0$ shown
-beside its noise scale. The naive $r=+0.9334$ annotated on this figure is
-confounded by that $L_0$ variation (\S\ref{sec:a4confound}); it is superseded
-by the $L_0$-controlled reading in the text.}
+\caption{JumpReLU: the same sweep in the training regime, with each point's
+achieved $L_0$ shown beside its noise scale. The naive $r=+0.9770$ annotated
+on this figure is confounded by that $L_0$ variation
+(\S\ref{sec:a4confound}); it is superseded by the $L_0$-controlled reading in
+the text.}
 \label{fig:a4}
 \end{figure}
 
 \subsubsection{The naive coupling number is confounded}
 \label{sec:a4confound}
 
-Read naively, $r(\mathrm{FVE},\mathrm{Jaccard})=+0.9334$ over these six points
-looks like a slightly looser version of the same TopK/BatchTopK finding.
-It is not a clean replication, for a reason Table~\ref{tab:a4}'s third column
-makes visible: achieved $L_0$ swings from $36.8$ to $290.8$ --- an
-$8\times$ range, non-monotonic in $\sigma$ --- because heavy noise pushes
-pre-activations below threshold faster than the soft sparsity loss's
-gradient can pull the threshold down to compensate. TopK and BatchTopK hold
-sparsity \emph{exactly} fixed at every grid point by construction, so Jaccard
-is the only thing varying across their grids and their tight correlations are
-a clean read of ``selection churn costs reconstruction at fixed sparsity.''
-JumpReLU offers no such guarantee, and $r(\mathrm{FVE}, L_0) = +0.9494$ across
-the same six points --- as tight as, or tighter than, $r(\mathrm{FVE},
-\mathrm{Jaccard})$ --- so the naive number cannot distinguish ``selection
-churn hurts reconstruction'' from ``noise is crushing the achieved
-active-feature count, and a 37-feature dictionary reconstructs worse than a
-265-feature one for reasons that have nothing to do with \emph{which} 37 or
-265 features they are.''
+Read naively, $r(\mathrm{FVE},\mathrm{Jaccard})=+0.9770$ over these six points
+looks like the TopK/BatchTopK finding. It is not a clean replication, for a
+reason Table~\ref{tab:a4}'s third column makes visible: achieved $L_0$ swings
+from $121.7$ to $331.4$, a $2.7\times$ range and non-monotonic in $\sigma$. At
+the two noisiest points it falls to under half the 256 target, because heavy
+noise pushes pre-activations below threshold faster than the soft sparsity
+loss's gradient can pull the threshold down to compensate; at $\sigma=0.22$ it
+overshoots the target by 30\%. TopK and BatchTopK hold sparsity \emph{exactly}
+fixed at every grid point by construction, so Jaccard is the only thing
+varying across their grids and their correlations are a clean read of
+``selection churn costs reconstruction at fixed sparsity.'' JumpReLU offers no
+such guarantee, and $r(\mathrm{FVE}, L_0) = +0.8054$ across the same six
+points, so the naive number cannot distinguish ``selection churn hurts
+reconstruction'' from ``noise is changing the active-feature count, and a
+122-feature code reconstructs worse than a 270-feature one for reasons that
+have nothing to do with \emph{which} features they are.''
 
-Restricting to the four grid points where achieved $L_0$ sits in a comparable
-band to the 256 target ($\log\sigma^2_{\mathrm{init}}\in\{-3,-4,-5,-8\}$,
-$L_0\in[247,291]$) --- the closest approximation this soft-target design
-allows to TopK/BatchTopK's fixed-sparsity comparison --- the coupling
-weakens sharply: $r(\mathrm{FVE},\mathrm{Jaccard})$ drops to $+0.6297$
-($n=4$), and $r(\mathrm{FVE}, L_0)$ on the same four points is $-0.5467$
-(wrong sign). The relationship is also non-monotonic in a way the hard-$k$
-architectures never showed: Jaccard rises from $0.9779$ to a peak of $0.9913$
-at $\log\sigma^2_{\mathrm{init}}=-4$ and then \emph{falls} at $-5$ and $-8$
-even as $\sigma$ keeps decreasing, while FVE keeps climbing through the same
-region --- the two curves visibly decouple exactly where $L_0$ is held
-roughly constant.
+The comparison that controls for this restricts to grid points whose achieved
+$L_0$ lies in a band comparable to the 256 target, $L_0\in[240,320]$ (fixed
+before the follow-up below ran). Only three of the six points qualify
+($\log\sigma^2_{\mathrm{init}}\in\{-4,-5,-8\}$), too few for a correlation,
+but they already show the two curves decoupling: across them Jaccard is flat
+($0.709$--$0.722$) while FVE rises from $0.707$ to $0.785$.
 
-\subsubsection{Follow-up: densifying the grid rules out a small-$n$ artifact}
+\subsubsection{Follow-up: densifying the grid in the $L_0$-matched region}
 \label{sec:a4followup}
 
-Four confound-controlled points is not enough on its own to tell ``the
-coupling genuinely weakens'' from ``this design cannot see it.'' The
-thing under-powered was grid \emph{coverage} in the $L_0$-matched region,
-not per-point precision, so we added four new noise-scale points
-($\log\sigma^2_{\mathrm{init}}\in\{-3.5,-4.5,-5.5,-6.0\}$) filling exactly
-the gap the original grid's integer spacing left unsampled between $-3$ and
-$-8$, at 5 seeds/arm --- a deliberately scoped-down follow-up (lower
-per-point seed count than the main battery, honestly reported as such; each
-new point's own mean is still precise to 3--4 decimals, e.g.\
-$\log\sigma^2_{\mathrm{init}}=-6.0$: FVE $0.8632\pm0.0010$, $L_0$
-$265.1\pm0.4$, Jaccard $0.9868\pm0.0004$). On the widened $L_0$-matched
-band this requires ($L_0\in[247,315]$, eight points:
-$\log\sigma^2_{\mathrm{init}}\in\{-3,-3.5,-4,-4.5,-5,-5.5,-6,-8\}$):
+Three confound-controlled points cannot carry a correlation. The thing
+under-powered was grid \emph{coverage} in the $L_0$-matched region, not
+per-point precision, so we added four new noise-scale points
+($\log\sigma^2_{\mathrm{init}}\in\{-3.5,-4.5,-5.5,-6.0\}$) filling the gap
+the original grid's integer spacing left unsampled between $-3$ and $-8$, at 5
+seeds/arm --- a deliberately scoped-down follow-up (lower per-point seed count
+than the main battery; each new point's own mean is still precise to 3
+decimals, e.g.\ $\log\sigma^2_{\mathrm{init}}=-6.0$: FVE $0.7850\pm0.0006$,
+$L_0$ $270.6\pm0.4$, Jaccard $0.7079\pm0.0059$). Seven of the ten points now
+fall in the $L_0$ band ($\log\sigma^2_{\mathrm{init}}\in\{-3.5,-4,-4.5,-5,-5.5,-6,-8\}$):
 \begin{equation*}
-r(\mathrm{FVE},\mathrm{Jaccard}) = +0.5026 \ (n=8) \qquad
-r(\mathrm{FVE}, L_0) = -0.4704 \ (n=8),
+r(\mathrm{FVE},\mathrm{Jaccard}) = -0.5544 \ (n=7) \qquad
+r(\mathrm{FVE}, L_0) = -0.7251 \ (n=7).
 \end{equation*}
-against the original four-point reading's $+0.6297$ and $-0.5467$. Both
-correlations move modestly and in a direction consistent with sampling
-noise on a still-small $n$, not a systematic reversal, and the full
-ten-point grid's naive coupling is essentially unchanged by the denser
-sampling ($r=+0.9341$ vs.\ the six-point grid's $+0.9334$; $r(\mathrm{FVE},
-L_0)=+0.9245$ vs.\ $+0.9494$). This is the evidence the original four-point
-design could not supply on its own: \textbf{doubling the grid density in
-exactly the region where achieved sparsity is held roughly fixed reproduces
-the same qualitative pattern}, so the weakened coupling is not an artifact
-of having too few confound-controlled points to trust.
+Across these seven points Jaccard stays within $0.708$--$0.724$ while FVE
+rises from $0.679$ to $0.785$: at roughly fixed sparsity, reconstruction
+improves as noise falls with no change in selection stability. The full
+ten-point grid's naive coupling, $r=+0.9610$ ($r(\mathrm{FVE},L_0)=+0.7492$),
+says nothing about this; it is carried by the three points outside the band.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\textwidth]{a4_followup_dose_response.pdf}
-\caption{JumpReLU with the four densifying points added (ten total; the four
-new points at $\log\sigma^2_{\mathrm{init}}\in\{-3.5,-4.5,-5.5,-6.0\}$ are
-5-seed means). The naive $r=+0.9341$ annotated on this figure is confounded
-by achieved-sparsity variation in the same way as the original six-point
-figure (Figure~\ref{fig:a4}); the $L_0$-matched, confound-controlled reading
-is $r=+0.5026$ ($n=8$), reported in the text.}
+\caption{JumpReLU with the four densifying points added (ten total, training
+regime; the four new points at
+$\log\sigma^2_{\mathrm{init}}\in\{-3.5,-4.5,-5.5,-6.0\}$ are 5-seed means).
+The naive $r=+0.9610$ annotated on this figure is confounded by
+achieved-sparsity variation in the same way as Figure~\ref{fig:a4}; the
+$L_0$-matched reading is $r=-0.5544$ ($n=7$), reported in the text.}
 \label{fig:a4followup}
 \end{figure}
 
 \subsubsection{What this licenses}
 
-The question as posed --- ``does the same tight FVE-vs-selection-churn
-coupling hold for a soft, no-$k$-at-all selection mechanism?'' --- gets a
-clearer answer than the original four-point design alone could give: no,
-and this is now backed by twice the grid coverage in the region where the
-comparison is meaningful. \S\ref{sec:a4followup}'s $n=8$ reading does not
-turn this into a clean null in the formal sense --- both correlations are
-still nonzero, and eight points remains a small-$n$ correlation by the
-standards of \S\ref{sec:mechanism}'s own permutation-test comparisons
-elsewhere in this paper --- but it rules out the specific alternative
-explanation that the original four-point reading was a fluke of only four
-points. What the experiment licenses is a different, and arguably more
-basic, finding than the one it was designed to detect: \emph{a soft,
-gradient-learned threshold's achieved sparsity level, not just its
-selection stability, is not noise-robust}. TopK and BatchTopK cannot
-exhibit this failure mode by construction --- their cardinality constraint
-is architectural, not learned --- so a soft-threshold mechanism under
-sampling noise fails in a qualitatively different way from a hard-$k$ one,
-not merely a quantitatively noisier version of the same failure.
+The question as posed --- ``does the same FVE-vs-selection-churn coupling
+hold for a soft, no-$k$-at-all selection mechanism?'' --- gets a clear answer:
+no. Where sparsity is held roughly fixed, FVE does not track selection
+stability at all; its correlation with Jaccard has the wrong sign. Seven
+points, four of them at 5 seeds, is still a small-$n$ correlation by the
+standards of this paper's permutation tests, so this is not a formal null.
+What the experiment licenses is a different, and arguably more basic,
+finding than the one it was designed to detect: \emph{a soft,
+gradient-learned threshold's achieved sparsity level, not just its selection
+stability, is not noise-robust}. TopK and BatchTopK cannot exhibit this
+failure mode by construction --- their cardinality constraint is
+architectural, not learned --- so a soft-threshold mechanism under sampling
+noise fails in a qualitatively different way from a hard-$k$ one, not merely a
+quantitatively noisier version of the same failure.
 
 \subsection{Synthesis}
 
-Put together, \S\ref{sec:mechanism} supports a claim sharper than
-``reparameterisation is incompatible with discrete Top-K selection'': the
-amount of Top-K-style selection churn a given noise scale induces predicts,
-almost linearly, how much reconstruction quality it costs, across a $12\times$
-range of noise and across two architectures that scope their hard
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_synthesis.pdf}
+\caption{The three selection mechanisms on common axes, training regime (TopK
+and BatchTopK: Tables~\ref{tab:a2}--\ref{tab:a3}, 13 seeds/point; JumpReLU:
+the ten-point grid of \S\ref{sec:a4followup}). (a)~FVE as a percentage of each
+architecture's own deterministic baseline falls with noise for all three.
+(b)~For the two hard-$k$ mechanisms that loss rises monotonically with
+selection Jaccard (lines: least-squares fits), from near chance (dotted) at
+the noisiest points. JumpReLU's points at matched $L_0$ form a vertical
+column: Jaccard flat near 0.71, FVE 74--85\% of baseline. (c)~JumpReLU's
+achieved $L_0$ is learned, and noise moves it from 122 to 331; TopK and
+BatchTopK hold $L_0=k=256$ by construction (dashed line). Within the grey
+$L_0$-matched band the JumpReLU coupling is $r=-0.55$ ($n=7$).}
+\label{fig:synthesis}
+\end{figure}
+
+Put together (Figure~\ref{fig:synthesis}), \S\ref{sec:mechanism} supports a
+claim sharper than ``reparameterisation is incompatible with discrete Top-K
+selection'': at the noise scales these models train with, Top-K selection is
+close to random at the noisy end of the grid and far from stable even at the
+clamp floor, and the amount of selection churn a given noise scale induces
+tracks, monotonically, how much reconstruction quality it costs, across a
+$12\times$ range of noise and across two architectures that scope their hard
 cardinality constraint differently (per-token vs.\ globally-shared). There is
-no threshold effect and no ``free'' amount of noise on either architecture
---- only a continuum, with the residual gap at the achievable floor exactly
-the size the floor's own sigma predicts. A soft selection mechanism is not a
-smoother version of the same story; it introduces a second failure axis
-(achieved sparsity itself, not just which features are selected) that a hard
-cardinality constraint cannot have. The constructive reading, echoing why
+no threshold effect and no ``free'' amount of noise on either architecture ---
+only a continuum. A soft selection mechanism is not a smoother version of the
+same story; it introduces a second failure axis (achieved sparsity itself,
+not just which features are selected) that a hard cardinality constraint
+cannot have. The constructive reading, echoing why
 Gumbel-Softmax~\citep{jang2016categorical} and the Concrete
 distribution~\citep{maddison2016concrete} exist as a response to exactly this
 tension between continuous relaxations and discrete selection: \emph{if the
@@ -733,9 +870,11 @@ construction examined here does the opposite.
 Section~\ref{sec:e1}'s decomposition identified five implementation details
 --- a KL warmup schedule, a bias parameterisation, an initial decoder scale,
 a decoder-gradient-projection omission, and an initial weight distribution
---- that, individually, moved a standard liveness metric enough to be
-detected at $5\sigma$ with 13 seeds/arm, and none of which appears in either
-implementation's stated loss equation. A sixth, independent example
+--- none of which appears in either implementation's stated loss equation.
+The ladder of Table~\ref{tab:e1ladder} measures what remains after each is
+matched; Table~\ref{tab:variance} measures each one directly, as a
+one-factor contrast between two arms that differ in it alone. A sixth,
+independent example
 sharpens the same point without touching the KL term at all: the released
 vSAE trainer applies \texttt{F.relu(mu)} to its posterior mean before the
 reparameterisation step; a second trainer in the same codebase, built to
@@ -760,47 +899,68 @@ $<0.5\times k/d$ & $0.4655 \pm 0.0113$ & $0.3081 \pm 0.0092$ ($d=+15.3$) \\
 
 Both thresholds agree in direction, so this is a robust effect, not a shape
 change: adding the ReLU cuts the near-dead-feature population by a factor of
-$\sim4.6$ at the tight threshold. Had either trainer simply been patched to
+$\sim4.6$ at the tight threshold, and it moves reconstruction too ($d=32.5$
+on FVE). Had either trainer simply been patched to
 match the other, as is routine practice when reconciling two implementations
 of ``the same'' model, every subsequent number computed from that trainer
-would have silently inherited a $d\approx15$--$19$ effect misattributed to whatever
-the actual comparison of interest was.
+would have silently inherited an effect of $d\approx15$--$33$ misattributed
+to whatever the actual comparison of interest was.
 
 Table~\ref{tab:variance} collects every implementation-level factor measured
-in this paper. None of them is a hyperparameter anyone tunes, reports, or
-ablates in a typical SAE paper; all six are default behaviour, one line of
-code, and invisible in a state dict or a loss equation.
+in this paper, each as a one-factor contrast, and Figure~\ref{fig:implvar}
+plots them. None of them is a hyperparameter a typical SAE paper tunes,
+reports or ablates; each is the default behaviour of one trainer or the
+other, one flag or line of code, and absent from both papers' loss
+equations. The two the battery matched by configuration (bias form, KL
+warmup) were measured only on the project's six-seed pilot arms, so their
+evidence sits at that design's lower ceiling.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_impl_variance.pdf}
+\caption{(a)~The implementation details of Table~\ref{tab:variance}, each a
+one-factor contrast; the four markers are the four pre-registered metrics
+(log axis). The first two rows come from six-seed pilot arms. For scale,
+$d=0.8$ (dotted) is the conventional threshold for a ``large'' effect. The bottom row is the
+control of \S\ref{sec:claim4}: the same gradient-projection line switched off
+in a penalty-free Top-K SAE, null on all four metrics (open markers,
+$p>0.05$). (b)~One factor per seed: the released code's
+\texttt{F.relu(mu)} against the no-ReLU form of the preprint's equations
+(Table~\ref{tab:e3}). The two arms' seeds do not overlap at either liveness
+threshold.}
+\label{fig:implvar}
+\end{figure}
 
 \begin{table}[h]
 \centering
-\caption{Six one-line implementation details and their individually-measured
-effect sizes, all significant at $5.03$--$5.16\sigma$ (13 seeds/arm). For
-reference, published architectural claims in this literature are typically
-reported without seed variance at all (\S\ref{sec:seedsurvey}); a $d>10$
-implementation effect is larger than most reported architectural ones.}
+\caption{Six one-line implementation details, each measured as a one-factor
+contrast between two arms that differ in it alone: $|d|$ on the four
+pre-registered metrics, and the range of significance across them. Every
+entry has $p\le0.05$. The first two were matched by configuration before the
+13-seed battery and are measured on the project's six-seed pilot arms; their
+$\sigma$ is that design's ceiling, not a property of the effect.
+$^\dagger$The two liveness thresholds disagree in direction, a shape change
+(\S\ref{app:stats}).}
 \label{tab:variance}
-\begin{tabular}{lcc}
+\small\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
 \toprule
-Detail & Metric moved & $|d|$ \\
+Detail & seeds & FVE & frac.\ rec. & $<0.1\times$ & $<0.5\times$ & $\sigma$ \\
 \midrule
-KL warmup schedule + bias parameterisation (combined) & liveness (loose) & $13.0$ \\
-Initial decoder scale & FVE & $16.5$ \\
-Decoder-gradient-projection omission & FVE & $3.8$--$14.3^{*}$ \\
-Initial decoder-weight distribution (Gaussian vs.\ uniform) & FVE, frac.\ recovered & $4.7$, $7.3$ \\
-\texttt{F.relu(mu)} presence/absence & liveness & $15.3$--$19.3$ \\
+Bias form (pre-encoder bias or not) & 6 v 13 & $39.7$ & $31.7$ & $121.7$ & $174.5$ & $4.13$ \\
+KL warmup (1{,}000 steps or none) & 6 v 6 & $6.9$ & $2.9$ & $8.6$ & $2.9$ & $3.07$ \\
+Initial decoder scale (0.1 or 1) & 13 v 13 & $23.1$ & $30.3$ & $2.8^\dagger$ & $18.0^\dagger$ & $5.03$--$5.16$ \\
+Decoder-gradient projection & 13 v 13 & $14.3$ & $15.3$ & $2.4$ & $5.0$ & $4.48$--$5.16$ \\
+Initial weight distribution & 13 v 13 & $4.7$ & $7.3$ & $2.2$ & $3.6$ & $4.31$--$5.16$ \\
+\texttt{F.relu(mu)} & 13 v 13 & $32.5$ & $24.0$ & $19.3$ & $15.3$ & $5.03$--$5.16$ \\
 \bottomrule
 \end{tabular}
-
-\vspace{2pt}
-\footnotesize{$^{*}$Reported as a single factor in two different comparison
-contexts (against different upstream generations of the ladder); both values
-are real, significant effects, not a range of uncertainty.}
 \end{table}
 
 \subsection{The decoder-gradient-projection effect does not generalise to a penalty-free Top-K SAE}
 \label{sec:claim4}
 
-Table~\ref{tab:variance}'s largest entry after the ReLU, the
+One of Table~\ref{tab:variance}'s entries, the
 decoder-gradient-projection omission, was discovered and measured entirely
 within the vSAE family: every arm in Table~\ref{tab:e1ladder} carries a
 nonzero activation penalty (the vSAE's KL term, or its $L_2$-penalty null
@@ -833,8 +993,9 @@ $<0.5\times k/d$ & $0.754357 \pm 0.0014$ & $0.754056 \pm 0.0013$ & $+0.2$ ($p=0.
 \end{table}
 
 Nothing moves detectably, at the identical statistical power ($13$ seeds,
-$5.16\sigma$ floor) that detected $d=+3.8$ to $+16.5$ effects of the
-\emph{same} one-line change inside the vSAE family. This answers the
+$5.16\sigma$ floor) that detected $d=14.3$ (FVE) and $15.3$
+(\texttt{frac\_recovered}) effects of the \emph{same} one-line change inside
+the vSAE family. This answers the
 question directly, and narrows rather than weakens the claim
 Table~\ref{tab:variance} makes: the decoder-gradient-projection effect is
 real, large, and undocumented in either paper's equations, but its scope is
@@ -867,6 +1028,21 @@ floor drops below the conventional $5\sigma$ threshold; at $n=1$, the floor
 is $p=1$ ($0\sigma$) --- a single-seed design cannot express \emph{any}
 level of statistical significance for a claim of the form ``architecture A
 beats architecture B,'' independent of how large the true effect is.
+Figure~\ref{fig:seedceiling} draws the same ceiling as a curve.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_seed_ceiling.pdf}
+\caption{The ceiling of Table~\ref{tab:seedceiling} as a curve: the smallest
+$p$-value a two-sided seed-permutation test with $n$ seeds per arm can
+produce, $2/\binom{2n}{n}$, converted to $\sigma$. It does not depend on the
+effect size. Dotted lines are the further cap from Monte Carlo sampling of the
+permutation distribution at $10^5$ and $4\times10^6$ draws
+(\S\ref{app:stats}). At $n=1$, the design of every paper in
+Table~\ref{tab:seedsurvey}, no level of significance is expressible; $n=13$,
+used throughout this paper, is the first $n$ whose ceiling clears $5\sigma$.}
+\label{fig:seedceiling}
+\end{figure}
 
 \begin{table}[h]
 \centering
@@ -905,19 +1081,16 @@ not statistical power for any single comparison within it.
 \begin{table}[h]
 \centering
 \caption{Independently-seeded training runs per configuration, surveyed
-across every SAE-methods paper this paper cites. Full text of each paper
-searched via its arXiv HTML (two Anthropic/Transformer-Circuits posts
-exceeded a direct-fetch size limit; those two entries rest on multiple
-independent web searches quoting the papers' own methodology instead, and
-are flagged as such).}
+across every SAE-methods paper this paper cites, each checked against its
+full text (arXiv source, or the published Transformer-Circuits post).}
 \label{tab:seedsurvey}
 \begin{tabular}{lc}
 \toprule
 Paper & seeds/configuration \\
 \midrule
 \citet{cunningham2023sparse} & 1 \\
-\citet{bricken2023monosemanticity} & 1 (2 for one supplementary check only)$^{*}$ \\
-\citet{templeton2024scaling} & 1$^{*}$ \\
+\citet{bricken2023monosemanticity} & 1 (2 for one supplementary check only) \\
+\citet{templeton2024scaling} & 1 \\
 \citet{gao2024scalingevaluatingsparseautoencoders} & 1 \\
 \citet{rajamanoharan2024gated} & 1 \\
 \citet{rajamanoharan2024jumprelu} & 1 \\
@@ -928,13 +1101,14 @@ Paper & seeds/configuration \\
 \bottomrule
 \end{tabular}
 
-\vspace{2pt}
-\footnotesize{$^{*}$Not backed by a direct full-text fetch; see caption.}
 \end{table}
 
-One nuance is worth stating precisely rather than flattening: JumpReLU
-\emph{does} report binomial confidence intervals for a manual human-
-interpretability rating study \citep{rajamanoharan2024jumprelu} ---
+One nuance is worth stating precisely rather than flattening: three of the
+surveyed papers \emph{do} report confidence intervals, all on interpretability
+ratings --- binomial intervals for JumpReLU's manual rating study
+\citep{rajamanoharan2024jumprelu}, bootstrap intervals for Gated SAEs'
+\citep{rajamanoharan2024gated}, and 95\% intervals on
+\citet{cunningham2023sparse}'s automated interpretability scores. These are
 evaluation-level uncertainty, not training-seed-level uncertainty. This is
 exactly the distinction \S\ref{app:stats} draws (a token- or rater-level
 test estimates evaluation noise and cannot support an architecture-level
@@ -949,9 +1123,9 @@ substantial seed-to-seed instability in exactly the object a single-seed
 design cannot detect. \citet{paulo2025sae} found only $\sim30\%$ feature
 overlap between two otherwise-identical $131$k-latent SAEs differing only
 in random seed (Llama-3-8B, replicated across multiple layers, LLMs, and
-datasets); \citet{gerasimov2026unstable} found individual features vary
-substantially across seeds in a large-scale multi-seed study, though they
-cluster into reproducible lower-rank subspaces. Neither result was designed
+datasets); \citet{gerasimov2026unstable} found, in a large-scale multi-seed
+study, that the features which do not reappear across seeds concentrate in
+reproducible lower-rank subspaces. Neither result was designed
 to be detectable by any of the ten papers surveyed above, and both found
 it anyway once someone looked.
 
@@ -1015,7 +1189,27 @@ including the top-usage reference and a bracket of 90 random-subset draws).
 TPP says the opposite: the vSAE's score sits \emph{below} both the top-usage
 and the random-subset references at the same $N$. This is not a subtle
 effect that disappears under scrutiny; it is a sign flip on the exact same
-comparison, and it recurs in every diagnostic we ran against it.
+comparison, and it recurs in every diagnostic we ran against it
+(Figure~\ref{fig:e4}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig_e4.pdf}
+\caption{SCR and TPP on the same two checkpoints. (a,~b)~The comparison of
+Table~\ref{tab:e4}. The baseline Top-K dictionary is masked to $N$ features by
+usage (blue) or at random (grey band: range of 10 draws; grey line: their
+mean) and scored at each $N$; the vSAE (star) is scored unmasked, at its 1,474
+live features. SCR puts the vSAE above the curve, TPP below it. The diamond is
+a Top-K SAE trained from scratch at $d=1474$ (diagnostic~5), which lands on
+(SCR) or just above (TPP) the masked curve. (c)~95\% bootstrap intervals on
+the vSAE's margin over the top-usage curve, for the mean and at each number
+of ablated features (diagnostics~1 and~2; TPP's intervals are narrower than
+its markers). (d)~SCR's margin at all eight (dataset, class pair) points of
+diagnostic~4, against the masked curve and against the trained-from-scratch
+baseline (diagnostic~5): the choice of reference can move one pair's verdict,
+not the average.}
+\label{fig:e4}
+\end{figure}
 
 \subsection{Five diagnostics, none of which explains the disagreement away}
 \label{sec:e4discussion}
@@ -1047,9 +1241,9 @@ attempt and ran five diagnostics, roughly cheapest-to-test first.
   each metric's own effect computation ranks highest, cross-referenced
   against their usage-percentile rank. It is falsified: both metrics' top
   features sit in the same $0.55$--$0.73$ usage-percentile band at every
-  $N$, the small gap between them flips sign between $N\le5$ and $N\ge10$,
-  and within-metric variance across classes dwarfs any between-metric
-  difference.
+  $N$; the gap between them ($+0.18$ to $-0.06$) flips sign between $N\le5$
+  and $N\ge10$, and is no larger than the spread of either metric across its
+  own classes (SD $0.03$--$0.18$).
 \item \textbf{Does it generalise across datasets and class pairs?} Extending
   to three more \texttt{bias\_in\_bios} pairs and a second SAEBench dataset
   (Amazon reviews) finds both verdicts replicating as the dominant pattern,
@@ -1125,13 +1319,14 @@ resolving it by fiat or by omission.
 this paper nor SAEBench's own release applied --- reseed noise on fixed
 canonical SAEs, correlation with a synthetic benchmark's known ground-truth
 quality, and discriminability across a training trajectory --- and finds
-both fail basic sanity checks at their canonical settings: SCR and TPP
-\emph{decline} over the course of training on the panels tested (implying
-an untrained SAE is ``better'' than a trained one), TPP's canonical setting
-shows essentially zero correlation with ground-truth quality on synthetic
-SAEs, and SCR turns \emph{negatively} correlated with ground-truth quality
-at large $N$, ranking a perfect oracle below 11 of 35 trained SAEs tested.
-The recommendation is to avoid both at their canonical settings entirely.
+both fail basic sanity checks at their canonical settings. At large top-$N$
+both \emph{decline} over the course of training (implying an untrained SAE is
+``better'' than a trained one), and SCR does so even at the canonical
+top-$10$ on 2 of 4 SAEs; TPP at its canonical setting shows no correlation
+with ground-truth quality on synthetic SAEs; and SCR ranks a perfect oracle
+below 11 of 35 trained SAEs at the canonical top-$10$, turning
+\emph{negatively} correlated with ground-truth quality at top-$N\ge50$. The
+paper recommends avoiding both.
 This is a different, and more direct, kind of evidence than anything in
 this section --- it audits each metric against a ground truth we do not
 have access to, rather than checking whether the two metrics agree with
@@ -1155,9 +1350,10 @@ selection mechanism's chosen set, not some generic notion of representation
 quality, and that mechanism generalises across two architectures that scope
 their hard-$k$ constraint differently but breaks down --- in an informative
 way, not merely a noisier way --- for a soft, gradient-learned threshold
-(\S\ref{sec:mechanism}). Both of these facts about the architecture are, in
-this codebase, larger than five one-line implementation details that appear
-in no equation the released code's own paper states (\S\ref{sec:variance}).
+(\S\ref{sec:mechanism}). Both facts about the architecture became visible
+only once six one-line implementation details, which appear in no equation
+the released code's own paper states, were controlled; each of those details
+alone moves a pre-registered metric by $|d|\ge7.3$ (\S\ref{sec:variance}).
 The composite claim is not ``variational sparse autoencoders do not work''
 --- it is that the standard construction (isotropic Gaussian prior, fixed
 unit variance, hard Top-K selection) cannot test the hypothesis it is
@@ -1171,9 +1367,10 @@ design recommendation rather than a negative result: put the noise in the
 \emph{selection decision} (as Gumbel-Softmax and Concrete relaxations do for
 discrete choices generally~\citep{jang2016categorical,maddison2016concrete},
 and as \citet{berthet2020learning}'s differentiable perturbed optimisers do
-specifically for top-$k$-type discrete selection --- exactly the operation
-whose interaction with reparameterisation noise this paper measures ---
-by perturbing the ranking \emph{before} the argmax/top-$k$ step and
+for argmax-type decisions such as sorting and ranking --- the family top-$k$
+selection belongs to, and the operation whose interaction with
+reparameterisation noise this paper measures --- by perturbing the input
+\emph{before} the argmax step and
 differentiating through the resulting expectation, rather than perturbing
 an already-selected value afterward), not in the magnitude of an
 already-selected feature. The hard-concrete stochastic gate of
@@ -1193,17 +1390,16 @@ follow directly from identifying the specific mechanism this paper
 measures rather than only its symptom.
 
 \paragraph{A note on the liveness--reconstruction relationship.} An
-exploratory (not pre-registered) reading of every replicated arm in this
-battery found that reconstruction quality and feature liveness are not a
-single trade-off curve: pooled across 11 arms the two metrics look unrelated
-($\rho=-0.14$, $p=0.69$), but that null is two opposite-signed relationships
-cancelling --- among the subset of arms that reach reasonable reconstruction
-quality, better reconstruction buys \emph{more} near-dead features
-($\rho=+0.86$, $p=0.007$), the same direction the healthy end of the vSAE
-sweeps in this paper's own dose-response curves shows. We flag this only as
-context for interpreting Table~\ref{tab:a2}--\ref{tab:a4}'s FVE columns
-alongside their own liveness statistics, not as an additional pre-registered
-claim.
+exploratory (not pre-registered) reading across the nine replicated
+fixed-variance arms of this battery --- which sample nothing, so the
+measurement-regime caveat of \S\ref{sec:mechanism} does not apply --- finds
+that reconstruction quality and feature liveness are not independent pieces of
+evidence: arms that reconstruct better have \emph{more} near-dead features
+(arm-mean Spearman $\rho=+0.90$, $p=0.0009$ and $\rho=+0.78$, $p=0.013$ at the
+two liveness thresholds, the same direction at both). A comparison reporting
+``reconstructs better'' and ``has fewer dead features'' as two separate
+findings is, on this evidence, reporting the two ends of one trade-off. We flag
+this only as context, not as an additional pre-registered claim.
 
 \subsection{Limitations}
 
@@ -1226,18 +1422,18 @@ claim.
   numbers should be read as characterising ``the vSAE'' versus
   characterising these two particular checkpoints.
 \item \textbf{The noise-scale sweeps (\S\ref{sec:mechanism}) are single-seed
-  correlations at the arm level, not a permutation test.} $r=0.9993$,
-  $0.9979$, $0.9334/0.6297$ are Pearson correlations over six (or four)
-  arm-level means, each itself averaged over 13 seeds; they are strong,
-  visually unambiguous relationships, but the unit of statistical inference
+  correlations at the arm level, not a permutation test.} $r=0.952$,
+  $0.945$, $0.977/{-0.55}$ are Pearson correlations over six (or seven)
+  arm-level means, each itself averaged over 13 (or 5) seeds; the hard-$k$
+  relationships are monotone at every point, but the unit of statistical inference
   used elsewhere in this paper (a permutation test over seeds) does not
   apply to a six-point curve, and we do not claim $\sigma$-level
   significance for these correlations.
-\item \textbf{The JumpReLU result (\S\ref{sec:mechanism}) rests on eight grid
+\item \textbf{The JumpReLU result (\S\ref{sec:mechanism}) rests on seven grid
   points after confound control, four of them at reduced seed count.} The
-  follow-up in \S\ref{sec:a4followup} rules out $n=4$ being simply too few
-  points to trust, but the four new points ran at 5 seeds/arm rather than
-  the main battery's 13, and $n=8$ arm-level points is still a small-$n$
+  follow-up in \S\ref{sec:a4followup} supplies the points the original grid
+  lacked in the $L_0$-matched region, but they ran at 5 seeds/arm rather than
+  the main battery's 13, and $n=7$ arm-level points is still a small-$n$
   correlation, not a claim carrying the seed-permutation-test guarantees
   \S\ref{app:stats} describes for the rest of this paper. An architectural
   (rather than soft-loss) $L_0$ cap would answer the original question more
@@ -1259,7 +1455,8 @@ Sparse autoencoders for language-model interpretability were introduced by
 superposition hypothesis of \citet{elhage2022superposition} and scaled by
 \citet{bricken2023monosemanticity} and, to production-model scale,
 \citet{templeton2024scaling}. Top-K sparsity, which this paper's baseline
-uses throughout, is due to
+uses throughout, is the $k$-sparse autoencoder of
+\citet{makhzani2013ksparse} as scaled to language models by
 \citet{gao2024scalingevaluatingsparseautoencoders}, who also introduce the
 AuxK dead-feature revival mechanism this paper's \S\ref{sec:e4} discusses as
 a confound. Gated SAEs~\citep{rajamanoharan2024gated}, BatchTopK
@@ -1277,9 +1474,9 @@ tooling is built on~\citep{marks2025sparsefeaturecircuitsdiscovering}.
 practice is corroborated by two independent studies of SAE seed
 sensitivity itself, neither part of the survey: \citet{paulo2025sae} found
 only $\sim30\%$ feature overlap between otherwise-identical SAEs differing
-only in random seed, and \citet{gerasimov2026unstable} found individual
-features vary substantially across seeds while clustering into
-reproducible lower-rank subspaces. The
+only in random seed, and \citet{gerasimov2026unstable} found that the
+features which do not reappear across seeds concentrate in reproducible
+lower-rank subspaces. The
 variational autoencoder and its reparameterisation
 trick~\citep{kingma2013autoencoding} and the $\beta$-weighted KL trade-off
 this paper's Eq.~\ref{eq:vsae} follows~\citep{higgins2017betavae} are the two
@@ -1289,8 +1486,9 @@ threshold trainable~\citep{bengio2013estimating}, the two continuous
 relaxations of discrete sampling this paper's constructive discussion points
 toward as the right place to put stochasticity in a
 selection-based architecture~\citep{jang2016categorical,maddison2016concrete},
-and, closer still to top-$k$ selection specifically, the differentiable
-perturbed optimisers of \citet{berthet2020learning} and the hard-concrete
+and, closer to top-$k$ selection, the differentiable perturbed optimisers
+of \citet{berthet2020learning} (argmax-type decisions such as ranking) and
+the hard-concrete
 stochastic sparsity gate of \citet{louizos2018learning} --- both of which
 place noise at the discrete decision itself rather than at an
 already-selected value's magnitude, and the latter of which structurally
@@ -1308,8 +1506,7 @@ variational sparse autoencoder into its constituent implementation choices,
 or of a dose-response measurement of the reparameterisation-selection
 interaction across multiple selection mechanisms. \citet{chanin2026reliable}
 independently audits SCR and TPP against ground-truth and training-
-trajectory sanity checks and recommends against both at their canonical
-settings; \S\ref{sec:e4} is, to our knowledge, the first report of the two
+trajectory sanity checks and recommends against both; \S\ref{sec:e4} is, to our knowledge, the first report of the two
 metrics giving opposite-signed verdicts on the same checkpoints, which is a
 different, complementary kind of finding to Chanin's --- disagreement
 between two metrics versus failure of either against a ground truth.
@@ -1329,9 +1526,9 @@ scoping that constraint differently and fails informatively, rather than
 simply more noisily, for a soft alternative. Both findings required an
 amount of implementation-level control that a typical single-seed,
 single-implementation SAE comparison does not have, and the implementation
-details that turned out to matter are, individually, larger effects than
-many of the architectural claims this literature reports without seed
-variance at all. We close with a case where our own confound-checking did
+details that turned out to matter are each large enough ($|d|\ge7.3$) that a
+single-seed comparison, the design this literature uses, could not tell them
+apart from an architectural difference. We close with a case where our own confound-checking did
 not resolve a disagreement between two standard metrics, offered in the
 spirit the rest of this paper is written in: a claim is only as good as the
 specific alternative explanations that were checked and ruled out, and
@@ -1366,7 +1563,7 @@ large significance level: this is the design's own ceiling, not a property
 of any particular effect.
 
 \paragraph{The Monte Carlo floor.} Above $\binom{2n}{n}=200{,}000$ possible
-assignments ($n>9$ or so, depending on group balance), exact enumeration is
+assignments ($n\ge11$ for equal groups), exact enumeration is
 replaced by Monte Carlo sampling of the permutation distribution, whose own
 floor is $1/(n_{\mathrm{perm}}+1)$ under the conservative estimator
 $(\mathrm{count}+1)/(n_{\mathrm{perm}}+1)$ (the naive $\mathrm{count}/n_{\mathrm{perm}}$
@@ -1383,11 +1580,12 @@ advance: a result counts as robust only if both thresholds agree in
 direction; disagreement between them is treated as a positive finding (a
 shape change in the usage distribution, not a location shift) rather than
 resolved by picking whichever threshold supports the narrative. This rule
-caught a genuine shape change --- not a location shift --- twice in the
-course of this project's larger confirmatory battery (\S\ref{sec:e1}'s init
-factor, and one comparison not otherwise reported in this paper), in both
-cases exactly the failure mode a single threshold would have silently
-reported as a clean one-directional effect.
+caught a genuine shape change --- not a location shift --- twice in this
+paper: the first E1 comparison (Table~\ref{tab:e1ladder}, $-2.8$ against
+$+13.0$) and the initial-decoder-scale factor itself
+(Table~\ref{tab:variance}, $+2.8$ against $-18.0$), in both cases exactly the
+failure mode a single threshold would have silently reported as a clean
+one-directional effect.
 
 \section{The full E1 code diff}
 \label{app:e1diff}
@@ -1408,7 +1606,7 @@ Status & Item(s) \\
 \midrule
 Matched by config (2) & \texttt{kl\_warmup\_steps}; bias parameterisation \\
 Run as a measured factor (2) & decoder init scale; gradient-projection omission \\
-No-op, measured (2) & dead-feature-liveness accounting convention; the $\pm10$ pre-selection clamp (never binds: max observed activation $0.194$ against a clamp at $10$) \\
+No-op, measured (2) & dead-feature-liveness accounting convention; the $\pm10$ pre-selection clamp (never binds: max observed activation $0.215$ against a clamp at $10$) \\
 No-op, static (7) & \texttt{abs()} in selection; an unused \texttt{threshold} buffer; the geometric-median initialisation guard; two epsilon/clamp guards; the dead-feature counter update site; a $2.7\%$ initial-norm offset \\
 Not a factor by design (1) & RNG consumption order --- the seed itself is the unit of randomisation the permutation design already treats as noise \\
 Run as the closing factor (1) & initial decoder-weight distribution (normalised Gaussian vs.\ normalised uniform) --- predicted null, found not null ($d=-4.7$ on FVE) \\
@@ -1419,8 +1617,8 @@ Run as the closing factor (1) & initial decoder-weight distribution (normalised 
 \section{Bugs found and fixed in the course of this work}
 \label{app:bugs}
 
-Three checkpoint-affecting bugs and one training-blocking bug set were found
-and fixed while producing the results in this paper; we report them because
+The bugs and measurement errors below were found while producing the
+results in this paper; we report them because
 each one silently altered a reported number before it was found, and because
 the corrections change how earlier readings of this same data should be
 interpreted.
@@ -1476,6 +1674,84 @@ renormalisation not rescaling the learned threshold alongside it, silently
 corrupting evaluated output on any non-unit-norm decoder) was also found and
 fixed.
 
+\paragraph{Saved sampled checkpoints run at $1/\mathrm{norm\_factor}$ of their
+training noise.} The fix to the first bug above makes $\log\boldsymbol{\sigma}^2$
+on raw activations equal its trained value, which is what it was designed to
+do. But the same save-time rescaling multiplies $\boldsymbol{\mu}$ by
+$\mathrm{norm\_factor}\approx25.5$, so a saved checkpoint on raw activations
+adds noise $\sigma$ to a $\boldsymbol{\mu}$ that is $25.5\times$ larger than in
+training: the effective noise is $\sigma/25.5$. No bias-only rescaling can
+avoid this, because the clamp on $\log\boldsymbol{\sigma}^2$ is not
+scale-homogeneous. Both the trainer's own end-of-run evaluation (FVE, $L_0$)
+and the Jaccard readers fed saved checkpoints raw activations, so the first
+version of \S\ref{sec:mechanism}'s Tables~\ref{tab:e2split}--\ref{tab:a4}
+measured every sampled model at $1/25$ of the noise it was trained with. We
+found this while drawing Figure~\ref{fig:churn} from real data; the tables
+now report the training regime, and \S\ref{app:regime} keeps the as-saved
+numbers.
+
+\section{The noise sweeps as saved and in the training regime}
+\label{app:regime}
+
+Table~\ref{tab:regime} measures the same checkpoints in both regimes. ``As
+saved'' is the measurement an earlier version of this paper printed: FVE from
+each run's own end-of-training evaluation and Jaccard from the A2--A4 readers,
+both on raw activations, where the noise is $\sigma/25.5$ relative to
+$\boldsymbol{\mu}$. ``Training'' converts each checkpoint back to the state it
+trained in and feeds activations divided by the re-estimated normalising
+constant ($25.47$), on 32{,}768 tokens in batches of 1{,}024, the training
+batch size (\texttt{falsification/read\_training\_regime.py}). The same
+reader also measures every checkpoint as saved: its Jaccard reproduces the
+A2--A4 readers' to within $0.003$, and its FVE differs from each run's own
+evaluation, which scored a different 10{,}240-token sample, by $-0.013$ to
+$+0.002$ (lower for most sampled arms; the deterministic baselines agree to
+$0.0003$). In the training regime the hard-$k$
+couplings stay monotone but loosen ($r$ from $0.999$ to $0.95$) because
+Jaccard is pressed against chance at the noisy end; JumpReLU's $L_0$ collapse
+is milder ($122$ rather than $37$ active features at the noisiest point) and
+it overshoots the target at $\sigma=0.22$. The E2 split of
+Table~\ref{tab:e2split} was $93.6\%/6.4\%$ of a $0.4420$ gap as saved.
+
+\begin{table}[h]
+\centering
+\caption{The noise sweeps as saved (raw activations, effective noise
+$\sigma/25.5$) and in the training regime, 13 seeds/point. $J$ is selection
+Jaccard.}
+\label{tab:regime}
+\small\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llcccccc}
+\toprule
+& & \multicolumn{2}{c}{as saved} & \multicolumn{2}{c}{training regime} & \multicolumn{2}{c}{$L_0$} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+& $\log\sigma^2_{\mathrm{init}}$ & FVE & $J$ & FVE & $J$ & saved & training \\
+\midrule
+TopK & $-1.0$ & $0.3766$ & $0.7657$ & $0.2517$ & $0.0750$ & -- & -- \\
+ & $-2.0$ & $0.4863$ & $0.8117$ & $0.3511$ & $0.0862$ & -- & -- \\
+ & $-3.0$ & $0.6140$ & $0.8700$ & $0.4708$ & $0.1094$ & -- & -- \\
+ & $-4.0$ & $0.7427$ & $0.9180$ & $0.6107$ & $0.1686$ & -- & -- \\
+ & $-5.0$ & $0.8169$ & $0.9453$ & $0.7200$ & $0.2624$ & -- & -- \\
+ & $-8.0$ & $0.8338$ & $0.9523$ & $0.7494$ & $0.2919$ & -- & -- \\
+ & $r(\mathrm{FVE},J)$ & \multicolumn{2}{c}{$+0.9993$} & \multicolumn{2}{c}{$+0.9521$} & & \\
+\midrule
+BatchTopK & $-1.0$ & $0.3434$ & $0.6969$ & $0.2459$ & $0.0758$ & -- & -- \\
+ & $-2.0$ & $0.4787$ & $0.7546$ & $0.3599$ & $0.0826$ & -- & -- \\
+ & $-3.0$ & $0.6179$ & $0.8348$ & $0.4833$ & $0.0968$ & -- & -- \\
+ & $-4.0$ & $0.7553$ & $0.8912$ & $0.6232$ & $0.1311$ & -- & -- \\
+ & $-5.0$ & $0.8391$ & $0.9222$ & $0.7366$ & $0.1881$ & -- & -- \\
+ & $-8.0$ & $0.8588$ & $0.9311$ & $0.7692$ & $0.2101$ & -- & -- \\
+ & $r(\mathrm{FVE},J)$ & \multicolumn{2}{c}{$+0.9979$} & \multicolumn{2}{c}{$+0.9455$} & & \\
+\midrule
+JumpReLU & $-1.0$ & $0.3967$ & $0.9637$ & $0.3401$ & $0.2628$ & $36.8$ & $121.7$ \\
+ & $-2.0$ & $0.5346$ & $0.9635$ & $0.4671$ & $0.3199$ & $98.2$ & $202.7$ \\
+ & $-3.0$ & $0.7461$ & $0.9779$ & $0.6349$ & $0.5526$ & $290.8$ & $331.4$ \\
+ & $-4.0$ & $0.7979$ & $0.9913$ & $0.7073$ & $0.7186$ & $247.2$ & $268.1$ \\
+ & $-5.0$ & $0.8522$ & $0.9883$ & $0.7707$ & $0.7216$ & $261.2$ & $269.0$ \\
+ & $-8.0$ & $0.8632$ & $0.9867$ & $0.7848$ & $0.7090$ & $265.0$ & $270.3$ \\
+ & $r(\mathrm{FVE},J)$ & \multicolumn{2}{c}{$+0.9334$} & \multicolumn{2}{c}{$+0.9770$} & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \section{Reproducibility}
 \label{app:repro}
 
@@ -1499,7 +1775,11 @@ requiring a GPU. By section:
 \end{itemize}
 Every arm ran at 13 seeds, except \S\ref{sec:a4followup}'s four densifying
 JumpReLU points (\texttt{a4\_jumprelu\_sigma\_init\_\{m3\_5,m4\_5,m5\_5,m6\}}),
-which ran at 5 (\texttt{falsification/read\_a4\_followup.py}). The
+which ran at 5 (\texttt{falsification/read\_a4\_followup.py}).
+\S\ref{sec:mechanism}'s numbers are measured in the training regime by
+\texttt{falsification/read\_training\_regime.py} (GPU; cached in
+\texttt{training\_regime\_results.json}), and Figure~\ref{fig:churn}'s by
+\texttt{read\_selection\_example.py}. The
 falsification test suite (\texttt{python -m pytest falsification/tests/ -q})
 exercises the permutation-test implementation itself, including the
 $p$-value floor formulas in \S\ref{app:stats}, and stayed green throughout

@@ -63,11 +63,11 @@ groups' SDs; *p*-values are two-sided seed-permutation tests
 |---|---|---|---|---|
 | Table 1 — E1 ladder | `e1_penalty` vs `e1_vsae_ref`, `_unitinit`, `_gradproj`, `_fullmatch` | run data | `table_e1_ladder` | `falsification/compare_arms.py e1_penalty <arm>` |
 | §3.3–3.4 text — gap closures (78.9 %, 74.9 %), factor sizes (−14.3; −4.7, −7.3), verdict | same | run data | `table_e1_ladder` | `compare_arms.py e1_vsae_ref_unitinit e1_vsae_ref_gradproj`, `… e1_vsae_ref_gradproj e1_vsae_ref_fullmatch` |
-| Table 2 — KL vs reparameterisation split | `baseline`, `e2_confirm`, `e2_sampling_only` | run data (corrected) | `table_e2_split` | — |
-| Table 3, Figure 1 — TopK dose-response | `a2_sigma_init_m{1,3,4,5}`, `e2_sampling_only`, `e2_sigma_low_init`; baseline `baseline` | FVE: run data (corrected); Jaccard: `falsification/a2_dose_response_results.json` | `tables_dose_response`, `figures` | `falsification/read_a2_dose_response.py` (GPU; `--fig-only` re-plots) |
-| Table 4, Figure 2 — BatchTopK | `a3_batchtopk_*` | FVE: run data; Jaccard: `a3_dose_response_results.json` | same | `read_a3_dose_response.py` |
-| Table 5, Figure 3 — JumpReLU | `a4_jumprelu_*` (six points) | FVE, L0: run data; Jaccard: `a4_dose_response_results.json` | same | `read_a4_dose_response.py` |
-| §4.4.2, Figure 4 — ten-point JumpReLU grid | + `a4_jumprelu_sigma_init_m{3_5,4_5,5_5,6}` (5 seeds) | FVE, L0: run data; Jaccard: `a4_followup_results.json` | same | `read_a4_followup.py` |
+| Table 2 — KL vs reparameterisation split | `baseline`, `e2_confirm`, `e2_sampling_only` | `falsification/training_regime_results.json` (training regime) | `table_e2_split` | `falsification/read_training_regime.py` (GPU) |
+| Table 3, Figure 6 — TopK dose-response | `a2_sigma_init_m{1,3,4,5}`, `e2_sampling_only`, `e2_sigma_low_init`; baseline `baseline` | `falsification/training_regime_results.json` (training regime) | `tables_dose_response`, `figures` | `falsification/read_training_regime.py` (GPU) |
+| Table 4, Figure 7 — BatchTopK | `a3_batchtopk_*` | `training_regime_results.json` | same | `read_training_regime.py` |
+| Table 5, Figure 8 — JumpReLU | `a4_jumprelu_*` (six points) | `training_regime_results.json` | same | `read_training_regime.py` |
+| §4.4.2, Figure 9 — ten-point JumpReLU grid | + `a4_jumprelu_sigma_init_m{3_5,4_5,5_5,6}` (5 seeds) | `training_regime_results.json` | same | `read_training_regime.py` |
 | Table 6 — `F.relu(mu)` | `e3_masked_kl` vs `e3_masked_kl_relu` | run data (npz) | `table_e3` | `compare_arms.py e3_masked_kl e3_masked_kl_relu` |
 | Table 7 — implementation-detail summary | — | Tables 1 and 6 | `table_variance_summary` | — |
 | Table 8 — projection off in a plain TopK SAE | `baseline` vs `claim4_baseline_noproj` | run data | `table_claim4` | `compare_arms.py baseline claim4_baseline_noproj` |
@@ -75,6 +75,19 @@ groups' SDs; *p*-values are two-sided seed-permutation tests
 | Table 10 — seeds per configuration in the literature | — | `falsification/seed_count_survey_results.json` | `table_seed_survey` | `seed_count_survey.py` |
 | Table 11 — SCR vs TPP on the Pythia pair | `e4_pythia_baseline`, `e4_pythia_vsae` | `falsification/e4_scr_results.json`, `e4_tpp_results.json`, `e4_size_matched_baseline_results.json` | `table_e4` | `run_e4_scr.py`, `run_e4_tpp.py`, `score_e4_size_matched_baseline.py` (GPU + SAEBench) |
 | Table 12 — the 15-item code diff | — | static (a reading of the two trainers) | — | — |
+| Table 13 — the noise sweeps as saved and in the training regime | the A2–A4 arms | as saved: run data (corrected) + `falsification/a{2,3,4}_dose_response_results.json`; training: `training_regime_results.json` | `table_as_saved` | `read_a{2,3,4}_dose_response.py` (as saved), `read_training_regime.py` |
+
+The paper's other figures explain the tables above and are drawn from the same
+data by `workshop/make_paper_figs.py` (run by `reproduce.py --figures`):
+Figure 3 (`fig_e1_ladder`, Table 1 per seed), Figure 4 (`fig_e2_split`, Table 2
+plus the single-seed `e2_beta_pilot_*` runs), Figure 5 (`fig_selection_churn`;
+panels (a, b) from `falsification/selection_example_results.json`, cached by
+`read_selection_example.py` (GPU), panel (c) the `read_preact_gap.py` gap
+quoted in §4.2), Figure 10 (`fig_synthesis`, Tables
+3–5 and the ten-point grid), Figure 11 (`fig_impl_variance`, Tables 6–8),
+Figure 12 (`fig_seed_ceiling`, Table 9's formula) and Figure 13 (`fig_e4`,
+Table 11 plus the `e4_bootstrap_*` and per-pair `e4_*` caches). Figures 1 and 2
+(`fig_studymap.tex`, `fig_pipeline.tex`) are TikZ diagrams, not data.
 
 Two figures in `workshop/figs/` are not in the mechanism paper.
 `beta_sweep.pdf` (the preprint-era β sweep, `workshop/make_fig_beta.py`, from
@@ -86,15 +99,21 @@ now), so it is left as committed.
 
 ## Numbers that need a GPU and a checkpoint
 
-These are quoted in the paper from measurements on the saved weights and are
-not recomputed by `reproduce.py`; the scripts are in `falsification/` and
-each states its inputs.
+These need the saved weights. Each script caches its result as JSON in
+`falsification/`, and `reproduce.py --check` checks the paper's numbers
+against those caches; re-running a script refreshes its cache. Every reader of
+a sampled (`var_flag = 1`) checkpoint must say which regime it measures
+(`ERRATA.md` §2).
 
 | Number | Script |
 |---|---|
-| Selection Jaccard per checkpoint (cached in the `*_dose_response_results.json` above) | `read_a2_dose_response.py`, `read_a3_…`, `read_a4_…`, `read_a4_followup.py` |
-| Pre-activation gap at the k-th/(k+1)-th boundary (median 0.0001, 99th pct 0.0006) | `read_preact_gap.py` |
-| Largest pre-clamp activation (0.194 over 20,000 activations) | `read_penalty_clamp.py` |
+| Tables 2–5, 13: FVE, L0 and selection Jaccard of every sampled arm in both regimes (`training_regime_results.json`) | `read_training_regime.py` |
+| Figure 5, §4.2: one real token, churn by rank, share of selections outside μ's top-k (`selection_example_results.json`) | `read_selection_example.py` |
+| Selection Jaccard as saved, Table 13 (`*_dose_response_results.json`) | `read_a2_dose_response.py`, `read_a3_…`, `read_a4_…`, `read_a4_followup.py` |
+| Step-wise Jaccard trajectory, both regimes, `RESULTS.md` §3 (`trajectory_regime_results.json`) | `read_trajectory_regime.py` (as saved only: `read_selection_jaccard.py`) |
+| Pre-activation gap at the k-th/(k+1)-th boundary (median 0.0001, 99th pct 0.0006, max 0.0014; `preact_gap_results.json`) | `read_preact_gap.py` |
+| Largest pre-clamp activation over all five E1 arms (0.215; `penalty_clamp_results.json`) | `read_penalty_clamp.py` |
+| The E1 loss identity (`loss_identity_results.json`) | `check_loss_identity.py` |
 | Learned posterior sigma of the E2 arms | `read_learned_sigma.py` (apply the `ERRATA.md` bias correction by hand) |
 | Mean Jaccard 0.35 vs 1.0 before/after the JumpReLU gate fix | `dictionary_learning/trainers/vsae_jump_relu.py` (a direct forward-pass check, described in `ERRATA.md`) |
 | SCR/TPP scores (cached in `e4_*_results.json`) | `run_e4_scr.py`, `run_e4_tpp.py`, `score_e4_size_matched_baseline.py` |

@@ -66,7 +66,8 @@ def arm(name: str) -> dict[str, dict[int, float]]:
     """Per-seed metrics for one arm: FVE, frac_recovered, frac_alive, below_0.1x,
     below_0.5x (the last two need the .npz)."""
     if name not in _ARM_CACHE:
-        root = EXP / name
+        # "archive/<arm>": the superseded six-seed pilot arms Table 7 reads.
+        root = REPO / name if name.startswith("archive/") else EXP / name
         if not root.is_dir():
             sys.exit(f"missing experiments/{name}")
         vals, _ = arm_values(root)
@@ -228,51 +229,94 @@ def table_e1_ladder() -> None:
         check(f"gradproj vs fullmatch {lab} d", c["d"], exp, 0.15)
 
 
+# --------------------------------------------------------------------------
+# Section 4: the sampled arms, measured in the regime they were trained in
+# --------------------------------------------------------------------------
+#
+# Every sampled (var_flag=1) checkpoint runs at sigma/norm_factor of its
+# training noise when fed raw activations, because scale_biases() scales mu by
+# norm_factor at save time and leaves log sigma^2 alone (docs/ERRATA.md §2).
+# Tables 2-5 are therefore read from falsification/training_regime_results.json
+# (`read_training_regime.py`, GPU), which measures every checkpoint both in the
+# training regime (primary) and as saved, on the same tokens and noise draws.
+# The numbers an earlier version of the paper printed -- the as-saved
+# measurement, FVE from each run's evaluate() and Jaccard from the A2-A4
+# readers -- are kept in Table 13 (appendix) and still checked below.
+
+REGIME = FALS / "training_regime_results.json"
+_REGIME: dict | None = None
+SWEEP_BASELINE = {"topk": "baseline", "batchtopk": "a3_batchtopk_baseline", "jumprelu": "a4_jumprelu_baseline"}
+L0_BAND = (240.0, 320.0)       # falsification/read_a4_followup.py, fixed before the follow-up ran
+SIX = (-1.0, -2.0, -3.0, -4.0, -5.0, -8.0)
+
+
+def regime_arm(name: str) -> dict:
+    global _REGIME
+    if _REGIME is None:
+        _REGIME = {a["arm"]: a for a in json.loads(REGIME.read_text())["arms"]}
+    return _REGIME[name]
+
+
+def regime_vals(name: str, metric: str, regime: str = "training") -> list[float]:
+    return [s[regime][metric] for s in regime_arm(name)["seeds"]]
+
+
+def regime_rows(sweep: str, regime: str = "training", six_only: bool = True) -> list[dict]:
+    """One row per grid point: sigma, FVE, Jaccard, L0 (mean and SD over seeds)."""
+    if _REGIME is None:
+        regime_arm("baseline")
+    rows = []
+    for a in _REGIME.values():
+        if a["sweep"] != sweep or a["log_var_init"] is None:
+            continue
+        if six_only and a["log_var_init"] not in SIX:
+            continue
+        f, j, l = (regime_vals(a["arm"], m, regime) for m in ("fve", "jaccard", "l0"))
+        rows.append({"log_var_init": a["log_var_init"], "arm": a["arm"], "sigma": a["sigma"],
+                     "n_seeds": len(f), "fve_mean": mean(f), "fve_std": stdev(f),
+                     "jaccard_mean": mean(j), "jaccard_std": stdev(j), "l0_mean": mean(l), "l0_std": stdev(l)})
+    rows.sort(key=lambda r: -r["log_var_init"])
+    return rows
+
+
 def table_e2_split() -> None:
     arms = [("baseline", "Baseline (deterministic)"),
             ("e2_confirm", "σ learned, β=1e-4 (`e2_confirm`)"),
             ("e2_sampling_only", "σ learned, β=0 (`e2_sampling_only`)")]
     rows, m = [], {}
     for a, lab in arms:
-        v = per_seed(a, "frac_variance_explained")
+        v = regime_vals(a, "fve")
         m[a] = mean(v)
         rows.append([lab, pm(mean(v), stdev(v), 6, 4), str(len(v))])
-    table("Table 2 — removing the KL recovers a small fraction of the gap (FVE, 13 seeds/arm)",
-          "experiments/{baseline,e2_confirm,e2_sampling_only}/seed*/*/evaluation_results[_corrected].json",
+    table("Table 2 — removing the KL recovers a small fraction of the gap (FVE in the training regime, 13 seeds/arm)",
+          "falsification/training_regime_results.json (`read_training_regime.py`, GPU)",
           ["Configuration", "FVE", "n"], rows)
     gap = m["baseline"] - m["e2_confirm"]
     kl_share = (m["e2_sampling_only"] - m["e2_confirm"]) / gap
     emit(f"\nTotal gap {gap:.4f}; removing the KL recovers {100*kl_share:.1f}%, "
          f"the reparameterisation accounts for the remaining {100*(1-kl_share):.1f}%.")
-    check("Table 2 baseline FVE", m["baseline"], 0.900159, 1e-6)
-    check("Table 2 e2_confirm FVE", m["e2_confirm"], 0.458146, 1e-6)
-    check("Table 2 e2_sampling_only FVE", m["e2_sampling_only"], 0.486276, 1e-6)
-    check("E2 total gap", gap, 0.4420, 0.0001)
-    check("E2 KL share %", 100 * kl_share, 6.4, 0.06)
+    check("Table 2 baseline FVE", m["baseline"], EXP_E2["baseline"], 1e-6)
+    check("Table 2 e2_confirm FVE", m["e2_confirm"], EXP_E2["e2_confirm"], 1e-6)
+    check("Table 2 e2_sampling_only FVE", m["e2_sampling_only"], EXP_E2["e2_sampling_only"], 1e-6)
+    check("E2 total gap", gap, EXP_E2["gap"], 0.0001)
+    check("E2 KL share %", 100 * kl_share, EXP_E2["kl_share"], 0.06)
+    pil = [(b, mean(regime_vals(f"e2_beta_pilot_{b:g}", "fve"))) for b in (1e-4, 1e-3, 1e-2, 1e-1, 1.0)]
+    emit("β pilot (1 seed each), training-regime FVE: " + ", ".join(f"β={b:g}: {v:.3f}" for b, v in pil))
+    check("E2 pilot FVE at beta=1e-4", pil[0][1], 0.329, 0.0006)
+    check("E2 pilot FVE at beta=1", pil[-1][1], 0.000, 0.0006)
+
+    # As saved (Table 13): each run's own evaluate() on raw activations.
+    ms = {a: mean(per_seed(a, "frac_variance_explained")) for a, _ in arms}
+    gap_s = ms["baseline"] - ms["e2_confirm"]
+    share_s = (ms["e2_sampling_only"] - ms["e2_confirm"]) / gap_s
+    emit(f"As saved (Table 13): FVE {ms['e2_confirm']:.6f} (β=1e-4), {ms['e2_sampling_only']:.6f} (β=0); "
+         f"gap {gap_s:.4f}, KL share {100*share_s:.1f}%.")
+    check("Table 13 e2_confirm FVE as saved", ms["e2_confirm"], 0.458146, 1e-6)
+    check("Table 13 e2_sampling_only FVE as saved", ms["e2_sampling_only"], 0.486276, 1e-6)
+    check("Table 13 E2 KL share % as saved", 100 * share_s, 6.4, 0.06)
 
 
-def dose_rows(cache: Path, with_l0: bool = False) -> tuple[list[dict], float | None, float | None]:
-    """Grid rows: sigma + Jaccard from the cache, FVE (and L0) re-read from each
-    run's evaluation_results[_corrected].json. Returns (rows, baseline_fve, baseline_l0)."""
-    data = json.loads(cache.read_text())
-    rows = []
-    for r in data["rows"]:
-        fve = per_seed(r["arm"], "frac_variance_explained")
-        if len(fve) != r["n_seeds"]:
-            sys.exit(f"{r['arm']}: {len(fve)} evaluation files vs {r['n_seeds']} seeds in {cache.name}")
-        row = {"log_var_init": r["log_var_init"], "arm": r["arm"], "sigma": r["sigma"],
-               "n_seeds": len(fve), "fve_mean": mean(fve), "fve_std": stdev(fve),
-               "jaccard_mean": r["jaccard_mean"], "jaccard_std": r["jaccard_std"]}
-        if with_l0:
-            l0 = l0_per_seed(r["arm"])
-            row["l0_mean"], row["l0_std"] = mean(l0), stdev(l0)
-        rows.append(row)
-    rows.sort(key=lambda r: -r["log_var_init"])
-    return rows, data.get("baseline_fve_mean"), data.get("baseline_l0_mean")
-
-
-def dose_table(title: str, source: str, rows: list[dict], baseline: str, with_l0: bool) -> None:
-    bfve = per_seed(baseline, "frac_variance_explained")
+def dose_table(title: str, rows: list[dict], baseline: str, with_l0: bool) -> float:
     hdr = ["log σ²_init", "σ (effective)"] + (["L0"] if with_l0 else []) + ["FVE", "Jaccard", "n"]
     body = []
     for r in rows:
@@ -282,130 +326,183 @@ def dose_table(title: str, source: str, rows: list[dict], baseline: str, with_l0
             cells.append(f"{r['l0_mean']:.1f}")
         cells += [pm(r["fve_mean"], r["fve_std"]), pm(r["jaccard_mean"], r["jaccard_std"]), str(r["n_seeds"])]
         body.append(cells)
-    table(title, source, hdr, body)
-    line = f"\nDeterministic baseline (`{baseline}`): FVE {pm(mean(bfve), stdev(bfve), 6, 4)}"
+    table(title, "falsification/training_regime_results.json (`read_training_regime.py`, GPU), training regime",
+          hdr, body)
+    bf = regime_vals(baseline, "fve")
+    line = f"\nDeterministic baseline (`{baseline}`): FVE {pm(mean(bf), stdev(bf), 4, 4)}"
     if with_l0:
-        l0 = l0_per_seed(baseline)
-        line += f", L0 = {mean(l0):.1f}"
+        line += f", L0 = {mean(regime_vals(baseline, 'l0')):.1f}"
     emit(line)
-    return mean(bfve)
-
-
-A2_EXPECTED = {-1.0: (0.3766, 0.7657), -2.0: (0.4863, 0.8117), -3.0: (0.6140, 0.8700),
-               -4.0: (0.7427, 0.9180), -5.0: (0.8169, 0.9453), -8.0: (0.8338, 0.9523)}
-A3_EXPECTED = {-1.0: (0.3434, 0.6969), -2.0: (0.4787, 0.7546), -3.0: (0.6179, 0.8348),
-               -4.0: (0.7553, 0.8912), -5.0: (0.8391, 0.9222), -8.0: (0.8588, 0.9311)}
-A4_EXPECTED = {-1.0: (0.3967, 0.9637, 36.8), -2.0: (0.5346, 0.9635, 98.2), -3.0: (0.7461, 0.9779, 290.8),
-               -4.0: (0.7979, 0.9913, 247.2), -5.0: (0.8522, 0.9883, 261.2), -8.0: (0.8632, 0.9867, 265.0)}
+    return mean(bf)
 
 
 def tables_dose_response() -> dict:
-    out = {}
-    # ---- A2, TopK
-    rows, _, _ = dose_rows(FALS / "a2_dose_response_results.json")
-    b_topk = dose_table("Table 3 — TopK: the noise-scale dose-response, 13 seeds/point",
-                        "FVE: experiments/{a2_sigma_init_*,e2_sampling_only,e2_sigma_low_init}/…/evaluation_results[_corrected].json; "
-                        "Jaccard: falsification/a2_dose_response_results.json (`read_a2_dose_response.py`, GPU)",
-                        rows, "baseline", False)
-    r = pearson([x["fve_mean"] for x in rows], [x["jaccard_mean"] for x in rows])
-    emit(f"Pearson r(FVE, Jaccard) over the {len(rows)} grid points: {r:+.4f}")
-    floor = rows[-1]
-    emit(f"Residual at the clamp floor: FVE gap {b_topk - floor['fve_mean']:.3f}, Jaccard {floor['jaccard_mean']:.3f}.")
-    check("A2 r(FVE,Jaccard)", r, 0.9993, 0.00006)
-    for x in rows:
-        check(f"Table 3 FVE at {x['log_var_init']}", x["fve_mean"], A2_EXPECTED[x["log_var_init"]][0], 0.00006)
-        check(f"Table 3 Jaccard at {x['log_var_init']}", x["jaccard_mean"], A2_EXPECTED[x["log_var_init"]][1], 0.00006)
-    out["a2"] = rows
-    topk_frac = {x["log_var_init"]: x["fve_mean"] / b_topk for x in rows}
-
-    # ---- A3, BatchTopK
-    rows, _, _ = dose_rows(FALS / "a3_dose_response_results.json")
-    b_batch = dose_table("Table 4 — BatchTopK: the same sweep, 13 seeds/point",
-                         "FVE: experiments/a3_batchtopk_*/…/evaluation_results.json; "
-                         "Jaccard: falsification/a3_dose_response_results.json (`read_a3_dose_response.py`, GPU)",
-                         rows, "a3_batchtopk_baseline", False)
-    r = pearson([x["fve_mean"] for x in rows], [x["jaccard_mean"] for x in rows])
-    emit(f"Pearson r(FVE, Jaccard) over the {len(rows)} grid points: {r:+.4f}")
-    check("A3 r(FVE,Jaccard)", r, 0.9979, 0.00006)
-    check("A3 baseline FVE", b_batch, 0.9509, 0.00006)
-    for x in rows:
-        check(f"Table 4 FVE at {x['log_var_init']}", x["fve_mean"], A3_EXPECTED[x["log_var_init"]][0], 0.00006)
-        check(f"Table 4 Jaccard at {x['log_var_init']}", x["jaccard_mean"], A3_EXPECTED[x["log_var_init"]][1], 0.00006)
+    out = {"baselines": {}}
+    chance = 256 / (2 * 2048 - 256)
+    for key, sweep, name, tno in [("a2", "topk", "TopK", 3), ("a3", "batchtopk", "BatchTopK", 4)]:
+        rows = regime_rows(sweep)
+        b = dose_table(f"Table {tno} — {name}: the noise-scale dose-response, training regime, 13 seeds/point",
+                       rows, SWEEP_BASELINE[sweep], False)
+        fve, jac = [x["fve_mean"] for x in rows], [x["jaccard_mean"] for x in rows]
+        r = pearson(fve, jac)
+        rho = spearman(fve, jac)
+        emit(f"Pearson r(FVE, Jaccard) = {r:+.4f}, Spearman ρ = {rho:+.2f} over {len(rows)} points; "
+             f"chance Jaccard {chance:.4f}.")
+        exp = EXP_DOSE[key]
+        check(f"{name} r(FVE,Jaccard)", r, exp["r"], 0.00006)
+        check(f"{name} Spearman", rho, 1.0, 1e-9)
+        check(f"{name} baseline FVE", b, exp["baseline"], 0.00006)
+        for x in rows:
+            check(f"Table {tno} FVE at {x['log_var_init']}", x["fve_mean"], exp["rows"][x["log_var_init"]][0], 0.00006)
+            check(f"Table {tno} Jaccard at {x['log_var_init']}", x["jaccard_mean"], exp["rows"][x["log_var_init"]][1], 0.00006)
+        out[key] = rows
+        out["baselines"][key] = b
+    fa, fb = ({x["log_var_init"]: x["fve_mean"] / out["baselines"][k] for x in out[k]} for k in ("a2", "a3"))
     emit("FVE as a fraction of each architecture's own deterministic baseline:")
     emit("| log σ²_init | TopK | BatchTopK |\n|---|---|---|")
-    for x in rows:
-        emit(f"| {x['log_var_init']:.1f} | {100*topk_frac[x['log_var_init']]:.1f}% | {100*x['fve_mean']/b_batch:.1f}% |")
-    check("A3 clamp-floor % of baseline", 100 * rows[-1]["fve_mean"] / b_batch, 90.3, 0.06)
-    check("A2 clamp-floor % of baseline", 100 * topk_frac[-8.0], 92.6, 0.06)
-    out["a3"] = rows
+    for lv in SIX:
+        emit(f"| {lv:.1f} | {100*fa[lv]:.1f}% | {100*fb[lv]:.1f}% |")
+    check("BatchTopK below TopK at every point", sum(fb[lv] < fa[lv] for lv in SIX), 6, 0)
+    check("A2 clamp-floor % of baseline", 100 * fa[-8.0], 83.2, 0.06)
+    check("A3 clamp-floor % of baseline", 100 * fb[-8.0], 80.9, 0.06)
 
-    # ---- A4, JumpReLU
-    rows, _, _ = dose_rows(FALS / "a4_dose_response_results.json", with_l0=True)
-    b_jump = dose_table("Table 5 — JumpReLU: the same sweep plus achieved L0 (target 256), 13 seeds/point",
-                        "FVE, L0: experiments/a4_jumprelu_*/…/evaluation_results.json; "
-                        "Jaccard: falsification/a4_dose_response_results.json (`read_a4_dose_response.py`, GPU)",
-                        rows, "a4_jumprelu_baseline", True)
-    fve = [x["fve_mean"] for x in rows]
-    jac = [x["jaccard_mean"] for x in rows]
-    l0 = [x["l0_mean"] for x in rows]
+    # ---- JumpReLU
+    rows = regime_rows("jumprelu")
+    b = dose_table("Table 5 — JumpReLU: the same sweep plus achieved L0 (target 256), training regime, 13 seeds/point",
+                   rows, "a4_jumprelu_baseline", True)
+    out["baselines"]["a4"] = b
+    fve, jac, l0 = ([x[k] for x in rows] for k in ("fve_mean", "jaccard_mean", "l0_mean"))
     r_fj, r_fl = pearson(fve, jac), pearson(fve, l0)
-    emit(f"Naive r(FVE, Jaccard) = {r_fj:+.4f}; r(FVE, L0) = {r_fl:+.4f} over the six points.")
-    check("A4 naive r(FVE,Jaccard)", r_fj, 0.9334, 0.00006)
-    check("A4 r(FVE,L0)", r_fl, 0.9494, 0.00006)
-    check("A4 baseline FVE", b_jump, 0.9210, 0.00006)
-    check("A4 baseline L0", mean(l0_per_seed("a4_jumprelu_baseline")), 269.4, 0.06)
+    emit(f"Naive r(FVE, Jaccard) = {r_fj:+.4f}; r(FVE, L0) = {r_fl:+.4f} over the six points; "
+         f"L0 spans {min(l0):.1f}–{max(l0):.1f}.")
+    exp = EXP_DOSE["a4"]
+    check("A4 naive r(FVE,Jaccard)", r_fj, exp["r"], 0.00006)
+    check("A4 r(FVE,L0)", r_fl, exp["r_l0"], 0.00006)
+    check("A4 baseline FVE", b, exp["baseline"], 0.00006)
+    check("A4 baseline L0", mean(regime_vals("a4_jumprelu_baseline", "l0")), 269.5, 0.06)
     for x in rows:
-        e = A4_EXPECTED[x["log_var_init"]]
+        e = exp["rows"][x["log_var_init"]]
         check(f"Table 5 FVE at {x['log_var_init']}", x["fve_mean"], e[0], 0.00006)
         check(f"Table 5 Jaccard at {x['log_var_init']}", x["jaccard_mean"], e[1], 0.00006)
         check(f"Table 5 L0 at {x['log_var_init']}", x["l0_mean"], e[2], 0.06)
-    matched = [x for x in rows if x["log_var_init"] in (-3.0, -4.0, -5.0, -8.0)]
-    r_fj4 = pearson([x["fve_mean"] for x in matched], [x["jaccard_mean"] for x in matched])
-    r_fl4 = pearson([x["fve_mean"] for x in matched], [x["l0_mean"] for x in matched])
-    emit(f"L0-matched four points (log σ²_init ∈ {{-3,-4,-5,-8}}, L0 ∈ [{min(x['l0_mean'] for x in matched):.0f}, "
-         f"{max(x['l0_mean'] for x in matched):.0f}]): r(FVE, Jaccard) = {r_fj4:+.4f}, r(FVE, L0) = {r_fl4:+.4f}.")
-    check("A4 4-point r(FVE,Jaccard)", r_fj4, 0.6297, 0.00006)
-    check("A4 4-point r(FVE,L0)", r_fl4, -0.5467, 0.00006)
+    six_band = [x for x in rows if L0_BAND[0] <= x["l0_mean"] <= L0_BAND[1]]
+    emit(f"Six-point grid inside the L0 band {L0_BAND}: {[x['log_var_init'] for x in six_band]} "
+         f"({len(six_band)} points -- too few for a correlation).")
+    check("A4 six-point grid points in band", len(six_band), 3, 0)
     out["a4"] = rows
 
-    # ---- A4 follow-up (ten points)
-    data = json.loads((FALS / "a4_followup_results.json").read_text())
-    rows10, _, _ = dose_rows(FALS / "a4_followup_results.json", with_l0=True)
-    band = tuple(data["l0_band"])
-    new = {r["log_var_init"] for r in data["new_rows"]}
-    body = []
-    for x in rows10:
-        body.append([f"{x['log_var_init']:.1f}" + (" (new)" if x["log_var_init"] in new else ""),
-                     f"{x['sigma']:.4f}", pm(x["l0_mean"], x["l0_std"], 1, 1), pm(x["fve_mean"], x["fve_std"]),
-                     pm(x["jaccard_mean"], x["jaccard_std"]), str(x["n_seeds"])])
-    table("A4 follow-up — the ten-point JumpReLU grid (four densifying points at 5 seeds)",
-          "FVE, L0: experiments/a4_jumprelu_*/…/evaluation_results.json; Jaccard: "
-          "falsification/a4_followup_results.json (`read_a4_followup.py`, GPU)",
-          ["log σ²_init", "σ", "L0", "FVE", "Jaccard", "n"], body)
-    fve = [x["fve_mean"] for x in rows10]
-    jac = [x["jaccard_mean"] for x in rows10]
-    l0 = [x["l0_mean"] for x in rows10]
+    # ---- the ten-point grid (four densifying points at 5 seeds)
+    rows10 = regime_rows("jumprelu", six_only=False)
+    new = {-3.5, -4.5, -5.5, -6.0}
+    body = [[f"{x['log_var_init']:.1f}" + (" (new)" if x["log_var_init"] in new else ""), f"{x['sigma']:.4f}",
+             pm(x["l0_mean"], x["l0_std"], 1, 1), pm(x["fve_mean"], x["fve_std"]),
+             pm(x["jaccard_mean"], x["jaccard_std"]), str(x["n_seeds"])] for x in rows10]
+    table("A4 follow-up — the ten-point JumpReLU grid, training regime (four densifying points at 5 seeds)",
+          "falsification/training_regime_results.json", ["log σ²_init", "σ", "L0", "FVE", "Jaccard", "n"], body)
+    fve, jac, l0 = ([x[k] for x in rows10] for k in ("fve_mean", "jaccard_mean", "l0_mean"))
     r10_fj, r10_fl = pearson(fve, jac), pearson(fve, l0)
-    m8 = [x for x in rows10 if band[0] <= x["l0_mean"] <= band[1]]
-    r8_fj = pearson([x["fve_mean"] for x in m8], [x["jaccard_mean"] for x in m8])
-    r8_fl = pearson([x["fve_mean"] for x in m8], [x["l0_mean"] for x in m8])
-    emit(f"\nFull ten-point grid: r(FVE, Jaccard) = {r10_fj:+.4f}, r(FVE, L0) = {r10_fl:+.4f}.")
-    emit(f"L0-matched band L0 ∈ [{band[0]:.0f}, {band[1]:.0f}] → {len(m8)} points "
-         f"(L0 ∈ [{min(x['l0_mean'] for x in m8):.0f}, {max(x['l0_mean'] for x in m8):.0f}]): "
-         f"r(FVE, Jaccard) = {r8_fj:+.4f}, r(FVE, L0) = {r8_fl:+.4f}.")
-    check("A4 follow-up 10-point r(FVE,Jaccard)", r10_fj, 0.9341, 0.00006)
-    check("A4 follow-up 10-point r(FVE,L0)", r10_fl, 0.9245, 0.00006)
-    check("A4 follow-up n matched", len(m8), 8, 0)
-    check("A4 follow-up 8-point r(FVE,Jaccard)", r8_fj, 0.5026, 0.00006)
-    check("A4 follow-up 8-point r(FVE,L0)", r8_fl, -0.4704, 0.00006)
-    p6 = next(x for x in rows10 if x["log_var_init"] == -6.0)
-    check("A4 follow-up -6.0 FVE", p6["fve_mean"], 0.8632, 0.00006)
-    check("A4 follow-up -6.0 FVE sd", p6["fve_std"], 0.0010, 0.00006)
-    check("A4 follow-up -6.0 L0", p6["l0_mean"], 265.1, 0.06)
-    check("A4 follow-up -6.0 Jaccard", p6["jaccard_mean"], 0.9868, 0.00006)
+    m = [x for x in rows10 if L0_BAND[0] <= x["l0_mean"] <= L0_BAND[1]]
+    mf, mj, ml = ([x[k] for x in m] for k in ("fve_mean", "jaccard_mean", "l0_mean"))
+    rb_fj, rb_fl = pearson(mf, mj), pearson(mf, ml)
+    emit(f"\nTen-point grid: r(FVE, Jaccard) = {r10_fj:+.4f}, r(FVE, L0) = {r10_fl:+.4f}.")
+    emit(f"L0 band {L0_BAND} → {len(m)} points ({[x['log_var_init'] for x in m]}): "
+         f"r(FVE, Jaccard) = {rb_fj:+.4f}, r(FVE, L0) = {rb_fl:+.4f}; Jaccard {min(mj):.3f}–{max(mj):.3f} "
+         f"while FVE {min(mf):.3f}–{max(mf):.3f}.")
+    check("A4 10-point r(FVE,Jaccard)", r10_fj, exp["r10"], 0.00006)
+    check("A4 10-point r(FVE,L0)", r10_fl, exp["r10_l0"], 0.00006)
+    check("A4 band n", len(m), 7, 0)
+    check("A4 band r(FVE,Jaccard)", rb_fj, exp["rb"], 0.00006)
+    check("A4 band r(FVE,L0)", rb_fl, exp["rb_l0"], 0.00006)
+    check("A4 band Jaccard min", min(mj), 0.708, 0.0006)
+    check("A4 band Jaccard max", max(mj), 0.724, 0.0006)
+    check("A4 band FVE min", min(mf), 0.679, 0.0006)
+    check("A4 band FVE max", max(mf), 0.785, 0.0006)
     out["a4_followup"] = (rows10, new)
-    out["baselines"] = {"a2": b_topk, "a3": b_batch, "a4": b_jump}
+    table_as_saved()
     return out
+
+
+def table_as_saved() -> None:
+    """Table 13: the same sweeps as saved -- the published measurement, FVE from
+    each run's evaluate() and Jaccard from read_a{2,3,4}_dose_response.py, both on
+    raw activations, i.e. at sigma/norm_factor -- beside the training regime."""
+    body = []
+    for key, sweep, name, cache, rexp in [("a2", "topk", "TopK", "a2_dose_response_results.json", 0.9993),
+                                          ("a3", "batchtopk", "BatchTopK", "a3_dose_response_results.json", 0.9979),
+                                          ("a4", "jumprelu", "JumpReLU", "a4_dose_response_results.json", 0.9334)]:
+        data = {r["arm"]: r for r in json.loads((FALS / cache).read_text())["rows"]}
+        tr = {x["arm"]: x for x in regime_rows(sweep)}
+        fs, js = [], []
+        for arm, x in sorted(tr.items(), key=lambda kv: -kv[1]["log_var_init"]):
+            f = mean(per_seed(arm, "frac_variance_explained"))
+            j = data[arm]["jaccard_mean"]
+            fs.append(f); js.append(j)
+            body.append([name, f"{x['log_var_init']:.1f}", f"{f:.4f}", f"{j:.4f}", f"{x['fve_mean']:.4f}",
+                         f"{x['jaccard_mean']:.4f}"])
+        r = pearson(fs, js)
+        check(f"Table 13 {name} r(FVE,Jaccard) as saved", r, rexp, 0.00006)
+        body.append([name, "r(FVE, Jaccard)", f"{r:+.4f}", "", f"{EXP_DOSE[key]['r']:+.4f}", ""])
+    table("Table 13 — the noise sweeps as saved (raw activations, effective σ/norm_factor) and in the training regime",
+          "as saved: experiments/*/evaluation_results[_corrected].json + falsification/a{2,3,4}_dose_response_results.json; "
+          "training: falsification/training_regime_results.json",
+          ["Architecture", "log σ²_init", "FVE as saved", "Jaccard as saved", "FVE training", "Jaccard training"], body)
+    # The reader's own as-saved measurement against the published one (appendix text).
+    jd, fd, bd = [], [], []
+    for key, cache in [("topk", "a2"), ("batchtopk", "a3"), ("jumprelu", "a4")]:
+        data = {r["arm"]: r for r in json.loads((FALS / f"{cache}_dose_response_results.json").read_text())["rows"]}
+        jd += [abs(regime_arm(a)["raw_jaccard_mean"] - data[a]["jaccard_mean"]) for a in data]
+    for a in json.loads(REGIME.read_text())["arms"]:
+        if a["published_fve_mean"] is not None:
+            (bd if a["log_var_init"] is None else fd).append(a["raw_fve_mean"] - a["published_fve_mean"])
+    fd += bd
+    emit(f"\nReader as saved vs published: Jaccard within {max(jd):.4f}; FVE {min(fd):+.4f} to {max(fd):+.4f}; "
+         f"deterministic baselines within {max(abs(x) for x in bd):.4f}.")
+    check("as-saved Jaccard agreement <= 0.003", max(jd), 0.0025, 0.0005)
+    check("as-saved FVE diff min", min(fd), -0.013, 0.0006)
+    check("as-saved FVE diff max", max(fd), 0.002, 0.0006)
+    check("baselines agree to 0.0003", max(abs(x) for x in bd), 0.0003, 0.00006)
+    check("JumpReLU as-saved L0 at -1", mean(l0_per_seed("a4_jumprelu_sigma_init_m1")), 36.8, 0.06)
+    ex = json.loads((FALS / "selection_example_results.json").read_text())
+    tr, sv = ex["regimes"]["training"], ex["regimes"]["raw"]
+    emit(f"\nSelection example (`read_selection_example.py`, {ex['arm']} seed {ex['seed']}): Jaccard "
+         f"{tr['mean_jaccard']:.3f} training / {sv['mean_jaccard']:.3f} as saved; selected features outside mu's "
+         f"own top-k {100*tr['frac_selected_outside_mu_topk']:.0f}% / {100*sv['frac_selected_outside_mu_topk']:.0f}%; "
+         f"with mu = 0 {100*tr['frac_selected_with_mu_zero']:.0f}% / {100*sv['frac_selected_with_mu_zero']:.0f}%.")
+    check("example Jaccard training", tr["mean_jaccard"], 0.109, 0.0006)
+    check("example Jaccard as saved", sv["mean_jaccard"], 0.868, 0.0006)
+    check("example outside top-k % training", 100 * tr["frac_selected_outside_mu_topk"], 71, 0.6)
+    check("example mu=0 % training", 100 * tr["frac_selected_with_mu_zero"], 24, 0.6)
+    check("example outside top-k % as saved", 100 * sv["frac_selected_outside_mu_topk"], 5, 0.6)
+    check("example token Jaccard training", tr["token"]["jaccard"], 0.133, 0.0006)
+    nf = json.loads(REGIME.read_text())["norm_factor"]
+    emit(f"\nnorm_factor re-estimated by read_training_regime.py: {nf:.2f}")
+    check("norm_factor", nf, 25.47, 0.006)
+
+
+def spearman(xs: list[float], ys: list[float]) -> float:
+    def ranks(v):
+        order = sorted(range(len(v)), key=lambda i: v[i])
+        r = [0.0] * len(v)
+        for rank, i in enumerate(order):
+            r[i] = float(rank)
+        return r
+    return pearson(ranks(xs), ranks(ys))
+
+
+# The printed numbers of Tables 2-5 and the Section 4 text (training regime).
+EXP_E2 = {"baseline": 0.900239, "e2_confirm": 0.329065, "e2_sampling_only": 0.351120, "gap": 0.5712, "kl_share": 3.9}
+EXP_DOSE = {
+    "a2": {"r": 0.9521, "baseline": 0.9002,
+           "rows": {-1.0: (0.2517, 0.0750), -2.0: (0.3511, 0.0862), -3.0: (0.4708, 0.1094),
+                    -4.0: (0.6107, 0.1686), -5.0: (0.7200, 0.2624), -8.0: (0.7494, 0.2919)}},
+    "a3": {"r": 0.9455, "baseline": 0.9508,
+           "rows": {-1.0: (0.2459, 0.0758), -2.0: (0.3599, 0.0826), -3.0: (0.4833, 0.0968),
+                    -4.0: (0.6232, 0.1311), -5.0: (0.7366, 0.1881), -8.0: (0.7692, 0.2101)}},
+    "a4": {"r": 0.9770, "r_l0": 0.8054, "baseline": 0.9213,
+           "rows": {-1.0: (0.3401, 0.2628, 121.7), -2.0: (0.4671, 0.3199, 202.7), -3.0: (0.6349, 0.5526, 331.4),
+                    -4.0: (0.7073, 0.7186, 268.1), -5.0: (0.7707, 0.7216, 269.0), -8.0: (0.7848, 0.7090, 270.3)},
+           "r10": 0.9610, "r10_l0": 0.7492, "rb": -0.5544, "rb_l0": -0.7251},
+}
 
 
 def table_e3() -> None:
@@ -491,26 +588,132 @@ def table_e4() -> None:
          f"{sm['scr']['trained_small_minus_masked_top_usage']:.1e}, TPP by {sm['tpp']['trained_small_minus_masked_top_usage']:+.3f}.")
 
 
+# Table 7: each implementation detail as a ONE-FACTOR contrast -- two arms that
+# differ in that detail only. (An earlier version printed gaps to e1_penalty
+# for the warmup/bias and init-scale rows, which measure what remains after a
+# factor is matched, not the factor; docs/ERRATA.md §4.) The bias form and the
+# KL warmup were matched by configuration before the 13-seed battery, so their
+# contrasts come from the archived six-seed pilot arms, at a lower ceiling.
+IMPL_FACTORS = [
+    ("Bias form (tied pre-encoder bias vs. none)", "archive/e1_vsae_ref_aprilmode", "e1_vsae_ref"),
+    ("KL warmup (1000 steps vs. none)", "archive/e1_vsae_ref_klwarmup1000", "archive/e1_vsae_ref_aprilmode"),
+    ("Initial decoder scale (0.1 vs. 1)", "e1_vsae_ref", "e1_vsae_ref_unitinit"),
+    ("Decoder-gradient projection (off vs. on)", "e1_vsae_ref_unitinit", "e1_vsae_ref_gradproj"),
+    ("Initial decoder-weight distribution", "e1_vsae_ref_gradproj", "e1_vsae_ref_fullmatch"),
+    ("`F.relu(mu)` (absent vs. present)", "e3_masked_kl", "e3_masked_kl_relu"),
+]
+IMPL_EXPECTED = {   # |d| for FVE, frac. rec., <0.1x, <0.5x, then the sigma range
+    "archive/e1_vsae_ref_aprilmode": (39.7, 31.7, 121.7, 174.5, 4.13, 4.13),
+    "archive/e1_vsae_ref_klwarmup1000": (6.9, 2.9, 8.6, 2.9, 3.07, 3.07),
+    "e1_vsae_ref": (23.1, 30.3, 2.8, 18.0, 5.03, 5.16),
+    "e1_vsae_ref_unitinit": (14.3, 15.3, 2.4, 5.0, 4.48, 5.16),
+    "e1_vsae_ref_gradproj": (4.7, 7.3, 2.2, 3.6, 4.31, 5.16),
+    "e3_masked_kl": (32.5, 24.0, 19.3, 15.3, 5.03, 5.16),
+}
+
+
+def checks_text() -> None:
+    """Numbers the paper's prose quotes outside the tables, wherever committed
+    data, or a cached GPU measurement, can derive them."""
+    import glob
+    from statistics import mean as _m
+    # Section 2: the loss identity (check_loss_identity.py, GPU).
+    li = json.loads((FALS / "loss_identity_results.json").read_text())["cases"]
+    check("loss identity: cases", len(li), 2, 0)
+    check("loss identity: max relative difference <= 3e-7", float(max(c["rel_diff"] for c in li.values()) <= 3e-7), 1.0, 0)
+    check("loss identity: penalty term nonzero", float(min(c["topk_terms"]["activation_cost"] for c in li.values()) > 0), 1.0, 0)
+    # Section 3.2: the +/-10 clamp never binds (read_penalty_clamp.py, GPU, all five E1 arms).
+    pc = json.loads((FALS / "penalty_clamp_results.json").read_text())
+    check("clamp: arms measured", len(pc["arms"]), 5, 0)
+    check("clamp: max pre-clamp activation", pc["max_over_arms"], 0.215, 0.0006)
+    check("clamp: headroom x", pc["clamp"] / pc["max_over_arms"], 46, 0.6)
+    # Section 4.2: the k/(k+1) pre-activation gap (read_preact_gap.py, GPU).
+    g = json.loads((FALS / "preact_gap_results.json").read_text())
+    check("gap median", g["percentiles"]["50"], 0.0001, 0.00005)
+    check("gap p99", g["percentiles"]["99"], 0.0006, 0.00005)
+    check("gap max", g["max"], 0.0014, 0.00005)
+    check("clamp floor / p99 gap", 0.0498 / g["percentiles"]["99"], 80, 1)
+    check("clamp floor / median gap", 0.0498 / g["percentiles"]["50"], 540, 5)
+    # Discussion: exploratory liveness-reconstruction rho over the replicated
+    # fixed-variance arms (falsification/frontier.py's loader, deterministic arms only).
+    from scipy.stats import spearmanr
+    from falsification.frontier import load as frontier_load
+    det = [r for r in frontier_load() if len(r["fve"]) >= 6 and not r["arm"].startswith(("e2", "a2", "a3", "a4"))]
+    check("liveness note: deterministic arms", len(det), 9, 0)
+    for k, er, ep in (("below_0.1x", 0.90, 0.0009), ("below_0.5x", 0.78, 0.013)):
+        rho, pv = spearmanr([mean(r["fve"]) for r in det], [mean(r[k]) for r in det])
+        check(f"liveness note rho {k}", rho, er, 0.006)
+        check(f"liveness note p {k}", pv, ep, 0.0006 if ep > 0.001 else 0.00006)
+    # Section 4 derived values
+    b, s0, c = (mean(regime_vals(a, "fve")) for a in ("baseline", "e2_sampling_only", "e2_confirm"))
+    check("E2 KL recovers (FVE)", s0 - c, 0.022, 0.0006)
+    check("E2 sampling costs (FVE)", b - s0, 0.549, 0.0006)
+    check("A2 clamp-floor FVE gap", mean(regime_vals("baseline", "fve")) - mean(regime_vals("e2_sigma_low_init", "fve")), 0.151, 0.0006)
+    check("chance Jaccard", 256 / (2 * 2048 - 256), 0.0667, 0.00006)
+    # Appendix A floors
+    check("MC cap 100k sigma", sigma_of(1 / 100_001), 4.42, 0.006)
+    check("MC floor 4M p", 1 / 4_000_001, 2.5e-7, 1e-9)
+    check("n=6 exact floor p", 2 / math.comb(12, 6), 0.00216, 0.000006)
+    check("first equal-n Monte Carlo n", min(n for n in range(2, 30) if math.comb(2 * n, n) > 200_000), 11, 0)
+    # Section 6 diagnostics
+    def boot(f, key):
+        return json.loads((FALS / f).read_text())["margins_at_vsae_n"][key]
+    s1 = boot("e4_bootstrap_scr_results.json", "mean_vs_top_usage")
+    t1 = boot("e4_bootstrap_tpp_results.json", "mean_vs_top_usage")
+    s2 = boot("e4_bootstrap_scr_resample_train_results.json", "mean_vs_top_usage")
+    for lab, got, e in [("SCR boot mean", s1["mean"], 0.082), ("SCR boot lo", s1["p2.5"], 0.024), ("SCR boot hi", s1["p97.5"], 0.150),
+                        ("TPP boot mean", t1["mean"], -0.086), ("TPP boot lo", t1["p2.5"], -0.090), ("TPP boot hi", t1["p97.5"], -0.081),
+                        ("SCR full boot mean", s2["mean"], 0.088), ("SCR full boot lo", s2["p2.5"], 0.008), ("SCR full boot hi", s2["p97.5"], 0.171)]:
+        check(f"Section 6 {lab}", got, e, 0.0006)
+    check("Section 6 SCR interval / TPP interval", (s1["p97.5"] - s1["p2.5"]) / (t1["p97.5"] - t1["p2.5"]), 15, 0.5)
+    scr_pts = []
+    for f in sorted(glob.glob(str(FALS / "e4_scr_results*.json"))):
+        d = json.loads(Path(f).read_text())
+        sm = json.loads((FALS / ("e4_size_matched_baseline_results" + Path(f).name[len("e4_scr_results"):])).read_text())["scr"]
+        scr_pts.append((d["verdict"]["top_usage"]["margin"], sm["vsae_minus_trained_small"], sm["trained_small_minus_masked_top_usage"]))
+    check("Section 6 SCR not explained (masked)", sum(m > 0 for m, _, _ in scr_pts), 7, 0)
+    check("Section 6 SCR not explained (trained small)", sum(t > 0 for _, t, _ in scr_pts), 6, 0)
+    check("Section 6 mean margin masked", _m(m for m, _, _ in scr_pts), 0.072, 0.0006)
+    check("Section 6 mean margin trained small", _m(t for _, t, _ in scr_pts), 0.079, 0.0006)
+    check("Section 6 mean |shift|", _m(abs(x) for _, _, x in scr_pts), 0.075, 0.0006)
+    check("Section 6 max |shift|", max(abs(x) for _, _, x in scr_pts), 0.138, 0.0006)
+    sm = json.loads((FALS / "e4_size_matched_baseline_results.json").read_text())
+    check("Section 6 trained-small SCR", sm["scr"]["score"], 0.020127, 0.0000006)
+    check("Section 6 trained-small TPP", sm["tpp"]["score"], 0.2025, 0.00006)
+    alive = json.loads(next((EXP / "e4_pythia_baseline_size_matched").glob("seed*/*/evaluation_results.json")).read_text())["frac_alive"]
+    check("Section 6 trained-small frac alive %", 100 * alive, 65.5, 0.06)
+    ta = json.loads((FALS / "e4_tpp_results_canrager_amazon_reviews_mcauley_1and5.json").read_text())["verdict"]
+    check("Section 6 TPP amazon top-usage explained", float(ta["top_usage"]["explained_by_size"]), 1.0, 0)
+    check("Section 6 TPP amazon random margin ~ 0", abs(ta["random"]["margin"]), 0.0004, 0.0001)
+
+
 def table_variance_summary() -> None:
-    """Table 7 collects effect sizes that are all computed above; recompute the
-    ones it quotes so the table stands on its own."""
-    rows = [
-        ["KL warmup schedule + bias parameterisation", "liveness (loose)",
-         f"{abs(compare('e1_penalty', 'e1_vsae_ref', 'below_0.5x')['d']):.1f}"],
-        ["Initial decoder scale", "FVE",
-         f"{abs(compare('e1_penalty', 'e1_vsae_ref_unitinit', 'frac_variance_explained')['d']):.1f}"],
-        ["Decoder-gradient-projection omission", "FVE",
-         f"{abs(compare('e1_penalty', 'e1_vsae_ref_gradproj', 'frac_variance_explained')['d']):.1f}–"
-         f"{abs(compare('e1_vsae_ref_unitinit', 'e1_vsae_ref_gradproj', 'frac_variance_explained')['d']):.1f}"],
-        ["Initial decoder-weight distribution", "FVE, frac. recovered",
-         f"{abs(compare('e1_vsae_ref_gradproj', 'e1_vsae_ref_fullmatch', 'frac_variance_explained')['d']):.1f}, "
-         f"{abs(compare('e1_vsae_ref_gradproj', 'e1_vsae_ref_fullmatch', 'frac_recovered')['d']):.1f}"],
-        ["`F.relu(mu)` presence/absence", "liveness",
-         f"{abs(compare('e3_masked_kl', 'e3_masked_kl_relu', 'below_0.5x')['d']):.1f}–"
-         f"{abs(compare('e3_masked_kl', 'e3_masked_kl_relu', 'below_0.1x')['d']):.1f}"],
-    ]
-    table("Table 7 — the implementation details and their measured |d| (13 seeds/arm)",
-          "Tables 1 and 6 above", ["Detail", "Metric moved", "|d|"], rows)
+    rows = []
+    for lab, a, b in IMPL_FACTORS:
+        cs = [compare(a, b, m) for m, _ in E1_METRICS]
+        exp = IMPL_EXPECTED[a]
+        for i, c in enumerate(cs):
+            check(f"Table 7 {lab} {E1_METRICS[i][1]} |d|", abs(c["d"]), exp[i], 0.06)
+            check(f"Table 7 {lab} {E1_METRICS[i][1]} p <= 0.05", float(c["p"] <= 0.05), 1.0, 0)
+        sig = [c["sigma"] for c in cs]
+        check(f"Table 7 {lab} min sigma", min(sig), exp[4], 0.006)
+        check(f"Table 7 {lab} max sigma", max(sig), exp[5], 0.006)
+        n = f"{cs[0]['n_a']} v {cs[0]['n_b']}"
+        live = [cs[2]["d"], cs[3]["d"]]
+        flag = " †" if live[0] * live[1] < 0 else ""
+        rows.append([lab, n] + [f"{abs(c['d']):.1f}" for c in cs[:2]] +
+                    [f"{abs(live[0]):.1f}{flag}", f"{abs(live[1]):.1f}{flag}", f"{min(sig):.2f}–{max(sig):.2f}"])
+    table("Table 7 — six implementation details, each as a one-factor contrast (|d|)",
+          "experiments/ and archive/ run data; `compare_arms.py <a> <b>`. † = the two liveness thresholds disagree in direction",
+          ["Detail", "seeds", "FVE", "frac. rec.", "<0.1× k/d", "<0.5× k/d", "σ"], rows)
+    # Section 3.1: the vSAE as released (archived pilot arm) against the null model.
+    for m, e in [("frac_variance_explained", 51.3), ("frac_recovered", 37.1), ("below_0.1x", 182.7), ("below_0.5x", 56.9)]:
+        c = compare("e1_penalty", "archive/e1_vsae_ref_klwarmup1000", m)
+        check(f"Section 3.1 as-released {m} |d|", abs(c["d"]), e, 0.06)
+        check(f"Section 3.1 as-released {m} sigma", c["sigma"], 4.13, 0.006)
+    check("Table 7 init-scale liveness thresholds disagree",
+          float(compare("e1_vsae_ref", "e1_vsae_ref_unitinit", "below_0.1x")["d"]
+                * compare("e1_vsae_ref", "e1_vsae_ref_unitinit", "below_0.5x")["d"] < 0), 1.0, 0)
 
 
 # --------------------------------------------------------------------------
@@ -521,16 +724,26 @@ def figures(dose: dict) -> None:
     emit("\n## Figures\n")
     b = dose["baselines"]
     r = dose_response_figure(dose["a2"], b["a2"], arch="TopK", out_stem=FIGS / "a2_dose_response")
-    emit(f"- workshop/figs/a2_dose_response.{{pdf,png}} (Figure 1; r = {r:+.4f})")
+    emit(f"- workshop/figs/a2_dose_response.{{pdf,png}} (Figure 6; r = {r:+.4f})")
     r = dose_response_figure(dose["a3"], b["a3"], arch="BatchTopK", out_stem=FIGS / "a3_batchtopk_dose_response")
-    emit(f"- workshop/figs/a3_batchtopk_dose_response.{{pdf,png}} (Figure 2; r = {r:+.4f})")
+    emit(f"- workshop/figs/a3_batchtopk_dose_response.{{pdf,png}} (Figure 7; r = {r:+.4f})")
     r = dose_response_figure(dose["a4"], b["a4"], arch="JumpReLU", out_stem=FIGS / "a4_jumprelu_dose_response",
                              show_l0=True)
-    emit(f"- workshop/figs/a4_jumprelu_dose_response.{{pdf,png}} (Figure 3; naive r = {r:+.4f})")
+    emit(f"- workshop/figs/a4_jumprelu_dose_response.{{pdf,png}} (Figure 8; naive r = {r:+.4f})")
     rows10, new = dose["a4_followup"]
     r = dose_response_figure(rows10, b["a4"], arch="JumpReLU (ten points)",
                              out_stem=FIGS / "a4_followup_dose_response", show_l0=True, highlight=new)
-    emit(f"- workshop/figs/a4_followup_dose_response.{{pdf,png}} (Figure 4; naive r = {r:+.4f})")
+    emit(f"- workshop/figs/a4_followup_dose_response.{{pdf,png}} (Figure 9; naive r = {r:+.4f})")
+
+    # The explanatory figures (E1 ladder, E2 split, selection churn, synthesis,
+    # implementation variance, seed ceiling, E4); same loaders as the tables above.
+    # The two diagrams (fig_studymap.tex, fig_pipeline.tex) are TikZ, not data.
+    script = "workshop/make_paper_figs.py"
+    res = subprocess.run([sys.executable, script], cwd=REPO, capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.exit(f"{script} failed:\n{res.stderr}")
+    for line in res.stdout.splitlines():
+        emit(f"- {line.removeprefix('wrote ')} (`{script}`)")
 
     # Not in the mechanism paper, but in workshop/figs/: the preprint-era beta
     # sweep, from the committed comprehensive_histogram_analysis/ summaries.
@@ -570,6 +783,7 @@ def main() -> int:
     if do_tables:
         table_e3()
         table_variance_summary()
+        checks_text()
         table_claim4()
         table_seed_ceiling()
         table_seed_survey()

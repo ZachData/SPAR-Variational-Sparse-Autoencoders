@@ -80,6 +80,42 @@ was found again in `vsae_batch_topk.py` on 2026-09-11 and fixed the same way
 before any BatchTopK arm ran. `e2_sigma_low_init` is unaffected either way:
 its init already sits below the clamp floor.
 
+**Saved sampled checkpoints run at 1/`norm_factor` of their training noise**
+(`vsae_topk.py`, `vsae_batch_topk.py`, `vsae_jump_relu.py`; found
+2026-11-01). The fix above makes log σ² on raw activations equal its trained
+value, as designed. But the same `scale_biases(norm_factor)` multiplies μ by
+norm_factor (≈ 25.5), so on raw activations a saved checkpoint adds noise σ
+to a μ 25.5× larger than in training: the effective noise is σ/25.5. No
+bias-only rescaling avoids it, because the clamp on log σ² is not
+scale-homogeneous. Both the trainers' own end-of-run `evaluate()` (FVE, L0 in
+`evaluation_results.json`) and the Jaccard readers
+(`read_a{2,3,4}_dose_response.py`, `read_a4_followup.py`,
+`read_selection_jaccard.py`) feed saved checkpoints raw activations. Measured
+on the same checkpoints and tokens, `a2_sigma_init_m3` gives Jaccard 0.868 as
+saved and 0.109 in training (chance 0.067). *Affected:* every number for a
+`var_flag = 1` arm — the E2 split (93.6 / 6.4 as saved, 96.1 / 3.9 in
+training), the A2–A4 dose-response tables and correlations (TopK *r* +0.9993
+→ +0.9521, BatchTopK +0.9979 → +0.9455, JumpReLU naive +0.9334 → +0.9770 and
+L0-matched +0.5026 (n = 8) → −0.5544 (n = 7)), JumpReLU's L0 column (36.8 →
+121.7 at the noisiest point), the "TopK does not pad with μ = 0 features"
+reading (24 % of selections have μ = 0 in training). Not affected: the
+liveness histograms, whose analyser selects deterministically on μ
+(`encode(..., training=False)`), and μ's ranking is unchanged by the
+rescaling — the two regimes give the same selection on ≥ 99.95 % of tokens
+for every sampled arm checked (the rest are bfloat16 ties). For a sampled arm
+those histograms describe the mean code, not sampled selections. Fixed-variance arms (E1, E3, E4) are unaffected:
+with `var_flag = 0` nothing is sampled. *Status:* the paper and `RESULTS.md`
+now report the training regime, measured by
+`falsification/read_training_regime.py` (both regimes, cached in
+`training_regime_results.json`); the as-saved numbers are kept beside them in
+the paper's appendix. The save-time conversion itself is unchanged — any new
+reader of a sampled checkpoint must either convert it back with
+`scale_biases(1/norm_factor)` and divide activations by a re-estimated
+norm_factor, or state that it measures the as-saved model. The
+`read_selection_jaccard.py` step-wise trajectory has since been re-read in
+both regimes (`read_trajectory_regime.py`: 0.067 → 0.086 in training against
+0.069 → 0.810 as saved).
+
 **`norm_factor` is not recorded in any checkpoint's `config.json`.**
 `trainSAE` writes it into `trainer.config`, but every trainer's `config` is a
 property that builds a fresh dict, so the write lands on a temporary. It
@@ -206,6 +242,21 @@ confirmatory battery ran on fresh seeds (`METHODS.md` §5).
 ## 4. Results reported and then retracted
 
 Kept because a record that only contains what survived is not a record.
+
+* **The implementation-detail table attributed gaps to factors** (paper Table 7,
+  `RESULTS.md` §5.1, found 2026-11-01). Three of its entries were differences
+  between a ladder rung and the null model, which measure what remains after a
+  factor is matched, not the factor: "KL warmup + bias form, 13.0" was
+  `e1_penalty` vs `e1_vsae_ref` (both already matched), "initial decoder
+  scale, 16.5" was `e1_penalty` vs `e1_vsae_ref_unitinit`, and the 3.8 end of
+  the projection's "3.8–14.3" was `e1_penalty` vs `e1_vsae_ref_gradproj`. As
+  one-factor contrasts the init scale is *d* = 23.1 / 30.3 (FVE /
+  frac. recovered, with the liveness thresholds disagreeing in direction), the
+  projection 14.3 / 15.3, and the bias form and warmup — never run as factors
+  in the 13-seed battery — 39.7–174.5 and 2.9–8.6 on the archived six-seed
+  pilot arms. The same error put "*d* ≈ 16 on reconstruction" in the abstract
+  as the as-released gap; as released it is *d* = −51 (FVE) and up to −183
+  (liveness). *Status:* corrected; `reproduce.py` checks every entry.
 
 * **"The posterior collapses completely; eval-time noise is harmless"**
   (addendum 3, 2026-09-03). Mean log σ² read as −66.9 against a clamp at −6,
