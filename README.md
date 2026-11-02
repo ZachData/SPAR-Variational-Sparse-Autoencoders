@@ -28,11 +28,12 @@ gave six findings.
 ## The six findings
 
 **1. The evaluated vSAE was never variational, and two implementations of
-the same objective differed by *d* ≈ 16.** With `var_flag = 0` there is no
+the same objective differed by *d* up to 183.** With `var_flag = 0` there is no
 sampling and the KL reduces to ½‖μ‖²: every checkpoint the preprint
 evaluated is a TopK SAE with an L2 activation penalty. Trained against
-exactly that null model, the vSAE code still differed by *d* = −5.7 to
-+16.5 on reconstruction and up to +13.0 on liveness. The code diff between
+exactly that null model, the vSAE code as released differed by *d* = −51 on
+reconstruction and up to −183 on liveness (six pilot seeds), and by
+*d* = −5.7 to +16.5 at successive stages of matching (13 seeds). The code diff between
 the two trainers was enumerated and frozen at fifteen items; matching them
 one at a time, each factor traded against the last, and only at the final
 rung — with the diff exhausted — were the arms null on every metric, at the
@@ -40,31 +41,36 @@ power that had detected every earlier rung at 5σ. None of the five
 load-bearing factors appears in either paper's equations.
 
 **2. With sampling on, the damage is the reparameterisation, not the KL.**
-No β in {10⁻⁴ … 1} gives a working model (FVE 0.458 → 0.0001 against a
+No β in {10⁻⁴ … 1} gives a working model (FVE 0.329 → 0 against a
 baseline of 0.900). Turning the KL off entirely with sampling still on
-recovers 6.4 % of the gap; the other 93.6 % is sampling itself. The learned
+recovers 3.9 % of the gap; the other 96.1 % is sampling itself. The learned
 σ does not collapse (σ ≈ 0.27), so the deterministic SAE is not the
 variational SAE's optimum.
 
 **3. The mechanism is selection churn, and it needs hard-*k* selection.**
 The gap between the *k*-th and (*k*+1)-th pre-activation is ~10⁻⁴, far below
-any achievable noise scale, so noise flips the selected set. Across a
-six-point noise sweep at 13 seeds per point, reconstruction tracks the
-Jaccard overlap between two stochastic selections of the same token at
-*r* = +0.9993 for TopK and +0.9979 for BatchTopK. For JumpReLU's soft learned
-threshold the naive *r* = +0.93 is confounded by an 8× swing in achieved L0;
-held roughly fixed, the coupling falls to *r* ≈ +0.5 — and the more basic
-finding is that a gradient-learned sparsity level is not itself noise-robust.
+any achievable noise scale, so noise flips the selected set — at
+training-time noise, close to randomly (two passes over the same token share
+Jaccard 0.075–0.29; chance is 0.067). Across a six-point noise sweep at 13
+seeds per point, reconstruction rises monotonically with that Jaccard
+(Spearman ρ = 1; *r* = +0.952 TopK, +0.945 BatchTopK). For JumpReLU's soft
+learned threshold the naive *r* = +0.977 is confounded by a 2.7× swing in
+achieved L0; held roughly fixed, the coupling reverses (*r* = −0.55) — the
+more basic finding is that a gradient-learned sparsity level is not itself
+noise-robust. (An earlier version measured saved checkpoints, which run at
+1/25 of their training noise: `docs/ERRATA.md`.)
 
 ![TopK dose-response](workshop/figs/a2_dose_response.png)
 
-**4. One-line implementation details are effects of *d* = 4–19.** A
-`F.relu(mu)` that one trainer applies and another does not: *d* = +19.3 /
-+15.3 on liveness. A decoder-gradient projection imported and never called:
-up to *d* = 14.3 on reconstruction — inside models with an activation
-penalty; null in a plain TopK SAE. The decoder's initial scale: *d* = 16.5.
-Whether the initial weights were drawn Gaussian or uniform: *d* = 4.7 / 7.3.
-None is a hyperparameter anyone reports.
+**4. One-line implementation details are effects of *d* = 7–175.** Each
+measured as a one-factor contrast, on its most-affected metric: a
+`F.relu(mu)` that one trainer applies and another does not, *d* = 32.5 on
+reconstruction and 19.3 on liveness; a decoder-gradient projection imported
+and never called, *d* = 15.3 — inside models with an activation penalty;
+null in a plain TopK SAE; the decoder's initial scale, *d* = 30.3; whether
+the initial weights were drawn Gaussian or uniform, *d* = 7.3; and, on six
+pilot seeds, the bias form (*d* = 175) and a KL warmup (*d* = 8.6). None is a
+hyperparameter anyone reports.
 
 **5. The field's designs cannot see effects of that size.** A two-sided
 seed-permutation test with *n* seeds per group cannot express more than

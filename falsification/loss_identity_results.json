@@ -1,0 +1,71 @@
+{
+ "n_tokens": 2048,
+ "norm_factor": 25.49294090270996,
+ "rng_seed": 0,
+ "cases": {
+  "fresh_init": {
+   "topk_l2_loss": 2.532853841781616,
+   "vsae_loss": 2.532853126525879,
+   "abs_diff": 7.152557373046875e-07,
+   "rel_diff": 2.823912400731243e-07,
+   "topk_terms": {
+    "l2_loss": 1.5476527214050293,
+    "auxk_loss": 0.0,
+    "activation_cost": 0.9852010607719421
+   },
+   "vsae_terms": {
+    "l2_loss": 1.2237061262130737,
+    "mse_loss": 1.5476521253585815,
+    "kl_loss": 0.9852010011672974,
+    "auxk_loss": 0.0,
+    "loss": 2.532853126525879,
+    "sparsity_scale": 0.0,
+    "kl_scale": 1.0,
+    "sparse_feature_norm": 1.1637144088745117,
+    "latent_z_norm": 1.3808900117874146,
+    "selected_vals_mean": 0.07075928896665573,
+    "selected_vals_std": 0.02118256501853466,
+    "kl_total": 0.9852010011672974,
+    "kl_mu_term": 0.9852010011672974,
+    "kl_var_term": 0.0,
+    "mean_mu": 0.017332255840301514,
+    "mean_mu_magnitude": 1.3808900117874146,
+    "mu_std": 0.025723597034811974,
+    "latent_z_mean": 0.017332255840301514,
+    "latent_z_std": 0.025723597034811974
+   }
+  },
+  "trained_e1_penalty_seed1": {
+   "topk_l2_loss": 0.1419055461883545,
+   "vsae_loss": 0.1419055163860321,
+   "abs_diff": 2.9802322387695312e-08,
+   "rel_diff": 2.100152051008493e-07,
+   "topk_terms": {
+    "l2_loss": 0.08429110050201416,
+    "auxk_loss": 0.0,
+    "activation_cost": 0.057614438235759735
+   },
+   "vsae_terms": {
+    "l2_loss": 0.2870902121067047,
+    "mse_loss": 0.08429107815027237,
+    "kl_loss": 0.057614438235759735,
+    "auxk_loss": 0.0,
+    "loss": 0.1419055163860321,
+    "sparsity_scale": 0.0,
+    "kl_scale": 1.0,
+    "sparse_feature_norm": 0.3294442296028137,
+    "latent_z_norm": 0.33602017164230347,
+    "selected_vals_mean": 0.01803305186331272,
+    "selected_vals_std": 0.010348062962293625,
+    "kl_total": 0.057614438235759735,
+    "kl_mu_term": 0.057614438235759735,
+    "kl_var_term": 0.0,
+    "mean_mu": 0.0026687299832701683,
+    "mean_mu_magnitude": 0.33602017164230347,
+    "mu_std": 0.007010134868323803,
+    "latent_z_mean": 0.0026687299832701683,
+    "latent_z_std": 0.007010134868323803
+   }
+  }
+ }
+}

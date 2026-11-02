@@ -55,9 +55,9 @@ The author placeholder is in three places that change together:
    3,347 intermediate `ae_<step>.pt` (21 GB, the dense-schedule arms), the
    only ones a reported number depends on are `e2_sampling_only_early` and
    `e2_sigma_low_init_early` (2 x 70 files, 0.88 GB):
-   `falsification/read_selection_jaccard.py` reads them for the step-wise
-   Jaccard trajectory in RESULTS §3 (0.069 → 0.811), which is tabulated in
-   notebook addendum 8 and cached nowhere else. Upload those two arms'
+   `falsification/read_trajectory_regime.py` (and the older
+   `read_selection_jaccard.py`) read them for the step-wise Jaccard
+   trajectory in RESULTS §3, cached in `trajectory_regime_results.json`. Upload those two arms'
    intermediates too; skip the rest (the A2/A3/A4 arms' dense schedules
    were never read). Preserve the `experiments/...` path structure so
    `docs/REPRODUCE.md`'s GPU readers work on top of a download:

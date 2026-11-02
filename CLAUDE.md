@@ -16,7 +16,8 @@ read as finished. `README.md` is the front door and `docs/` is the account:
   claim is there: `var_flag=0` means no sampling; the two trainers differ by
   a ReLU as well as the KL mask; the save-time bias rescaling corrupted
   `log_var` in pre-2026-09-04 checkpoints; `norm_factor` is not saved;
-  `frac_recovered` is wrong for `VSAEBatchTopK`; the E4 cache ignores its
+  a saved sampled checkpoint on raw activations runs at
+  σ/`norm_factor` of its training noise; `frac_recovered` is wrong for `VSAEBatchTopK`; the E4 cache ignores its
   config; the p-value floors are combinatorial.
 - `docs/REPRODUCE.md` — environment, `reproduce.py`, and the GPU commands
 - `docs/notebook/` — the dated working record (PROJECT.md, the RESULTS

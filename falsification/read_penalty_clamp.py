@@ -52,7 +52,11 @@ sys.path.insert(0, str(REPO))
 # parameter -- read from the code.
 CLAMP_LO, CLAMP_HI = -10.0, 10.0
 
-ARMS = ("e1_penalty", "e1_vsae_ref_unitinit", "e1_vsae_ref_gradproj")
+# Every E1 arm. (The first version read only three of the five; RESULTS addendum
+# 5 quoted their maximum as "anywhere". All five: falsification/penalty_clamp_results.json.)
+ARMS = ("e1_penalty", "e1_vsae_ref", "e1_vsae_ref_unitinit", "e1_vsae_ref_gradproj",
+        "e1_vsae_ref_fullmatch")
+OUT = Path(__file__).resolve().parent / "penalty_clamp_results.json"
 
 
 def checkpoints(arm: str) -> list[tuple[int, Path]]:
@@ -159,9 +163,14 @@ def main() -> int:
     ap.add_argument("--n-tokens", type=int, default=20_000)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--arms", nargs="+", default=list(ARMS))
+    ap.add_argument("--rng-seed", type=int, default=0)
+    ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args()
 
+    import json
     import torch
+
+    torch.manual_seed(args.rng_seed)
 
     print(f"vsae_topk.py clamps the penalised vector to "
           f"[{CLAMP_LO}, {CLAMP_HI}]; top_k_with_feature_penalty.py does not.")
@@ -174,6 +183,8 @@ def main() -> int:
           f"(sqrt of mean squared norm, the estimator trainSAE used).\n")
 
     all_clear = True
+    record = {"n_tokens": int(acts.shape[0]), "norm_factor": norm_factor, "clamp": CLAMP_HI,
+              "rng_seed": args.rng_seed, "arms": {}}
     for arm in args.arms:
         ck = checkpoints(arm)
         if not ck:
@@ -190,6 +201,7 @@ def main() -> int:
                   f"{m['over_per_token']:>9.3f} {m['penalty_frac_lost']:>13.3e} "
                   f"{m['grad_frac_lost']:>10.3e}")
         mx = max(r["max"] for r in rows)
+        record["arms"][arm] = {"per_seed_max": [r["max"] for r in rows], "max": mx}
         print(f"{'':>5} {'-' * 60}")
         print(f"  max over seeds: {mx:.4f}   "
               f"headroom to the clamp: {CLAMP_HI - mx:+.4f}")
@@ -202,6 +214,9 @@ def main() -> int:
                   "the same function.")
         print()
 
+    record["max_over_arms"] = max(a["max"] for a in record["arms"].values())
+    Path(args.out).write_text(json.dumps(record, indent=1) + "\n")
+    print(f"wrote {args.out}")
     if all_clear:
         print("Verdict: no activation in any E1 arm reaches the clamp, so the "
               "clamp is a no-op\nfactor. Do not spend a training run on it.")

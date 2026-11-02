@@ -202,7 +202,22 @@ workshop/*.log
 workshop/*.out
 workshop/*.bbl
 workshop/*.blg
-archive/
+# archive/: superseded E1 arms from the six-seed pilot. Their metadata is
+# committed for the same reason experiments/'s is -- Table 7's bias-form and
+# KL-warmup contrasts read it; weights, figures and logs stay ignored.
+archive/**
+!archive/**/
+!archive/**/*.json
+!archive/**/all_histograms_*.npz
 sweep.out
 falsification/e4_scr_artifacts/
 falsification/e4_tpp_artifacts/
+
+# Third-party papers kept locally for checking the paper's citations against
+# their full text (arXiv sources, Transformer-Circuits exports). Not ours to
+# redistribute; the bibliography links them.
+docs/arXiv-*/
+docs/291_beta_vae_learning_basic_visual.pdf
+docs/scaling_mono.txt
+docs/towards_mono.txt
+docs/toy_models.txt

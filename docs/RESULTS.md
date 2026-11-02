@@ -31,23 +31,26 @@ here and detailed below:
    no sampling and the KL reduces to ½‖μ‖²; every checkpoint the preprint
    evaluated is a TopK SAE with an L2 activation penalty. The two
    implementations of that identical objective nonetheless differed by
-   *d* ≈ 16 on reconstruction and *d* ≈ 13 on liveness, and the whole gap
-   decomposed into five optimiser- and initialisation-side details, none in
+   up to *d* = 51 on reconstruction and 183 on liveness as released, and the
+   whole gap decomposed into five implementation details (a bias form, a
+   warmup, two initialisation choices, a gradient projection), none in
    either paper's equations. With all five matched: null on every metric.
 2. **With sampling on, the damage is the reparameterisation, not the KL.**
-   Removing the KL entirely recovered 6.4 % of the gap to a deterministic
-   baseline; the other 93.6 % was sampling. No β in {10⁻⁴ … 1} gave a working
+   Removing the KL entirely recovered 3.9 % of the gap to a deterministic
+   baseline; the other 96.1 % was sampling. No β in {10⁻⁴ … 1} gave a working
    model.
 3. **The mechanism is selection churn under noise, and it is a property of
-   hard-*k* selection.** Across a six-point noise-scale sweep, FVE tracked the
-   Jaccard overlap between two stochastic TopK selections at *r* = +0.9993
-   (TopK) and +0.9979 (BatchTopK). For JumpReLU's soft learned threshold the
-   naive coupling (*r* = +0.93) was confounded by an 8× swing in achieved
-   L0; controlled, it fell to *r* ≈ +0.5.
-4. **One-line implementation details are effects of *d* = 4–19.** A ReLU on
-   the posterior mean (*d* = +19.3 / +15.3), the decoder-gradient projection
-   (up to *d* = 14.3), the initial decoder scale (*d* = 16.5), and the
-   distribution the initial weights were drawn from (*d* = 4.7 / 7.3).
+   hard-*k* selection.** At training-time noise TopK's selection is close to
+   random (Jaccard 0.075–0.29 between two passes, chance 0.067). Across a
+   six-point noise-scale sweep FVE rose monotonically with that Jaccard
+   (Spearman ρ = 1; *r* = +0.952 TopK, +0.945 BatchTopK). For JumpReLU's soft
+   learned threshold the naive coupling (*r* = +0.977) was confounded by a
+   2.7× swing in achieved L0; at matched L0 it reversed (*r* = −0.55, n = 7).
+4. **One-line implementation details are effects of *d* = 7–175.** As
+   one-factor contrasts, on each detail's most-affected metric: a ReLU on the
+   posterior mean (*d* = 32.5), the initial decoder scale (30.3), the
+   decoder-gradient projection (15.3), the initial weight distribution (7.3),
+   and on six pilot seeds the bias form (175) and a KL warmup (8.6).
 5. **The field cannot see effects of that size.** All ten SAE-methods papers
    in the bibliography train one seed per configuration; a one-seed design
    has a sigma ceiling of 0.
@@ -66,7 +69,10 @@ generations of `e1_vsae_ref` (vSAE, `var_flag = 0`, β = 1).*
 **The identity.** At σ = 1 the vSAE's KL term is ½‖μ‖² and its forward pass
 is deterministic, so a fixed-variance vSAE is a TopK SAE with an L2 penalty.
 This was verified as algebra first: both trainers return the same loss,
-511.895264, on a shared batch. Every checkpoint in the preprint's analysis
+511.895264, on a shared batch (the dated record); `check_loss_identity.py`
+now re-checks it with one set of weights loaded into both trainers —
+agreement term by term to float32 precision (relative difference ≤ 3 × 10⁻⁷)
+at initialisation and at a trained `e1_penalty` checkpoint. Every checkpoint in the preprint's analysis
 directory is named `_fixed_var`, which the training script emits exactly when
 `var_flag = 0`.
 
@@ -92,12 +98,15 @@ rather than a search for agreement.
 
 Exactly one of the fifteen was a difference in the *objective*: the vSAE
 penalises clamp(z, −10, 10) where the penalty arm penalises f unclamped.
-Measured over 20,000 activations across all three arms (*GPU*,
-`read_penalty_clamp.py`), the largest pre-clamp activation observed anywhere
-was 0.194 against a clamp at 10 — 51× headroom, never binding. (Read in the
+Measured over 20,000 activations and every seed of all five E1 arms
+(*GPU*, `read_penalty_clamp.py`, cached in `penalty_clamp_results.json`), the
+largest pre-clamp activation observed anywhere was 0.215 against a clamp at
+10 — 46× headroom, never binding. (An earlier reading over three of the five
+arms reported 0.194.) (Read in the
 saved-checkpoint space rather than training space the maximum is 4.96 and the
 headroom looks like 2×; the clamp acts in training space.) The identity is
-unqualified and the entire measured gap was optimiser-side.
+unqualified and the entire measured gap lay in parameterisation,
+initialisation and the update rule, not the objective.
 
 **The ladder.** Each generation matched one more factor. *d* is
 `e1_penalty` minus the arm.
@@ -154,12 +163,26 @@ magnitude smaller than the gaps that opened and closed at every rung.
 *Experiment E2. `var_flag = 1` arms with a learned log-variance
 (`log_var_init = −2`).*
 
+**Where these numbers are measured.** Every number in §2–§3 is measured in
+the regime the models were trained in (*GPU*, `read_training_regime.py`,
+cached in `falsification/training_regime_results.json`): each checkpoint is
+converted back by `scale_biases(1/norm_factor)` and fed activations divided by
+the re-estimated norm_factor (25.47). A saved sampled checkpoint fed raw
+activations runs at σ/norm_factor ≈ σ/25.5 of its training noise, because the
+save-time rescaling multiplies μ by norm_factor and leaves log σ² alone
+(`ERRATA.md` §2). An earlier version of this file, and of the paper, measured
+the saved checkpoints that way; those numbers are kept, beside these, in the
+paper's appendix table "The noise sweeps as saved and in the training regime"
+and in `reproduce.py`'s output.
+
+
 **No β gives a working model.** A pre-registered two-stage design — a
 single-seed pilot over β ∈ {10⁻⁴, 10⁻³, 10⁻², 10⁻¹, 1}, then 13 confirmatory
 seeds at the selected β on seeds disjoint from the pilot — found FVE falling
-monotonically from 0.458 at β = 10⁻⁴ to 0.0001 at β = 1, never approaching
-the deterministic baseline's 0.900. The confirmatory arm `e2_confirm`
-(β = 10⁻⁴) characterises a model at FVE ≈ 0.46, and its liveness numbers
+monotonically from 0.329 at β = 10⁻⁴ to zero by β = 10⁻², never approaching
+the deterministic baseline's 0.900 (as saved: 0.458 → 0.0001). The
+confirmatory arm `e2_confirm` (β = 10⁻⁴) characterises a model at FVE ≈ 0.33,
+and its liveness numbers
 were recorded as confounded before they were read.
 
 **The control that separated the two explanations** was sampling on with
@@ -168,15 +191,14 @@ proposed after the pilot and reported as exploratory):
 
 | Configuration | FVE |
 |---|---|
-| baseline, deterministic | 0.900159 ± 0.0006 |
-| σ learned, β = 10⁻⁴ (`e2_confirm`) | 0.458146 ± 0.0040 |
-| σ learned, β = 0 (`e2_sampling_only`) | 0.486276 ± 0.0068 |
+| baseline, deterministic | 0.900239 ± 0.0006 |
+| σ learned, β = 10⁻⁴ (`e2_confirm`) | 0.329065 ± 0.0007 |
+| σ learned, β = 0 (`e2_sampling_only`) | 0.351120 ± 0.0006 |
 
-Of the 0.4420 gap, removing the KL recovered 6.4 %; the remaining 93.6 % was
-attributable to the reparameterisation itself. (These are the corrected
-values from the official re-evaluation after the `scale_biases` bug was
-fixed, `ERRATA.md`; the originally reported split was 94.7 / 5.3 and moved by
-about one point under correction.)
+Of the 0.5712 gap, removing the KL recovered 3.9 %; the remaining 96.1 % was
+attributable to the reparameterisation itself. (As saved, after the
+`scale_biases` log-variance fix, the split was 93.6 / 6.4 of a 0.4420 gap;
+before that fix it was reported as 94.7 / 5.3. `ERRATA.md`.)
 
 **The learned σ does not collapse.** Read correctly (*GPU*,
 `read_learned_sigma.py` with the bias correction), `e2_confirm` and
@@ -187,10 +209,10 @@ this, which said it was, was a measurement artifact (`ERRATA.md`).
 
 **Most of the gap is the initial noise scale.** `e2_sigma_low_init`
 (`log_var_init = −8`, clamped to −6 from step 0; otherwise identical to
-`e2_sampling_only`) reached FVE 0.8338 ± 0.0007 against `e2_sampling_only`'s
-0.486 — 84 % of the gap to baseline closed — with `frac_alive` = 1.0000, and a
-real 5σ residual remained. The residual was then explained by the mechanism
-in §3.
+`e2_sampling_only`) reached FVE 0.7494 ± 0.0003 against `e2_sampling_only`'s
+0.351 — 73 % of the gap to baseline closed (84 % as saved) — and a real
+residual of 0.151 FVE remained, at the 5.03σ permutation floor. The residual
+was then explained by the mechanism in §3.
 
 *Record: addenda 3 (retracted), 7, 8, 9; REMEDIATION F6.*
 
@@ -201,7 +223,7 @@ scale σ flips the selected set whenever the gap between the *k*-th and
 (*k*+1)-th largest pre-activation is smaller than the noise. Measured on a
 converged deterministic checkpoint (*GPU*, `read_preact_gap.py`) that gap has
 median 0.0001 and 99th percentile 0.0006 in training space. Even the clamp's
-floor σ (0.0498) sits 80–550× above it, so no achievable noise scale keeps
+floor σ (0.0498) sits 80–540× above it, so no achievable noise scale keeps
 sampling below the boundary gap. The original prediction — that FVE and
 Jaccard would show a knee together at a threshold σ — was therefore revised,
 in writing, before the sweep ran: no knee is reachable on this architecture.
@@ -209,35 +231,41 @@ in writing, before the sweep ran: no knee is reachable on this architecture.
 **Selection Jaccard** is the overlap between the TopK sets of two independent
 stochastic forward passes on the same token, averaged over 8,192 tokens at
 the converged checkpoint (*GPU*, `read_a{2,3,4}_dose_response.py`; chance
-level is 0.067 for k = 256, d = 2048). With the bias correction applied,
-`e2_sampling_only`'s selection started at chance (0.069 at step 0) and never
-fully stabilised (0.811 at step 10,000 — 19 % churn between two passes on the
-same token at convergence), while `e2_sigma_low_init` was far more stable
-throughout (0.431 → 0.952). One sub-hypothesis was falsified in passing: TopK
-was not padding its selection with μ = 0 features (0 % of selections were
-exactly zero), so the churn is boundary flips among genuinely positive
-pre-activations.
+level is 0.067 for k = 256, d = 2048). Across training (5 seeds,
+15 checkpoints from step 0 to 10,000; *GPU*, `read_trajectory_regime.py`),
+`e2_sampling_only`'s selection never leaves chance in the regime it trains
+in (0.067 → 0.086), and `e2_sigma_low_init`'s rises only to 0.292
+(0.067 → 0.292); both endpoints match §3.1's table. Measured as saved, on raw
+activations, the same checkpoints read 0.069 → 0.811 and 0.431 → 0.952
+(`read_selection_jaccard.py`), which is what an earlier version reported. An earlier reading that TopK was not padding
+its selection with μ = 0 features (0 % of selections) was also made as saved
+and does not hold in training: on `a2_sigma_init_m3` seed 1, 71 % of each
+pass's selections lie outside μ's own top-256 and 24 % have μ = 0, selected
+on noise alone (*GPU*, `read_selection_example.py`; 5 % and 0 % as saved).
 
-### 3.1 TopK: a smooth dose-response, and FVE tracks Jaccard almost exactly
+### 3.1 TopK: a smooth dose-response, and FVE rises monotonically with Jaccard
 
 Six noise scales, 13 seeds each (log σ²_init ∈ {−1, −2, −3, −4, −5, −8}, the
-last clamped to −6). Deterministic baseline FVE = 0.900159 ± 0.0006.
+last clamped to −6). Training regime. Deterministic baseline FVE =
+0.9002 ± 0.0006.
 
 | log σ²_init | σ | FVE | Jaccard |
 |---|---|---|---|
-| −1 | 0.6065 | 0.3766 ± 0.0028 | 0.7657 ± 0.0022 |
-| −2 | 0.3679 | 0.4863 ± 0.0068 | 0.8117 ± 0.0013 |
-| −3 | 0.2231 | 0.6140 ± 0.0020 | 0.8700 ± 0.0008 |
-| −4 | 0.1353 | 0.7427 ± 0.0015 | 0.9180 ± 0.0006 |
-| −5 | 0.0821 | 0.8169 ± 0.0010 | 0.9453 ± 0.0002 |
-| −8 (clamped) | 0.0498 | 0.8338 ± 0.0007 | 0.9523 ± 0.0002 |
+| −1 | 0.6065 | 0.2517 ± 0.0006 | 0.0750 ± 0.0001 |
+| −2 | 0.3679 | 0.3511 ± 0.0006 | 0.0862 ± 0.0002 |
+| −3 | 0.2231 | 0.4708 ± 0.0005 | 0.1094 ± 0.0004 |
+| −4 | 0.1353 | 0.6107 ± 0.0005 | 0.1686 ± 0.0005 |
+| −5 | 0.0821 | 0.7200 ± 0.0004 | 0.2624 ± 0.0005 |
+| −8 (clamped) | 0.0498 | 0.7494 ± 0.0003 | 0.2919 ± 0.0006 |
 
 Both curves rise smoothly and monotonically with no knee, as the pre-flight
-predicted, and FVE tracks Jaccard across the whole 12× range of σ at
-Pearson *r* = +0.9993 over the six arm means. At the achievable noise floor a
-residual remains (FVE gap 0.066, Jaccard 0.952 rather than 1.0) that the
-clamp mechanically prevents probing; it is the size the clamp's own floor σ
-predicts. Figure: `workshop/figs/a2_dose_response.pdf`.
+predicted. FVE and Jaccard agree in rank order at every point (Spearman
+ρ = 1; Pearson *r* = +0.9521 over the six arm means). The relationship is
+monotone rather than linear: at the three noisiest points Jaccard sits near
+chance (0.075–0.109) while FVE still climbs 0.25 → 0.47. Even at the clamp
+floor selection is far from stable (Jaccard 0.292) and FVE is 0.151 below
+baseline. As saved the same checkpoints give Jaccard 0.77–0.95 and
+*r* = +0.9993. Figure: `workshop/figs/a2_dose_response.pdf`.
 
 ### 3.2 BatchTopK: a global selection budget does not decouple them
 
@@ -246,27 +274,29 @@ batch rather than exactly *k* per token — the natural candidate for "more
 noise-robust", since one token's noise-promoted feature can be compensated by
 another's demoted one. The identical sweep on `VSAEBatchTopK` (matched d, k,
 hook point and schedule; two saved-checkpoint bugs found and fixed en route,
-`ERRATA.md`) gave *r* = +0.9979. Deterministic baseline FVE = 0.9509 ± 0.0004.
+`ERRATA.md`) gave *r* = +0.9455, rank order again identical at every point
+(as saved: +0.9979). Training regime; deterministic baseline FVE =
+0.9508 ± 0.0003.
 
 | log σ²_init | σ | FVE | Jaccard |
 |---|---|---|---|
-| −1 | 0.6065 | 0.3434 ± 0.0035 | 0.6969 ± 0.0042 |
-| −2 | 0.3679 | 0.4787 ± 0.0074 | 0.7546 ± 0.0078 |
-| −3 | 0.2231 | 0.6179 ± 0.0046 | 0.8348 ± 0.0030 |
-| −4 | 0.1353 | 0.7553 ± 0.0015 | 0.8912 ± 0.0004 |
-| −5 | 0.0821 | 0.8391 ± 0.0010 | 0.9222 ± 0.0003 |
-| −8 (clamped) | 0.0498 | 0.8588 ± 0.0007 | 0.9311 ± 0.0003 |
+| −1 | 0.6065 | 0.2459 ± 0.0005 | 0.0758 ± 0.0004 |
+| −2 | 0.3679 | 0.3599 ± 0.0026 | 0.0826 ± 0.0011 |
+| −3 | 0.2231 | 0.4833 ± 0.0022 | 0.0968 ± 0.0011 |
+| −4 | 0.1353 | 0.6232 ± 0.0008 | 0.1311 ± 0.0005 |
+| −5 | 0.0821 | 0.7366 ± 0.0006 | 0.1881 ± 0.0005 |
+| −8 (clamped) | 0.0498 | 0.7692 ± 0.0004 | 0.2101 ± 0.0006 |
 
 If anything the more elastic budget was slightly *more* exposed: as a
 fraction of its own deterministic baseline, BatchTopK recovered less than
-TopK at every one of the six matched scales (90.3 % vs 92.6 % at the clamp
+TopK at every one of the six matched scales (80.9 % vs 83.2 % at the clamp
 floor). The mechanism does not depend on strict per-token selection; it looks
 like a property of hard, cardinality-constrained selection under noise in
 general. (`frac_recovered` is not reported for this trainer: its global
 budget miscounts under the evaluation harness's 3-D activations,
 `ERRATA.md`.) Figure: `workshop/figs/a3_batchtopk_dose_response.pdf`.
 
-### 3.3 JumpReLU: the coupling is confounded by achieved sparsity, and weakens when controlled
+### 3.3 JumpReLU: the coupling is confounded by achieved sparsity, and reverses when controlled
 
 JumpReLU replaces the hard cardinality constraint with a per-feature learned
 threshold and a soft L0-target loss — discrete but not hard-*k*, the sharpest
@@ -276,46 +306,43 @@ building one surfaced three bugs, one of which (the gate applied *before*
 sampling, so noise could never change the selected set) would have made the
 experiment structurally meaningless (`ERRATA.md`). With all three fixed and
 verified (mean Jaccard between repeated passes on one token 0.35 after the
-fix, 1.0 before), the same sweep gave *r* = +0.9334 naively. Deterministic
-baseline FVE = 0.9210 ± 0.0003, L0 = 269.4 (target 256).
+fix, 1.0 before), the same sweep gave *r* = +0.9770 naively. Training regime;
+deterministic baseline FVE = 0.9213 ± 0.0002, L0 = 269.5 (target 256).
 
 | log σ²_init | σ | L0 | FVE | Jaccard |
 |---|---|---|---|---|
-| −1 | 0.6065 | 36.8 | 0.3967 ± 0.0022 | 0.9637 ± 0.0009 |
-| −2 | 0.3679 | 98.2 | 0.5346 ± 0.0022 | 0.9635 ± 0.0004 |
-| −3 | 0.2231 | 290.8 | 0.7461 ± 0.0016 | 0.9779 ± 0.0002 |
-| −4 | 0.1353 | 247.2 | 0.7979 ± 0.0008 | 0.9913 ± 0.0006 |
-| −5 | 0.0821 | 261.2 | 0.8522 ± 0.0008 | 0.9883 ± 0.0003 |
-| −8 (clamped) | 0.0498 | 265.0 | 0.8632 ± 0.0006 | 0.9867 ± 0.0003 |
+| −1 | 0.6065 | 121.7 | 0.3401 ± 0.0012 | 0.2628 ± 0.0030 |
+| −2 | 0.3679 | 202.7 | 0.4671 ± 0.0015 | 0.3199 ± 0.0020 |
+| −3 | 0.2231 | 331.4 | 0.6349 ± 0.0011 | 0.5526 ± 0.0029 |
+| −4 | 0.1353 | 268.1 | 0.7073 ± 0.0008 | 0.7186 ± 0.0102 |
+| −5 | 0.0821 | 269.0 | 0.7707 ± 0.0006 | 0.7216 ± 0.0047 |
+| −8 (clamped) | 0.0498 | 270.3 | 0.7848 ± 0.0005 | 0.7090 ± 0.0041 |
 
-The naive number is not a replication. Achieved L0 swung from 36.8 to 290.8
-— an 8× range, non-monotonic in σ — because heavy noise pushed
-pre-activations below threshold faster than the soft sparsity loss could pull
-the threshold down. TopK and BatchTopK hold sparsity exactly fixed at every
-grid point; JumpReLU does not, and *r*(FVE, L0) = +0.9494 over the same six
-points was as tight as *r*(FVE, Jaccard). Restricted to the four points with
-L0 in a comparable band to the target (log σ²_init ∈ {−3, −4, −5, −8},
-L0 ∈ [247, 291]), *r*(FVE, Jaccard) fell to +0.6297 (n = 4) and
-*r*(FVE, L0) to −0.5467 (wrong sign); Jaccard peaked at −4 and then fell at
-−5 and −8 while FVE kept climbing — the curves decouple exactly where L0 is
-held roughly constant.
+The naive number is not a replication. Achieved L0 swung from 121.7 to 331.4
+— a 2.7× range, non-monotonic in σ (under half the target at the two
+noisiest points, 30 % over it at σ = 0.22). TopK and BatchTopK hold sparsity
+exactly fixed at every grid point; JumpReLU does not, and *r*(FVE, L0) =
++0.8054 over the same six points. Only three of the six points have L0 in
+the band [240, 320] fixed as comparable to the target (log σ²_init ∈ {−4, −5,
+−8}), too few for a correlation; across them Jaccard is flat (0.709–0.722)
+while FVE rises 0.707 → 0.785.
 
-**The follow-up ruled out a small-n artifact.** Four densifying points
+**The follow-up densified the L0-matched region.** Four points
 (log σ²_init ∈ {−3.5, −4.5, −5.5, −6.0}, 5 seeds each — the under-powered
-quantity was grid coverage, not per-point precision) widened the L0-matched
-band to eight points (L0 ∈ [247, 315]): *r*(FVE, Jaccard) = +0.5026,
-*r*(FVE, L0) = −0.4704, against the four-point +0.6297 and −0.5467. The
-full ten-point naive coupling was unchanged (+0.9341 vs +0.9334). Doubling
-the grid density where sparsity is held roughly fixed reproduced the same
-weakened coupling.
+quantity was grid coverage, not per-point precision) bring the band to seven
+points: *r*(FVE, Jaccard) = −0.5544, *r*(FVE, L0) = −0.7251 (n = 7). Jaccard
+stays within 0.708–0.724 while FVE rises 0.679 → 0.785. The full ten-point
+naive coupling is *r* = +0.9610, carried by the three points outside the
+band. (As saved — effective noise σ/25.5 — L0 swung 36.8 → 290.8, the naive
+coupling was +0.9334, and the eight-point band gave +0.5026.)
 
-**What this licenses.** The tight FVE-vs-churn coupling does not hold for a
-soft, no-*k* selection mechanism — and the more basic finding is that a
-gradient-learned threshold's achieved *sparsity level* is itself not
-noise-robust, a failure mode hard-*k* architectures cannot exhibit. Both
-correlations remain nonzero and eight points is still a small-n correlation;
-this is not a formal null. Figures: `workshop/figs/a4_jumprelu_dose_response.pdf`,
-`a4_followup_dose_response.pdf`.
+**What this licenses.** The FVE-vs-churn coupling does not hold for a soft,
+no-*k* selection mechanism: at matched sparsity its sign is wrong. The more
+basic finding is that a gradient-learned threshold's achieved *sparsity
+level* is itself not noise-robust, a failure mode hard-*k* architectures
+cannot exhibit. Seven points, four at 5 seeds, is still a small-n
+correlation; this is not a formal null. Figures:
+`workshop/figs/a4_jumprelu_dose_response.pdf`, `a4_followup_dose_response.pdf`.
 
 *Record: addenda 8, 16, 17, 18, 20, 23.*
 
@@ -351,17 +378,25 @@ by the rest of the E1 code diff.
 
 ### 5.1 The catalogue
 
-| Detail | Metric moved | \|*d*\| |
-|---|---|---|
-| KL warmup schedule + bias parameterisation (combined) | liveness, loose threshold | 13.0 |
-| Initial decoder scale | FVE | 16.5 |
-| Decoder-gradient-projection omission | FVE | 3.8 – 14.3 (against different rungs) |
-| Initial decoder-weight distribution (Gaussian vs uniform) | FVE, frac. recovered | 4.7, 7.3 |
-| `F.relu(mu)` presence | liveness | 15.3 – 19.3 |
+Each detail as a one-factor contrast — two arms that differ in it alone —
+|*d*| on the four pre-registered metrics (`reproduce.py`'s Table 7):
 
-All at 13 seeds/arm, 5.03–5.16σ. None is a hyperparameter anyone tunes,
-reports or ablates; all are default behaviour, one line of code, and
-invisible in a state dict or a loss equation.
+| Detail | Seeds | FVE | frac. rec. | < 0.1× | < 0.5× | σ |
+|---|---|---|---|---|---|---|
+| Bias form (pre-encoder bias or not) | 6 v 13 | 39.7 | 31.7 | 121.7 | 174.5 | 4.13 (ceiling) |
+| KL warmup (1,000 steps or none) | 6 v 6 | 6.9 | 2.9 | 8.6 | 2.9 | 3.07 (ceiling) |
+| Initial decoder scale (0.1 or 1) | 13 v 13 | 23.1 | 30.3 | 2.8 † | 18.0 † | 5.03–5.16 |
+| Decoder-gradient projection | 13 v 13 | 14.3 | 15.3 | 2.4 | 5.0 | 4.48–5.16 |
+| Initial weight distribution | 13 v 13 | 4.7 | 7.3 | 2.2 | 3.6 | 4.31–5.16 |
+| `F.relu(mu)` | 13 v 13 | 32.5 | 24.0 | 19.3 | 15.3 | 5.03–5.16 |
+
+† the two liveness thresholds disagree in direction (a shape change). Every
+entry has *p* ≤ 0.05. The first two rows come from the archived six-seed
+pilot arms (`archive/e1_vsae_ref_{aprilmode,klwarmup1000}`), the only arms in
+which those two details differ alone. None is a hyperparameter anyone tunes,
+reports or ablates; each is one trainer's default, one flag or line of code,
+and in neither paper's loss equation. An earlier version of this table
+printed gaps to the null model for three entries (`ERRATA.md` §4).
 
 ### 5.2 The projection effect does not generalise to a plain TopK SAE
 
@@ -379,8 +414,8 @@ seeds.
 | < 0.1× k/d | 0.754169 ± 0.0013 | 0.753794 ± 0.0014 | +0.3 (0.53) |
 | < 0.5× k/d | 0.754357 ± 0.0014 | 0.754056 ± 0.0013 | +0.2 (0.63) |
 
-Nothing moved, at the power that detected *d* = 3.8–16.5 for the same
-one-line change inside the vSAE family. The effect is real and undocumented
+Nothing moved, at the power that detected *d* = 14.3 (FVE) and 15.3
+(frac. recovered) for the same one-line change inside the vSAE family. The effect is real and undocumented
 but scoped to models carrying an activation penalty — consistent with an
 interaction between the projection and the penalty's gradient, not with the
 projection mattering to decoder renormalisation on its own.
@@ -483,22 +518,26 @@ reported as unresolved rather than adjudicated by picking a metric.
 ## 7. Exploratory: no single liveness–reconstruction frontier
 
 Not pre-registered; every arm was trained for another purpose and no
-hypothesis about the shape was recorded before plotting. Pooled over all 11
-replicated arms, reconstruction and the near-dead fraction looked unrelated
-(arm-mean Spearman ρ = −0.14, *p* = 0.69) — the condition under which they
-would be reported as independent evidence. Scanning every possible cut
-between adjacent arms rather than choosing one, ρ < 0 at every cut below and
-ρ > 0 at every cut above, at both thresholds: the zero was two opposite-signed
-relationships cancelling. Among the eight working models the frontier sloped
-*up* (ρ = +0.86, *p* = 0.007 and +0.69, *p* = 0.058) — better reconstruction
-bought *more* near-dead features, 25 of 28 pairs trading. So "architecture A
-reconstructs better *and* has fewer dead features" is not a doubly supported
-claim; it asserts A is off the frontier, which is rarer and stronger than
-either half, and is the shape of claim the preprint made. Within the E1
-family, which shares an objective exactly, the arms scattered rather than
-tracing a curve: implementation details knocked an arm off the frontier
-rather than sliding it along. Figure: `workshop/figs/frontier.pdf` (the
-8-arm version; `frontier.py` now draws every analysed arm).
+hypothesis about the shape was recorded before plotting.
+
+**Across the nine replicated fixed-variance arms** — which sample nothing,
+so the measurement-regime issue of §2–§3 does not touch them — better
+reconstruction goes with *more* near-dead features: arm-mean Spearman
+ρ = +0.90 (*p* = 0.0009) and +0.78 (*p* = 0.013) at the two thresholds, the
+same direction at both (`frontier.py`'s loader; `reproduce.py` checks it).
+So "architecture A reconstructs better *and* has fewer dead features" is not
+a doubly supported claim; it asserts A is off the frontier, which is rarer
+and stronger than either half, and is the shape of claim the preprint made.
+
+**What this replaces.** The first reading pooled 11 replicated arms
+(ρ = −0.14, *p* = 0.69) and read the near-zero as two opposite-signed
+relationships cancelling, with the eight working models sloping up
+(ρ = +0.86, *p* = 0.007 and +0.69, *p* = 0.058). That pooling includes
+sampled arms whose FVE was measured on saved checkpoints at 1/25 of their
+training noise and whose liveness describes the deterministic mean code
+rather than sampled selection (`ERRATA.md` §2); they place the collapsed end
+of the curve; the current 13-arm pool gives ρ = +0.07 / +0.09 and is not
+reported. Figure: `workshop/figs/frontier.pdf` (the 8-arm version).
 
 *Record: addendum 6.*
 
@@ -524,6 +563,11 @@ evidence that the design could say no:
   falsifiable prediction and falsified.
 * The A4 four-point reading was doubted as a possible small-n artifact; the
   densified grid reproduced it.
+* TopK was read as "not padding its selection with μ = 0 features", and FVE
+  as tracking Jaccard "almost exactly" (*r* = +0.9993). Both were measured on
+  saved checkpoints at 1/25 of the training noise. In the training regime 24 %
+  of selections have μ = 0 and the coupling is monotone but *r* = +0.95
+  (`ERRATA.md` §2).
 
 ## 9. Pre-registered and not run
 

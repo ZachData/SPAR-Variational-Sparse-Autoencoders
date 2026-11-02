@@ -49,10 +49,16 @@ def main() -> int:
     ap.add_argument("--n-tokens", type=int, default=20_000)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--checkpoint", default=str(CHECKPOINT))
+    ap.add_argument("--rng-seed", type=int, default=0)
+    ap.add_argument("--out", default=str(REPO / "falsification" / "preact_gap_results.json"))
     args = ap.parse_args()
+
+    import json
 
     import numpy as np
     import torch
+
+    torch.manual_seed(args.rng_seed)
 
     from dictionary_learning.utils import load_dictionary
     from falsification.read_penalty_clamp import draw_activations
@@ -81,6 +87,13 @@ def main() -> int:
     print(f"  mean={gaps.mean():.6f}  std={gaps.std():.6f}  max={gaps.max():.6f}")
     for p in pcts:
         print(f"  p{p:<3d}={np.percentile(gaps, p):.6f}")
+
+    Path(args.out).write_text(json.dumps({
+        "checkpoint": str(Path(args.checkpoint).relative_to(REPO)), "n_tokens": int(len(gaps)), "k": k,
+        "norm_factor": norm_factor, "rng_seed": args.rng_seed, "mean": float(gaps.mean()),
+        "max": float(gaps.max()), "percentiles": {str(q): float(np.percentile(gaps, q)) for q in pcts},
+    }, indent=1) + "\n")
+    print(f"wrote {args.out}")
 
     print("\ncandidate log_var_init -> sigma=exp(0.5*log_var_init), vs. gap percentiles:")
     print(f"{'log_var_init':>13} {'sigma':>8} {'x median gap':>13} {'x p99 gap':>10}")
